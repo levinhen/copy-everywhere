@@ -565,6 +565,55 @@ func TestConsumeClipNotFound(t *testing.T) {
 	}
 }
 
+func TestGetConsumedClips(t *testing.T) {
+	d := setupTestDB(t)
+	now := time.Now().UTC()
+
+	// Consumed clip older than threshold (consumed 2 minutes ago)
+	consumedOld := now.Add(-2 * time.Minute)
+	d.CreateClip(&Clip{
+		ID: "gc0001", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: now.Add(time.Hour), ConsumedAt: &consumedOld,
+	})
+
+	// Consumed clip newer than threshold (consumed just now)
+	consumedNew := now
+	d.CreateClip(&Clip{
+		ID: "gc0002", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: now.Add(time.Hour), ConsumedAt: &consumedNew,
+	})
+
+	// Unconsumed clip
+	d.CreateClip(&Clip{
+		ID: "gc0003", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: now.Add(time.Hour),
+	})
+
+	// With 60s threshold, only gc0001 should be returned
+	clips, err := d.GetConsumedClips(60 * time.Second)
+	if err != nil {
+		t.Fatalf("get consumed clips: %v", err)
+	}
+	if len(clips) != 1 {
+		t.Fatalf("expected 1 consumed clip, got %d", len(clips))
+	}
+	if clips[0].ID != "gc0001" {
+		t.Fatalf("expected gc0001, got %s", clips[0].ID)
+	}
+}
+
+func TestGetConsumedClipsEmpty(t *testing.T) {
+	d := setupTestDB(t)
+
+	clips, err := d.GetConsumedClips(60 * time.Second)
+	if err != nil {
+		t.Fatalf("get consumed clips: %v", err)
+	}
+	if len(clips) != 0 {
+		t.Fatalf("expected 0 consumed clips, got %d", len(clips))
+	}
+}
+
 func TestDatabaseCreatedAtStoragePath(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(dir)

@@ -287,6 +287,29 @@ func (d *DB) ConsumeClip(id string) (bool, error) {
 	return n > 0, nil
 }
 
+// GetConsumedClips returns clips where consumed_at is not null and consumed_at is older than the given threshold.
+func (d *DB) GetConsumedClips(olderThan time.Duration) ([]*Clip, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	rows, err := d.conn.Query(`
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
+		FROM clips WHERE consumed_at IS NOT NULL AND consumed_at < ?
+	`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clips []*Clip
+	for rows.Next() {
+		clip := &Clip{}
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt); err != nil {
+			return nil, err
+		}
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
+}
+
 // GetStorageStats returns count and total size of all clips.
 func (d *DB) GetStorageStats() (*StorageStats, error) {
 	stats := &StorageStats{}

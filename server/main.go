@@ -29,8 +29,8 @@ func main() {
 	}
 	defer database.Close()
 
-	// Start TTL cleanup goroutine (every 10 minutes)
-	cleanup.Start(database, cfg.StoragePath, 10*time.Minute)
+	// Start cleanup goroutine (expired + consumed clips)
+	cleanup.Start(database, cfg.StoragePath, time.Duration(cfg.CleanupIntervalSeconds)*time.Second)
 
 	broker := sse.NewBroker()
 
