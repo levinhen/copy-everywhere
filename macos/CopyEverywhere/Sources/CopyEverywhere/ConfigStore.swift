@@ -16,8 +16,12 @@ final class ConfigStore: ObservableObject {
     @Published var connectionStatus: ConnectionStatus = .idle
     @Published var sendStatus: SendStatus = .idle
     @Published var receiveStatus: ReceiveStatus = .idle
+    @Published var fileUploadStatus: FileUploadStatus = .idle
+    @Published var fileUploadProgress: Double = 0
+    @Published var fileUploadSpeed: String = ""
 
     private let service = "com.copyeverywhere.relay"
+    private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
     private let hostKey = "hostURL"
     private let tokenKey = "accessToken"
 
@@ -40,6 +44,13 @@ final class ConfigStore: ObservableObject {
         case receiving
         case success(String)
         case noContent
+        case error(String)
+    }
+
+    enum FileUploadStatus: Equatable {
+        case idle
+        case uploading(filename: String)
+        case success(clipID: String, filename: String, fileSize: String, expiresAt: String)
         case error(String)
     }
 
@@ -342,6 +353,169 @@ final class ConfigStore: ObservableObject {
         await fetchAndCopyText(clipID: trimmedID)
     }
 
+    // MARK: - File Upload
+
+    func sendFile(url fileURL: URL) async {
+        let filename = fileURL.lastPathComponent
+
+        // Check file size
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let fileSize = attrs[.size] as? Int64 else {
+            fileUploadStatus = .error("Cannot read file")
+            return
+        }
+
+        if fileSize >= maxSmallFileSize {
+            fileUploadStatus = .error("File is \(formatBytes(fileSize)) — files >= 50MB require chunked upload (coming soon)")
+            return
+        }
+
+        guard let fileData = try? Data(contentsOf: fileURL) else {
+            fileUploadStatus = .error("Cannot read file data")
+            return
+        }
+
+        fileUploadStatus = .uploading(filename: filename)
+        fileUploadProgress = 0
+        fileUploadSpeed = ""
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let uploadURL = URL(string: "\(urlString)/api/v1/clips") else {
+            fileUploadStatus = .error("Invalid server URL")
+            return
+        }
+
+        // Determine type
+        let clipType: String
+        let mimeType: String
+        let ext = fileURL.pathExtension.lowercased()
+        if ["png", "jpg", "jpeg", "gif", "bmp", "tiff", "webp", "heic"].contains(ext) {
+            clipType = "image"
+            mimeType = "image/\(ext == "jpg" ? "jpeg" : ext)"
+        } else {
+            clipType = "file"
+            mimeType = "application/octet-stream"
+        }
+
+        let boundary = UUID().uuidString
+        var body = Data()
+
+        // "type" field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"type\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(clipType)\r\n".data(using: .utf8)!)
+
+        // "content" file field
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"content\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        body.append(fileData)
+        body.append("\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        // Write body to temp file for upload task (enables progress tracking)
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        do {
+            try body.write(to: tempURL)
+        } catch {
+            fileUploadStatus = .error("Failed to prepare upload")
+            return
+        }
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        var request = URLRequest(url: uploadURL)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 300
+
+        let delegate = UploadProgressDelegate()
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+
+        let startTime = Date()
+        let totalSize = Int64(body.count)
+
+        // Progress tracking task
+        let progressTask = Task {
+            for await progress in delegate.progressStream {
+                let elapsed = Date().timeIntervalSince(startTime)
+                let bytesUploaded = Int64(Double(totalSize) * progress)
+                let speed = elapsed > 0 ? Double(bytesUploaded) / elapsed : 0
+                self.fileUploadProgress = progress
+                self.fileUploadSpeed = "\(self.formatBytes(Int64(speed)))/s"
+            }
+        }
+
+        do {
+            let (data, response) = try await session.upload(for: request, fromFile: tempURL)
+            progressTask.cancel()
+            session.invalidateAndCancel()
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                fileUploadStatus = .error("Invalid response")
+                return
+            }
+
+            switch httpResponse.statusCode {
+            case 201:
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let clipID = json["id"] as? String,
+                   let expiresAtStr = json["expires_at"] as? String {
+                    let formatter = ISO8601DateFormatter()
+                    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    let displayFormatter = DateFormatter()
+                    displayFormatter.dateStyle = .none
+                    displayFormatter.timeStyle = .short
+
+                    var expiryDisplay = expiresAtStr
+                    if let date = formatter.date(from: expiresAtStr) {
+                        displayFormatter.timeZone = .current
+                        expiryDisplay = displayFormatter.string(from: date)
+                    }
+                    fileUploadProgress = 1.0
+                    fileUploadStatus = .success(
+                        clipID: clipID,
+                        filename: filename,
+                        fileSize: formatBytes(fileSize),
+                        expiresAt: expiryDisplay
+                    )
+                } else {
+                    fileUploadStatus = .error("Unexpected response format")
+                }
+            case 401:
+                fileUploadStatus = .error("Authentication failed (401)")
+            case 413:
+                fileUploadStatus = .error("File too large for server")
+            default:
+                fileUploadStatus = .error("Server error (\(httpResponse.statusCode))")
+            }
+        } catch let error as URLError {
+            progressTask.cancel()
+            session.invalidateAndCancel()
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                fileUploadStatus = .error("Connection refused - check server URL")
+            case .timedOut:
+                fileUploadStatus = .error("Upload timed out")
+            default:
+                fileUploadStatus = .error("Network error: \(error.localizedDescription)")
+            }
+        } catch {
+            progressTask.cancel()
+            session.invalidateAndCancel()
+            fileUploadStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
+    func formatBytes(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
+    }
+
     private func fetchAndCopyText(clipID: String) async {
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -403,5 +577,35 @@ final class ConfigStore: ObservableObject {
         } catch {
             receiveStatus = .error("Error: \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - Upload Progress Delegate
+
+final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let continuation: AsyncStream<Double>.Continuation
+    let progressStream: AsyncStream<Double>
+
+    override init() {
+        var cont: AsyncStream<Double>.Continuation!
+        progressStream = AsyncStream { cont = $0 }
+        continuation = cont
+        super.init()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didSendBodyData bytesSent: Int64,
+        totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        guard totalBytesExpectedToSend > 0 else { return }
+        let progress = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
+        continuation.yield(progress)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        continuation.finish()
     }
 }

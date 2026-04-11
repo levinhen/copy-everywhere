@@ -1,11 +1,13 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MainPanelView: View {
     @EnvironmentObject var configStore: ConfigStore
     @State private var showingConfig = false
     @State private var clipboardText: String? = nil
     @State private var manualClipID: String = ""
+    @State private var isDragTargeted = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -135,6 +137,131 @@ struct MainPanelView: View {
 
                 Divider()
 
+                // File upload section
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Send File")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    // Drop zone
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(
+                                isDragTargeted ? Color.accentColor : Color.secondary.opacity(0.4),
+                                style: StrokeStyle(lineWidth: 2, dash: [6, 3])
+                            )
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(isDragTargeted ? Color.accentColor.opacity(0.1) : Color.clear)
+                            )
+
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.down.doc.fill")
+                                .font(.title2)
+                                .foregroundColor(.secondary)
+                            Text("Drop file here")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(height: 60)
+                    .onDrop(of: [.fileURL], isTargeted: $isDragTargeted) { providers in
+                        handleFileDrop(providers)
+                    }
+
+                    Button(action: chooseFile) {
+                        HStack {
+                            Image(systemName: "folder.fill")
+                            Text("Choose File")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(isFileUploading)
+
+                    // Upload progress
+                    if case .uploading(let filename) = configStore.fileUploadStatus {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(filename)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            ProgressView(value: configStore.fileUploadProgress)
+                            HStack {
+                                Text("\(Int(configStore.fileUploadProgress * 100))%")
+                                if !configStore.fileUploadSpeed.isEmpty {
+                                    Text("- \(configStore.fileUploadSpeed)")
+                                }
+                                Spacer()
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(6)
+                    }
+
+                    // File upload result
+                    switch configStore.fileUploadStatus {
+                    case .idle, .uploading:
+                        EmptyView()
+                    case .success(let clipID, let filename, let fileSize, let expiresAt):
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("File sent!")
+                                    .foregroundColor(.green)
+                            }
+                            Group {
+                                HStack {
+                                    Text("Clip ID:")
+                                        .foregroundColor(.secondary)
+                                    Text(clipID)
+                                        .fontWeight(.semibold)
+                                        .textSelection(.enabled)
+                                }
+                                HStack {
+                                    Text("File:")
+                                        .foregroundColor(.secondary)
+                                    Text(filename)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                                HStack {
+                                    Text("Size:")
+                                        .foregroundColor(.secondary)
+                                    Text(fileSize)
+                                }
+                                HStack {
+                                    Text("Expires:")
+                                        .foregroundColor(.secondary)
+                                    Text(expiresAt)
+                                }
+                            }
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(6)
+                    case .error(let message):
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                                Text(message)
+                                    .foregroundColor(.red)
+                            }
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+                }
+
+                Divider()
+
                 // Receive section
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Receive")
@@ -233,7 +360,37 @@ struct MainPanelView: View {
         }
     }
 
+    private var isFileUploading: Bool {
+        if case .uploading = configStore.fileUploadStatus { return true }
+        return false
+    }
+
     private func refreshClipboard() {
         clipboardText = NSPasteboard.general.string(forType: .string)
+    }
+
+    private func chooseFile() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                await configStore.sendFile(url: url)
+            }
+        }
+    }
+
+    private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+            guard let data = item as? Data,
+                  let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+            Task { @MainActor in
+                await configStore.sendFile(url: url)
+            }
+        }
+        return true
     }
 }
