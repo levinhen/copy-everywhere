@@ -8,6 +8,7 @@ struct MainPanelView: View {
     @State private var clipboardText: String? = nil
     @State private var manualClipID: String = ""
     @State private var isDragTargeted = false
+    @State private var downloadClipID: String = ""
 
     var body: some View {
         VStack(spacing: 12) {
@@ -395,6 +396,147 @@ struct MainPanelView: View {
                         .cornerRadius(6)
                     }
                 }
+
+                Divider()
+
+                // Download file section
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Download File")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    HStack(spacing: 8) {
+                        TextField("Clip ID", text: $downloadClipID)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+
+                        Button("Lookup") {
+                            Task {
+                                await configStore.fetchClipMetadata(downloadClipID)
+                            }
+                        }
+                        .disabled(downloadClipID.trimmingCharacters(in: .whitespaces).isEmpty || configStore.fileDownloadStatus == .fetchingMetadata)
+                    }
+
+                    switch configStore.fileDownloadStatus {
+                    case .idle:
+                        EmptyView()
+                    case .fetchingMetadata:
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                                .frame(width: 16, height: 16)
+                            Text("Fetching metadata...")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    case .metadataLoaded(let meta):
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: "doc.fill")
+                                    .foregroundColor(.accentColor)
+                                Text(meta.filename ?? "Untitled")
+                                    .fontWeight(.semibold)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Group {
+                                HStack {
+                                    Text("Type:")
+                                        .foregroundColor(.secondary)
+                                    Text(meta.type)
+                                }
+                                HStack {
+                                    Text("Size:")
+                                        .foregroundColor(.secondary)
+                                    Text(configStore.formatBytes(meta.sizeBytes))
+                                }
+                                HStack {
+                                    Text("Uploaded:")
+                                        .foregroundColor(.secondary)
+                                    Text(meta.createdAt)
+                                }
+                                HStack {
+                                    Text("Expires:")
+                                        .foregroundColor(.secondary)
+                                    Text(meta.expiresAt)
+                                }
+                            }
+
+                            Button(action: { chooseDownloadLocation(clipID: meta.id, suggestedName: meta.filename) }) {
+                                HStack {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                    Text("Download")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(6)
+                    case .downloading(let filename):
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(filename)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            ProgressView(value: configStore.fileDownloadProgress)
+                            HStack {
+                                Text("\(Int(configStore.fileDownloadProgress * 100))%")
+                                if !configStore.fileDownloadSpeed.isEmpty {
+                                    Text("- \(configStore.fileDownloadSpeed)")
+                                }
+                                Spacer()
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(6)
+                    case .success(let savedPath):
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                Text("Downloaded successfully!")
+                                    .foregroundColor(.green)
+                            }
+                            Text(savedPath)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(6)
+                    case .uploadIncomplete:
+                        HStack {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text("Upload incomplete - download unavailable")
+                                .foregroundColor(.orange)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(6)
+                    case .error(let message):
+                        HStack {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            Text(message)
+                                .foregroundColor(.red)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+                }
             }
 
             Divider()
@@ -424,6 +566,18 @@ struct MainPanelView: View {
 
     private func refreshClipboard() {
         clipboardText = NSPasteboard.general.string(forType: .string)
+    }
+
+    private func chooseDownloadLocation(clipID: String, suggestedName: String?) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName ?? clipID
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                await configStore.downloadFile(clipID: clipID, saveURL: url)
+            }
+        }
     }
 
     private func chooseFile() {

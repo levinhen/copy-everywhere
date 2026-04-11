@@ -19,6 +19,9 @@ final class ConfigStore: ObservableObject {
     @Published var fileUploadStatus: FileUploadStatus = .idle
     @Published var fileUploadProgress: Double = 0
     @Published var fileUploadSpeed: String = ""
+    @Published var fileDownloadStatus: FileDownloadStatus = .idle
+    @Published var fileDownloadProgress: Double = 0
+    @Published var fileDownloadSpeed: String = ""
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
@@ -60,6 +63,25 @@ final class ConfigStore: ObservableObject {
         case chunkedUploading(filename: String, currentChunk: Int, totalChunks: Int)
         case chunkedPaused(filename: String, currentChunk: Int, totalChunks: Int)
         case success(clipID: String, filename: String, fileSize: String, expiresAt: String)
+        case error(String)
+    }
+
+    struct ClipMetadata: Equatable {
+        let id: String
+        let type: String
+        let filename: String?
+        let sizeBytes: Int64
+        let createdAt: String
+        let expiresAt: String
+    }
+
+    enum FileDownloadStatus: Equatable {
+        case idle
+        case fetchingMetadata
+        case metadataLoaded(ClipMetadata)
+        case downloading(filename: String)
+        case success(savedPath: String)
+        case uploadIncomplete
         case error(String)
     }
 
@@ -775,6 +797,189 @@ final class ConfigStore: ObservableObject {
         chunkedUploadFileURL = nil
     }
 
+    // MARK: - File Download
+
+    func fetchClipMetadata(_ clipID: String) async {
+        let trimmedID = clipID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else {
+            fileDownloadStatus = .error("Please enter a Clip ID")
+            return
+        }
+
+        fileDownloadStatus = .fetchingMetadata
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let metaURL = URL(string: "\(urlString)/api/v1/clips/\(trimmedID)") else {
+            fileDownloadStatus = .error("Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: metaURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                fileDownloadStatus = .error("Invalid response")
+                return
+            }
+
+            switch httpResponse.statusCode {
+            case 200:
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let id = json["id"] as? String,
+                      let type = json["type"] as? String,
+                      let sizeBytes = json["size_bytes"] as? Int64,
+                      let createdAtStr = json["created_at"] as? String,
+                      let expiresAtStr = json["expires_at"] as? String else {
+                    fileDownloadStatus = .error("Unexpected response format")
+                    return
+                }
+
+                let filename = json["filename"] as? String
+
+                // Format dates for display
+                let isoFormatter = ISO8601DateFormatter()
+                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let displayFormatter = DateFormatter()
+                displayFormatter.dateStyle = .short
+                displayFormatter.timeStyle = .short
+                displayFormatter.timeZone = .current
+
+                var createdDisplay = createdAtStr
+                if let date = isoFormatter.date(from: createdAtStr) {
+                    createdDisplay = displayFormatter.string(from: date)
+                }
+
+                var expiresDisplay = expiresAtStr
+                if let date = isoFormatter.date(from: expiresAtStr) {
+                    expiresDisplay = displayFormatter.string(from: date)
+                }
+
+                fileDownloadStatus = .metadataLoaded(ClipMetadata(
+                    id: id,
+                    type: type,
+                    filename: filename,
+                    sizeBytes: sizeBytes,
+                    createdAt: createdDisplay,
+                    expiresAt: expiresDisplay
+                ))
+            case 404:
+                fileDownloadStatus = .error("Clip not found or expired")
+            case 401:
+                fileDownloadStatus = .error("Authentication failed (401)")
+            default:
+                fileDownloadStatus = .error("Server error (\(httpResponse.statusCode))")
+            }
+        } catch let error as URLError {
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                fileDownloadStatus = .error("Connection refused - check server URL")
+            case .timedOut:
+                fileDownloadStatus = .error("Request timed out")
+            default:
+                fileDownloadStatus = .error("Network error: \(error.localizedDescription)")
+            }
+        } catch {
+            fileDownloadStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
+    func downloadFile(clipID: String, saveURL: URL) async {
+        guard case .metadataLoaded(let meta) = fileDownloadStatus else { return }
+
+        let filename = meta.filename ?? "\(clipID)"
+        fileDownloadStatus = .downloading(filename: filename)
+        fileDownloadProgress = 0
+        fileDownloadSpeed = ""
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(clipID)/raw") else {
+            fileDownloadStatus = .error("Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: rawURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 300
+
+        let delegate = DownloadProgressDelegate()
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+
+        let startTime = Date()
+
+        // Progress tracking task
+        let progressTask = Task {
+            for await (written, total) in delegate.progressStream {
+                let elapsed = Date().timeIntervalSince(startTime)
+                let speed = elapsed > 0 ? Double(written) / elapsed : 0
+                if total > 0 {
+                    self.fileDownloadProgress = Double(written) / Double(total)
+                }
+                self.fileDownloadSpeed = "\(self.formatBytes(Int64(speed)))/s"
+            }
+        }
+
+        do {
+            let (tempURL, response) = try await session.download(for: request)
+            progressTask.cancel()
+            session.invalidateAndCancel()
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                fileDownloadStatus = .error("Invalid response")
+                return
+            }
+
+            switch httpResponse.statusCode {
+            case 200:
+                // Move downloaded file to save location
+                let fileManager = FileManager.default
+                // Remove existing file if present
+                if fileManager.fileExists(atPath: saveURL.path) {
+                    try fileManager.removeItem(at: saveURL)
+                }
+                try fileManager.moveItem(at: tempURL, to: saveURL)
+
+                fileDownloadProgress = 1.0
+                fileDownloadStatus = .success(savedPath: saveURL.path)
+
+                // Reveal in Finder
+                NSWorkspace.shared.activateFileViewerSelecting([saveURL])
+            case 403:
+                fileDownloadStatus = .uploadIncomplete
+            case 404:
+                fileDownloadStatus = .error("Clip not found or expired")
+            case 401:
+                fileDownloadStatus = .error("Authentication failed (401)")
+            default:
+                fileDownloadStatus = .error("Server error (\(httpResponse.statusCode))")
+            }
+        } catch let error as URLError {
+            progressTask.cancel()
+            session.invalidateAndCancel()
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                fileDownloadStatus = .error("Connection refused - check server URL")
+            case .timedOut:
+                fileDownloadStatus = .error("Download timed out")
+            default:
+                fileDownloadStatus = .error("Network error: \(error.localizedDescription)")
+            }
+        } catch {
+            progressTask.cancel()
+            session.invalidateAndCancel()
+            fileDownloadStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
     func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
@@ -869,6 +1074,42 @@ final class UploadProgressDelegate: NSObject, URLSessionTaskDelegate, Sendable {
         guard totalBytesExpectedToSend > 0 else { return }
         let progress = Double(totalBytesSent) / Double(totalBytesExpectedToSend)
         continuation.yield(progress)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        continuation.finish()
+    }
+}
+
+// MARK: - Download Progress Delegate
+
+final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, Sendable {
+    private let continuation: AsyncStream<(Int64, Int64)>.Continuation
+    let progressStream: AsyncStream<(Int64, Int64)>
+
+    override init() {
+        var cont: AsyncStream<(Int64, Int64)>.Continuation!
+        progressStream = AsyncStream { cont = $0 }
+        continuation = cont
+        super.init()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        continuation.yield((totalBytesWritten, totalBytesExpectedToWrite))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        continuation.finish()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
