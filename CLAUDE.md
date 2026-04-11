@@ -77,10 +77,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 **macOS:**
 
 - `NSApp.setActivationPolicy(.accessory)` is how the dock icon is hidden (no Info.plist needed for SPM builds).
-- **MenuBarExtra replaced with manual NSStatusItem + NSPopover** (US-024). `AppDelegate` (`@MainActor`) owns the status item, popover, `ConfigStore`, and `HistoryStore`. `StatusItemDropView` is a transparent overlay on the button for drag-and-drop. `MenuBarView` is hosted via `NSHostingController`. The popover uses `.applicationDefined` behavior + `NSEvent.addGlobalMonitorForEvents` to avoid the double-toggle issue with `.transient`.
+- **MenuBarExtra replaced with manual NSStatusItem + NSPopover** (US-024). `AppDelegate` (`@MainActor`) owns the status item, popover, and `ConfigStore`. `StatusItemDropView` is a transparent overlay on the button for drag-and-drop. `MenuBarView` is hosted via `NSHostingController`. The popover uses `.applicationDefined` behavior + `NSEvent.addGlobalMonitorForEvents` to avoid the double-toggle issue with `.transient`.
 - Use `UserNotifications` (not the deprecated `NSUserNotification`).
 - Multipart bodies are built by hand with a UUID boundary — there is no Swift helper.
-- `ConfigStore.historyStore` is wired via `MenuBarView.onAppear` (not init param). (Note: `HistoryStore` is being removed in US-027 — the new server-queue panel replaces it.)
+- **`HistoryStore` removed (US-027).** The panel now shows the live server queue via `GET /clips?device_id=<self>` (polled every 5s while open). `QueueItem` model and `fetchQueue()`/`receiveQueueItem()` live in `ConfigStore`. Receive is atomic — first caller gets 200, subsequent get 410 Gone.
 - **`URLSession` progress → `AsyncStream` bridge.** `UploadProgressDelegate` / `DownloadProgressDelegate` (in `ApiClient`) implement `URLSessionTaskDelegate` / `URLSessionDownloadDelegate` and surface progress as `AsyncStream<Double>` so views can `for await` over it. Reuse this pattern — don't roll a new delegate per call site.
 - **Stream chunks with `FileHandle`.** The chunked uploader opens a `FileHandle` and `read(upToCount:)`s one chunk at a time. Don't `Data(contentsOf:)` the whole file — large uploads will OOM.
 
@@ -96,4 +96,4 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 **Cross-platform:**
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.
-- **History storage (MVP, being removed):** local-only on both clients (macOS `UserDefaults` + JSON Codable; Windows JSON file in `%LOCALAPPDATA%\CopyEverywhere\history.json`). US-027/US-033 delete both stores in favor of a live view of the server queue.
+- **History storage (MVP):** macOS HistoryStore removed in US-027 — replaced by live server queue view. Windows `%LOCALAPPDATA%\CopyEverywhere\history.json` still exists until US-033 removes it.
