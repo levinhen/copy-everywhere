@@ -291,7 +291,7 @@
         "dotnet build succeeds with no errors"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

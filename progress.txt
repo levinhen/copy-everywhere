@@ -45,6 +45,8 @@
 - WPF file dialogs (`OpenFileDialog`, `SaveFileDialog`) are in `Microsoft.Win32` namespace
 - `Process.Start("explorer.exe", "/select,\"path\"")` reveals file in Explorer
 - Chunked upload 409 from PUT parts means chunk already uploaded — treat as success during resume
+- Windows HistoryStore uses JSON file in AppData/Local/CopyEverywhere/history.json (mirrors macOS UserDefaults approach)
+- WPF history list built programmatically with DockPanel rows, Border.MouseLeftButtonUp for click-to-copy, Button.Tag for passing ClipId
 
 ---
 
@@ -261,4 +263,18 @@
   - Chunked upload pause works by cancelling CancellationTokenSource; resume queries server for received_parts
   - 409 from chunk upload endpoint means already uploaded — safe to ignore during resume
   - Download uses `HttpCompletionOption.ResponseHeadersRead` for streaming (doesn't buffer entire response)
+---
+
+## 2026-04-11 - US-017
+- What was implemented: Windows send history list and management — HistoryStore with JSON file persistence in AppData/Local/CopyEverywhere/, HistoryRecord model with type icons/expired/failed status, history section in MainWindow with scrollable list, click-to-copy Clip ID, delete button per entry, history recording on text send, file upload success, chunked upload success, and upload failure
+- Files changed:
+  - `windows/CopyEverywhere/Services/HistoryStore.cs` (new) - HistoryRecord class and HistoryStore with JSON file persistence
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added History section with ScrollViewer and StackPanel, increased window height to 900
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added HistoryStore integration, RefreshHistoryList/CreateHistoryRow builders, click-to-copy and delete handlers, history recording in all send/upload paths
+- **Learnings for future iterations:**
+  - JSON file in AppData is simpler than SQLite for small datasets (mirrors macOS UserDefaults approach)
+  - WPF programmatic UI: use DockPanel with Dock.Right for right-aligned elements in list rows
+  - Border.MouseLeftButtonUp works for clickable rows; Button.Tag stores the ClipId for delete handlers
+  - HistoryRecord.DisplayLabel computed property centralizes status text logic (Active/Expired/Upload Failed)
+  - Unicode emoji chars (\U0001F4DD etc.) work in WPF TextBlock for type icons
 ---
