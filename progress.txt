@@ -62,6 +62,11 @@
 - SSE tests use `httptest.NewServer` (not `httptest.NewRecorder`) because SSE requires streaming response
 - Broker, ClipHandler, and UploadHandler all share the same `*sse.Broker` instance wired in main.go
 - MenuBarExtra replaced with manual NSStatusItem + NSPopover in AppDelegate for drag-and-drop support
+- Queue listing via GET /api/v1/clips?device_id=XXX; each item has {id, type, filename, size_bytes, created_at, expires_at}
+- Queue receive is atomic via GET /clips/:id/raw: first caller gets body (200), second gets 410 Gone; clip is auto-deleted after consume
+- QueueItem model and fetchQueue()/receiveQueueItem() live in ConfigStore (no separate ApiClient class)
+- MainPanelView uses Timer.scheduledTimer for 5s queue refresh while panel is open; invalidated on disappear
+- HistoryStore.swift deleted in US-027 — no local history; the server queue is the single source of truth
 - StatusItemDropView is an NSView overlay on NSStatusBarButton — hitTest returns nil so clicks pass through, drag destination still works (AppKit resolves via frame, not hitTest)
 - AppDelegate must be `@MainActor` to access `@MainActor`-isolated ConfigStore/HistoryStore properties synchronously
 - NSPopover with `.applicationDefined` behavior + global event monitor avoids the double-toggle issue with `.transient`
@@ -426,4 +431,20 @@
   - Returning nil from a local event monitor prevents the event from reaching any text fields in the popover — this is how Cmd+V hijack works
   - NSPasteboard image data can be .png or .tiff — check both; save to temp file to reuse the sendFile path
   - Toast pattern: @Published String? on ConfigStore + conditional view in MainPanelView + Task.sleep for auto-dismiss
+---
+
+## 2026-04-12 - US-027
+- What was implemented: macOS panel now shows live server queue instead of local history. HistoryStore deleted entirely.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added QueueItem model, queueItems/queueError published properties, fetchQueue() and receiveQueueItem() methods. Removed historyStore property and all addRecord calls.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` — Replaced old Receive/Download File/History sections with a Queue section that polls every 5s. Each row shows type icon, preview, size, age, and Receive button. Receive handles text→clipboard, image→clipboard, file→~/Downloads.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` — Removed HistoryStore @EnvironmentObject and onAppear wiring.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` — Removed HistoryStore creation and .environmentObject injection.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/HistoryStore.swift` — Deleted.
+  - `prd.json` — Marked US-027 passes: true.
+- **Learnings for future iterations:**
+  - Queue receive is atomic (GET /clips/:id/raw returns 200 to first caller, 410 to subsequent). Handle 410 by removing the row from the local list.
+  - File receive saves to ~/Downloads with de-duplication (appends counter to filename if exists). Uses FileManager.homeDirectoryForCurrentUser.
+  - Timer.scheduledTimer in SwiftUI needs manual invalidation on view disappear to avoid leaks.
+  - Removing HistoryStore also left pre-existing `expiryDate` variables unused (were only consumed by addRecord calls). These are warnings, not errors.
 ---

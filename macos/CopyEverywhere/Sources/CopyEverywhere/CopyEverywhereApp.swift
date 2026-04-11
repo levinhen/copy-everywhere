@@ -15,7 +15,6 @@ struct CopyEverywhereApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let configStore = ConfigStore()
-    let historyStore = HistoryStore()
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var eventMonitor: Any?
@@ -46,7 +45,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let contentView = MenuBarView()
             .environmentObject(configStore)
-            .environmentObject(historyStore)
         popover.contentViewController = NSHostingController(rootView: contentView)
     }
 

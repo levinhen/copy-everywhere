@@ -8,6 +8,39 @@ struct ClipResult {
     let expiresAt: Date
 }
 
+struct QueueItem: Identifiable, Equatable {
+    let id: String
+    let type: String
+    let filename: String?
+    let sizeBytes: Int64
+    let createdAt: Date
+    let expiresAt: Date
+
+    var typeIcon: String {
+        switch type {
+        case "text": return "doc.text"
+        case "image": return "photo"
+        default: return "doc"
+        }
+    }
+
+    var preview: String {
+        if let filename = filename, filename != "clipboard.txt" {
+            return filename
+        }
+        if type == "text" { return "Text clip" }
+        if type == "image" { return "Image" }
+        return filename ?? "File"
+    }
+
+    var age: String {
+        let interval = Date().timeIntervalSince(createdAt)
+        if interval < 60 { return "\(Int(interval))s ago" }
+        if interval < 3600 { return "\(Int(interval / 60))m ago" }
+        return "\(Int(interval / 3600))h ago"
+    }
+}
+
 @MainActor
 final class ConfigStore: ObservableObject {
     @Published var hostURL: String = ""
@@ -25,16 +58,14 @@ final class ConfigStore: ObservableObject {
     @Published var deviceID: String = ""
     @Published var deviceName: String = ""
     @Published var toastMessage: String? = nil
+    @Published var queueItems: [QueueItem] = []
+    @Published var queueError: String? = nil
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
     private let chunkSize: Int64 = 10 * 1024 * 1024 // 10MB chunks
     private let hostKey = "hostURL"
     private let tokenKey = "accessToken"
-
-    // Chunked upload state
-    // History store reference (set externally)
-    var historyStore: HistoryStore?
 
     // Chunked upload state
     private var chunkedUploadID: String?
@@ -332,10 +363,6 @@ final class ConfigStore: ObservableObject {
                         expiryDate = date
                     }
                     sendStatus = .success(clipID: clipID, expiresAt: expiryDisplay)
-                    historyStore?.addRecord(HistoryRecord(
-                        clipID: clipID, type: "text", filename: nil,
-                        timestamp: Date(), expiresAt: expiryDate, status: "success"
-                    ))
                 } else {
                     sendStatus = .error("Unexpected response format")
                 }
@@ -610,10 +637,6 @@ final class ConfigStore: ObservableObject {
                         fileSize: formatBytes(fileSize),
                         expiresAt: expiryDisplay
                     )
-                    historyStore?.addRecord(HistoryRecord(
-                        clipID: clipID, type: clipType, filename: filename,
-                        timestamp: Date(), expiresAt: expiryDate, status: "success"
-                    ))
                 } else {
                     fileUploadStatus = .error("Unexpected response format")
                 }
@@ -635,18 +658,10 @@ final class ConfigStore: ObservableObject {
             default:
                 fileUploadStatus = .error("Network error: \(error.localizedDescription)")
             }
-            historyStore?.addRecord(HistoryRecord(
-                clipID: "—", type: clipType, filename: filename,
-                timestamp: Date(), expiresAt: Date(), status: "failed"
-            ))
         } catch {
             progressTask.cancel()
             session.invalidateAndCancel()
             fileUploadStatus = .error("Error: \(error.localizedDescription)")
-            historyStore?.addRecord(HistoryRecord(
-                clipID: "—", type: clipType, filename: filename,
-                timestamp: Date(), expiresAt: Date(), status: "failed"
-            ))
         }
     }
 
@@ -897,10 +912,6 @@ final class ConfigStore: ObservableObject {
                     fileSize: formatBytes(fileSize),
                     expiresAt: expiryDisplay
                 )
-                historyStore?.addRecord(HistoryRecord(
-                    clipID: clipID, type: "file", filename: filename,
-                    timestamp: Date(), expiresAt: expiryDate, status: "success"
-                ))
             } else {
                 fileUploadStatus = .error("Unexpected complete response format")
             }
@@ -1093,6 +1104,165 @@ final class ConfigStore: ObservableObject {
             progressTask.cancel()
             session.invalidateAndCancel()
             fileDownloadStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Queue Operations
+
+    func fetchQueue() async {
+        guard isConfigured, !deviceID.isEmpty else { return }
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let url = URL(string: "\(urlString)/api/v1/clips?device_id=\(deviceID)") else {
+            queueError = "Invalid server URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                queueError = "Invalid response"
+                return
+            }
+
+            if httpResponse.statusCode == 200 {
+                let isoFormatter = ISO8601DateFormatter()
+                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+                guard let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    queueError = "Unexpected response format"
+                    return
+                }
+
+                var items: [QueueItem] = []
+                for json in jsonArray {
+                    guard let id = json["id"] as? String,
+                          let type = json["type"] as? String,
+                          let sizeBytes = json["size_bytes"] as? Int64,
+                          let createdAtStr = json["created_at"] as? String,
+                          let expiresAtStr = json["expires_at"] as? String else { continue }
+
+                    let filename = json["filename"] as? String
+                    let createdAt = isoFormatter.date(from: createdAtStr) ?? Date()
+                    let expiresAt = isoFormatter.date(from: expiresAtStr) ?? Date()
+
+                    items.append(QueueItem(
+                        id: id, type: type, filename: filename,
+                        sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt
+                    ))
+                }
+                queueItems = items
+                queueError = nil
+            } else if httpResponse.statusCode == 401 {
+                queueError = "Authentication failed (401)"
+            } else {
+                queueError = "Server error (\(httpResponse.statusCode))"
+            }
+        } catch {
+            queueError = "Network error: \(error.localizedDescription)"
+        }
+    }
+
+    func receiveQueueItem(_ item: QueueItem) async {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(item.id)/raw") else { return }
+
+        var request = URLRequest(url: rawURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+
+        do {
+            if item.type == "text" || item.type == "image" {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+
+                if httpResponse.statusCode == 200 {
+                    if item.type == "text" {
+                        if let text = String(data: data, encoding: .utf8) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(text, forType: .string)
+                            toastMessage = "Copied text to clipboard"
+                        }
+                    } else {
+                        // image
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setData(data, forType: .png)
+                        toastMessage = "Copied image to clipboard"
+                    }
+                    // Remove from local queue (server already deleted it)
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                } else if httpResponse.statusCode == 410 {
+                    toastMessage = "Already consumed by another device"
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                } else {
+                    toastMessage = "Failed to receive (status \(httpResponse.statusCode))"
+                    dismissToastAfterDelay()
+                }
+            } else {
+                // File — download to ~/Downloads/
+                let delegate = DownloadProgressDelegate()
+                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+
+                let (tempURL, response) = try await session.download(for: request)
+                session.invalidateAndCancel()
+
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+
+                if httpResponse.statusCode == 200 {
+                    let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+                        .appendingPathComponent("Downloads")
+                    let filename = item.filename ?? item.id
+                    var destURL = downloadsURL.appendingPathComponent(filename)
+
+                    // Avoid overwriting existing files
+                    let fm = FileManager.default
+                    if fm.fileExists(atPath: destURL.path) {
+                        let base = destURL.deletingPathExtension().lastPathComponent
+                        let ext = destURL.pathExtension
+                        var counter = 1
+                        repeat {
+                            let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+                            destURL = downloadsURL.appendingPathComponent(newName)
+                            counter += 1
+                        } while fm.fileExists(atPath: destURL.path)
+                    }
+
+                    try fm.moveItem(at: tempURL, to: destURL)
+                    toastMessage = "Saved \(destURL.lastPathComponent) to Downloads"
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                    NSWorkspace.shared.activateFileViewerSelecting([destURL])
+                } else if httpResponse.statusCode == 410 {
+                    toastMessage = "Already consumed by another device"
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                } else {
+                    toastMessage = "Failed to receive (status \(httpResponse.statusCode))"
+                    dismissToastAfterDelay()
+                }
+            }
+        } catch {
+            toastMessage = "Network error: \(error.localizedDescription)"
+            dismissToastAfterDelay()
+        }
+    }
+
+    private func dismissToastAfterDelay() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            toastMessage = nil
         }
     }
 

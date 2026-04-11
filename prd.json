@@ -161,7 +161,7 @@
         "swift build succeeds"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
