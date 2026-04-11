@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="CopyEverywhere"
-        Width="420" Height="500"
+        Width="420" Height="650"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize">
 
@@ -18,6 +18,7 @@
         </Style>
     </Window.Resources>
 
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
     <Grid Margin="16">
         <StackPanel>
             <!-- Header -->
@@ -66,7 +67,75 @@
             <!-- Separator -->
             <Separator Margin="0,4,0,16"/>
 
-            <!-- Main Panel Placeholder (for future stories) -->
+            <!-- Send Clipboard Section -->
+            <StackPanel x:Name="ClipboardPanel" Visibility="Collapsed">
+                <TextBlock Text="Send Clipboard" Style="{StaticResource SectionHeader}"/>
+
+                <TextBlock Text="Clipboard Preview" Style="{StaticResource FieldLabel}"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,0,0,8"
+                        MinHeight="60" MaxHeight="100">
+                    <TextBlock x:Name="ClipboardPreviewText"
+                               Text="(empty)"
+                               Foreground="Gray"
+                               TextWrapping="Wrap"
+                               TextTrimming="CharacterEllipsis"
+                               FontSize="12"/>
+                </Border>
+
+                <Button x:Name="SendClipboardButton"
+                        Content="Send Clipboard"
+                        Width="130" Height="30"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,8"
+                        Click="SendClipboardButton_Click"/>
+
+                <Border x:Name="SendStatusBorder"
+                        Visibility="Collapsed"
+                        CornerRadius="4"
+                        Padding="10,8"
+                        Margin="0,0,0,12">
+                    <TextBlock x:Name="SendStatusText"
+                               TextWrapping="Wrap"
+                               FontSize="12"/>
+                </Border>
+
+                <Separator Margin="0,4,0,16"/>
+
+                <!-- Receive Clipboard Section -->
+                <TextBlock Text="Receive Clipboard" Style="{StaticResource SectionHeader}"/>
+
+                <Button x:Name="ReceiveLatestButton"
+                        Content="Receive Latest"
+                        Width="130" Height="30"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,12"
+                        Click="ReceiveLatestButton_Click"/>
+
+                <TextBlock Text="Or enter Clip ID" Style="{StaticResource FieldLabel}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBox x:Name="ClipIdTextBox"
+                             Width="120"
+                             Padding="6,4"
+                             MaxLength="6"
+                             Margin="0,0,8,0"/>
+                    <Button x:Name="FetchClipButton"
+                            Content="Fetch"
+                            Width="70" Height="28"
+                            Click="FetchClipButton_Click"/>
+                </StackPanel>
+
+                <Border x:Name="ReceiveStatusBorder"
+                        Visibility="Collapsed"
+                        CornerRadius="4"
+                        Padding="10,8"
+                        Margin="0,0,0,12">
+                    <TextBlock x:Name="ReceiveStatusText"
+                               TextWrapping="Wrap"
+                               FontSize="12"/>
+                </Border>
+            </StackPanel>
+
+            <!-- Not configured placeholder -->
             <TextBlock x:Name="MainPanelPlaceholder"
                        Text="Configure server connection above to get started."
                        Foreground="Gray"
@@ -74,4 +143,5 @@
                        HorizontalAlignment="Center"/>
         </StackPanel>
     </Grid>
+    </ScrollViewer>
 </Window>

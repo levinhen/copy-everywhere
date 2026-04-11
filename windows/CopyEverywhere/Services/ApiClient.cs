@@ -1,8 +1,12 @@
 using System;
 using System.Diagnostics;
+using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,6 +23,27 @@ public class TestConnectionResult
     public bool Success { get; set; }
     public string Message { get; set; } = "";
     public long LatencyMs { get; set; }
+}
+
+public class ClipResponse
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
+
+    [JsonPropertyName("filename")]
+    public string? Filename { get; set; }
+
+    [JsonPropertyName("size_bytes")]
+    public long SizeBytes { get; set; }
+
+    [JsonPropertyName("created_at")]
+    public DateTime CreatedAt { get; set; }
+
+    [JsonPropertyName("expires_at")]
+    public DateTime ExpiresAt { get; set; }
 }
 
 public class ApiClient : IDisposable
@@ -132,6 +157,62 @@ public class ApiClient : IDisposable
                 Message = $"Unexpected error: {ex.Message}",
             };
         }
+    }
+
+    public async Task<ClipResponse?> SendTextClipAsync(string text, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var boundary = Guid.NewGuid().ToString();
+        using var content = new MultipartFormDataContent(boundary);
+        content.Add(new StringContent("text"), "type");
+        var fileContent = new ByteArrayContent(Encoding.UTF8.GetBytes(text));
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
+        content.Add(fileContent, "content", "clipboard.txt");
+
+        var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/clips", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<ClipResponse>(json);
+    }
+
+    public async Task<ClipResponse?> GetLatestClipAsync(CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/latest", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<ClipResponse>(json);
+    }
+
+    public async Task<ClipResponse?> GetClipMetadataAsync(string clipId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/{clipId}", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<ClipResponse>(json);
+    }
+
+    public async Task<string?> GetClipRawTextAsync(string clipId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/{clipId}/raw", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct);
     }
 
     public void Dispose()
