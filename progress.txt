@@ -20,6 +20,8 @@
 - `NSApp.setActivationPolicy(.accessory)` hides dock icon programmatically
 - Keychain access via Security framework: `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete`
 - ConfigStore is `@MainActor` ObservableObject shared via `.environmentObject()`
+- Use `UserNotifications` framework (not deprecated `NSUserNotification`) for macOS notifications
+- Receive flow: first GET /api/v1/clips/latest for metadata, then GET /api/v1/clips/:id/raw for content
 
 ---
 
@@ -120,4 +122,16 @@
   - Build multipart body manually with UUID boundary - no built-in Swift multipart helper
   - Clipboard refresh on `NSApplication.didBecomeActiveNotification` keeps preview current when user switches back to app
   - `SendStatus` enum with associated values (clipID, expiresAt) works well for displaying contextual results
+---
+
+## 2026-04-11 - US-009
+- What was implemented: macOS receive clipboard text - Receive Latest button fetches latest text clip and copies to clipboard with notification, manual Clip ID input for fetching specific clips
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added ReceiveStatus enum, receiveLatest(), receiveByID(), fetchAndCopyText() methods, UNUserNotificationCenter for notifications
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added receive section with Receive Latest button, Clip ID text field + Fetch button, and status display
+- **Learnings for future iterations:**
+  - Use `UserNotifications` framework (`UNMutableNotificationContent` + `UNNotificationRequest`) instead of deprecated `NSUserNotification`
+  - Receive flow is two-step: GET /latest for metadata (to check type), then GET /:id/raw for content
+  - `ReceiveStatus` enum mirrors `SendStatus` pattern but adds `.noContent` case for 404/empty scenarios
+  - Manual Clip ID fetch reuses `fetchAndCopyText()` private method - good for code reuse across receive paths
 ---
