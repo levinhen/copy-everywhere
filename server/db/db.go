@@ -163,3 +163,9 @@ func (d *DB) DeleteClip(id string) error {
 	_, err := d.conn.Exec(`DELETE FROM clips WHERE id = ?`, id)
 	return err
 }
+
+func (d *DB) UpdateClip(id string, status string, sizeBytes int64, storagePath string) error {
+	_, err := d.conn.Exec(`UPDATE clips SET status = ?, size_bytes = ?, storage_path = ? WHERE id = ?`,
+		status, sizeBytes, storagePath, id)
+	return err
+}

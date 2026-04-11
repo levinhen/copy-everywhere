@@ -34,6 +34,13 @@ func main() {
 		TTLHours:      cfg.TTLHours,
 	}
 
+	uploadHandler := &handlers.UploadHandler{
+		DB:            database,
+		StoragePath:   cfg.StoragePath,
+		MaxClipSizeMB: cfg.MaxClipSizeMB,
+		TTLHours:      cfg.TTLHours,
+	}
+
 	r := gin.Default()
 
 	// Health endpoint (no auth required)
@@ -52,6 +59,11 @@ func main() {
 		api.GET("/clips/latest", clipHandler.GetLatest)
 		api.GET("/clips/:id", clipHandler.GetByID)
 		api.GET("/clips/:id/raw", clipHandler.GetRaw)
+
+		api.POST("/uploads/init", uploadHandler.InitUpload)
+		api.PUT("/uploads/:id/parts/:n", uploadHandler.UploadPart)
+		api.POST("/uploads/:id/complete", uploadHandler.CompleteUpload)
+		api.GET("/uploads/:id/status", uploadHandler.GetUploadStatus)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
