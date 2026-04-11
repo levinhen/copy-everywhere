@@ -371,3 +371,15 @@
   - GetConsumedClips uses a duration threshold (60s) to avoid racing with in-flight response streaming from US-020's atomic consume
   - Cleanup refactored into deleteClips(database, storagePath, clips) helper to avoid duplicating the disk+DB deletion logic
 ---
+
+## 2026-04-12 - US-023
+- What was implemented: macOS device registration on first launch — on save in ConfigView, the app calls POST /api/v1/devices/register with Host.current().localizedName and platform "macos". The returned device_id and name are persisted in UserDefaults and displayed read-only in ConfigView below the token field.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added deviceID/deviceName @Published properties (UserDefaults-backed), registerDevice() async method with JSON POST to /devices/register, save() triggers registration when configured
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` — Added "Registered Device" section showing device name and ID with desktop icon
+- **Learnings for future iterations:**
+  - Device ID is not a secret — UserDefaults is appropriate (not Keychain)
+  - `Host.current().localizedName` returns the user-visible computer name on macOS
+  - Registration is best-effort from save() — errors are silently ignored to not block config save
+  - Server-side idempotence on (name, platform) means re-registering on every save is safe
+---
