@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace CopyEverywhere.Services;
 
@@ -46,50 +46,86 @@ public class HistoryStore
         var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var dir = Path.Combine(appData, "CopyEverywhere");
         Directory.CreateDirectory(dir);
-        _dbPath = Path.Combine(dir, "history.json");
+        _dbPath = Path.Combine(dir, "history.db");
+        InitializeDatabase();
         Load();
+    }
+
+    private void InitializeDatabase()
+    {
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        connection.Open();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            CREATE TABLE IF NOT EXISTS history (
+                clip_id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                filename TEXT,
+                timestamp TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'success'
+            )";
+        cmd.ExecuteNonQuery();
     }
 
     public void AddRecord(HistoryRecord record)
     {
-        // Remove existing record with same ClipId if any
-        _records.RemoveAll(r => r.ClipId == record.ClipId);
-        _records.Insert(0, record);
-        Save();
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        connection.Open();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            INSERT OR REPLACE INTO history (clip_id, type, filename, timestamp, expires_at, status)
+            VALUES (@clipId, @type, @filename, @timestamp, @expiresAt, @status)";
+        cmd.Parameters.AddWithValue("@clipId", record.ClipId);
+        cmd.Parameters.AddWithValue("@type", record.Type);
+        cmd.Parameters.AddWithValue("@filename", (object?)record.Filename ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@timestamp", record.Timestamp.ToString("O"));
+        cmd.Parameters.AddWithValue("@expiresAt", record.ExpiresAt.ToString("O"));
+        cmd.Parameters.AddWithValue("@status", record.Status);
+        cmd.ExecuteNonQuery();
+
+        Load();
     }
 
     public void DeleteRecord(string clipId)
     {
-        _records.RemoveAll(r => r.ClipId == clipId);
-        Save();
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        connection.Open();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM history WHERE clip_id = @clipId";
+        cmd.Parameters.AddWithValue("@clipId", clipId);
+        cmd.ExecuteNonQuery();
+
+        Load();
     }
 
     private void Load()
     {
-        try
-        {
-            if (File.Exists(_dbPath))
-            {
-                var json = File.ReadAllText(_dbPath);
-                _records = JsonSerializer.Deserialize<List<HistoryRecord>>(json) ?? new();
-            }
-        }
-        catch
-        {
-            _records = new();
-        }
-    }
+        var records = new List<HistoryRecord>();
 
-    private void Save()
-    {
-        try
+        using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        connection.Open();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT clip_id, type, filename, timestamp, expires_at, status FROM history ORDER BY timestamp DESC";
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
         {
-            var json = JsonSerializer.Serialize(_records, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(_dbPath, json);
+            records.Add(new HistoryRecord
+            {
+                ClipId = reader.GetString(0),
+                Type = reader.GetString(1),
+                Filename = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Timestamp = DateTime.Parse(reader.GetString(3)),
+                ExpiresAt = DateTime.Parse(reader.GetString(4)),
+                Status = reader.GetString(5),
+            });
         }
-        catch
-        {
-            // Silently fail on write errors
-        }
+
+        _records = records;
     }
 }
