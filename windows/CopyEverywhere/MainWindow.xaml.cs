@@ -16,6 +16,7 @@ public partial class MainWindow : Window
 {
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
+    private readonly HistoryStore _historyStore;
 
     private const int ChunkSize = 10 * 1024 * 1024; // 10MB
     private const long ChunkedThreshold = 50L * 1024 * 1024; // 50MB
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
 
         _configStore = new ConfigStore();
         _apiClient = new ApiClient(_configStore);
+        _historyStore = new HistoryStore();
 
         DataContext = _configStore;
 
@@ -43,6 +45,7 @@ public partial class MainWindow : Window
 
         UpdateMainPanelState();
         RefreshClipboardPreview();
+        RefreshHistoryList();
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -113,6 +116,16 @@ public partial class MainWindow : Window
             {
                 var expiresIn = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
                 ShowSendStatus($"Sent! Clip ID: {clip.Id}\nExpires at: {expiresIn}", isError: false);
+                _historyStore.AddRecord(new HistoryRecord
+                {
+                    ClipId = clip.Id,
+                    Type = "text",
+                    Filename = null,
+                    Timestamp = clip.CreatedAt,
+                    ExpiresAt = clip.ExpiresAt,
+                    Status = "success",
+                });
+                RefreshHistoryList();
             }
             else
             {
@@ -310,6 +323,16 @@ public partial class MainWindow : Window
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
                     ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+                    _historyStore.AddRecord(new HistoryRecord
+                    {
+                        ClipId = clip.Id,
+                        Type = clip.Type,
+                        Filename = clip.Filename,
+                        Timestamp = clip.CreatedAt,
+                        ExpiresAt = clip.ExpiresAt,
+                        Status = "success",
+                    });
+                    RefreshHistoryList();
                 }
             }
         }
@@ -320,6 +343,17 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             ShowFileUploadStatus($"Upload error: {ex.Message}", isError: true);
+            // Record failed upload in history
+            _historyStore.AddRecord(new HistoryRecord
+            {
+                ClipId = _chunkedUploadId ?? "?",
+                Type = "file",
+                Filename = Path.GetFileName(filePath),
+                Timestamp = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddHours(1),
+                Status = "failed",
+            });
+            RefreshHistoryList();
         }
         finally
         {
@@ -386,6 +420,16 @@ public partial class MainWindow : Window
         {
             var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
             ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+            _historyStore.AddRecord(new HistoryRecord
+            {
+                ClipId = clip.Id,
+                Type = clip.Type,
+                Filename = clip.Filename,
+                Timestamp = clip.CreatedAt,
+                ExpiresAt = clip.ExpiresAt,
+                Status = "success",
+            });
+            RefreshHistoryList();
         }
 
         UploadProgressPanel.Visibility = Visibility.Collapsed;
@@ -440,6 +484,16 @@ public partial class MainWindow : Window
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
                     ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+                    _historyStore.AddRecord(new HistoryRecord
+                    {
+                        ClipId = clip.Id,
+                        Type = clip.Type,
+                        Filename = clip.Filename,
+                        Timestamp = clip.CreatedAt,
+                        ExpiresAt = clip.ExpiresAt,
+                        Status = "success",
+                    });
+                    RefreshHistoryList();
                 }
                 UploadProgressPanel.Visibility = Visibility.Collapsed;
                 ChunkedControlPanel.Visibility = Visibility.Collapsed;
@@ -564,6 +618,164 @@ public partial class MainWindow : Window
         finally
         {
             DownloadFileButton.IsEnabled = true;
+        }
+    }
+
+    // --- History ---
+
+    private void RefreshHistoryList()
+    {
+        HistoryListPanel.Children.Clear();
+
+        if (_historyStore.Records.Count == 0)
+        {
+            HistoryListPanel.Children.Add(new TextBlock
+            {
+                Text = "No history yet",
+                Foreground = new SolidColorBrush(Colors.Gray),
+                FontSize = 12,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 8, 0, 8),
+            });
+            return;
+        }
+
+        foreach (var record in _historyStore.Records)
+        {
+            var row = CreateHistoryRow(record);
+            HistoryListPanel.Children.Add(row);
+        }
+    }
+
+    private Border CreateHistoryRow(HistoryRecord record)
+    {
+        var isGrayed = record.IsExpired || record.Status == "failed";
+
+        // Type icon + Clip ID
+        var typeIcon = new TextBlock
+        {
+            Text = record.TypeIcon,
+            FontSize = 14,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        };
+
+        var clipIdText = new TextBlock
+        {
+            Text = record.ClipId,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = isGrayed ? new SolidColorBrush(Colors.Gray) : new SolidColorBrush(Colors.Black),
+        };
+
+        // Filename or type label
+        var detailText = new TextBlock
+        {
+            Text = record.Filename ?? record.Type,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Colors.Gray),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 120,
+        };
+
+        var leftPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { typeIcon, clipIdText, detailText },
+        };
+
+        // Timestamp
+        var timestamp = new TextBlock
+        {
+            Text = record.Timestamp.ToLocalTime().ToString("MM/dd HH:mm"),
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Colors.Gray),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+
+        // Status label
+        var statusLabel = new TextBlock
+        {
+            Text = record.DisplayLabel,
+            FontSize = 11,
+            FontWeight = FontWeights.Medium,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            Foreground = record.Status == "failed"
+                ? new SolidColorBrush(Color.FromRgb(185, 28, 28))
+                : record.IsExpired
+                    ? new SolidColorBrush(Colors.Gray)
+                    : new SolidColorBrush(Color.FromRgb(21, 128, 61)),
+        };
+
+        // Delete button
+        var deleteButton = new Button
+        {
+            Content = "\u2715",
+            Width = 24,
+            Height = 24,
+            FontSize = 11,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Tag = record.ClipId,
+        };
+        deleteButton.Click += HistoryDeleteButton_Click;
+
+        var rightPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { timestamp, statusLabel, deleteButton },
+        };
+
+        var rowGrid = new DockPanel
+        {
+            LastChildFill = true,
+        };
+        DockPanel.SetDock(rightPanel, Dock.Right);
+        rowGrid.Children.Add(rightPanel);
+        rowGrid.Children.Add(leftPanel);
+
+        var border = new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Padding = new Thickness(4, 6, 4, 6),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            Tag = record.ClipId,
+            Child = rowGrid,
+        };
+
+        border.MouseLeftButtonUp += HistoryRow_Click;
+
+        return border;
+    }
+
+    private void HistoryRow_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is Border border && border.Tag is string clipId)
+        {
+            try
+            {
+                Clipboard.SetText(clipId);
+                ShowToastNotification("Clip ID Copied", $"Clip ID {clipId} copied to clipboard");
+            }
+            catch
+            {
+                // Clipboard may be locked
+            }
+        }
+    }
+
+    private void HistoryDeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.Tag is string clipId)
+        {
+            _historyStore.DeleteRecord(clipId);
+            RefreshHistoryList();
         }
     }
 
