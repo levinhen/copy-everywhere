@@ -1049,12 +1049,15 @@ final class ConfigStore: ObservableObject {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
 
-                // Show macOS notification
-                let content = UNMutableNotificationContent()
-                content.title = "CopyEverywhere"
-                content.body = "Copied to clipboard"
-                let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-                try? await UNUserNotificationCenter.current().add(request)
+                // Bundle.main.bundleIdentifier is nil for un-bundled SPM builds (`swift run`),
+                // and UNUserNotificationCenter.current() throws NSInternalInconsistencyException in that case.
+                if Bundle.main.bundleIdentifier != nil {
+                    let content = UNMutableNotificationContent()
+                    content.title = "CopyEverywhere"
+                    content.body = "Copied to clipboard"
+                    let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+                    try? await UNUserNotificationCenter.current().add(request)
+                }
 
                 receiveStatus = .success(clipID)
             case 403:
