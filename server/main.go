@@ -45,6 +45,10 @@ func main() {
 		TTLHours:      cfg.TTLHours,
 	}
 
+	deviceHandler := &handlers.DeviceHandler{
+		DB: database,
+	}
+
 	r := gin.Default()
 
 	// Health endpoint (no auth required)
@@ -76,6 +80,9 @@ func main() {
 		api.PUT("/uploads/:id/parts/:n", uploadHandler.UploadPart)
 		api.POST("/uploads/:id/complete", uploadHandler.CompleteUpload)
 		api.GET("/uploads/:id/status", uploadHandler.GetUploadStatus)
+
+		api.POST("/devices/register", deviceHandler.Register)
+		api.GET("/devices", deviceHandler.List)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)

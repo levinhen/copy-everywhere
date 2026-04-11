@@ -337,6 +337,91 @@ func TestGetStorageStats(t *testing.T) {
 	}
 }
 
+func TestGenerateDeviceID(t *testing.T) {
+	id, err := GenerateDeviceID()
+	if err != nil {
+		t.Fatalf("generate device id: %v", err)
+	}
+	if len(id) != 8 {
+		t.Fatalf("expected 8 chars, got %d: %s", len(id), id)
+	}
+	for _, c := range id {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			t.Fatalf("invalid char %c in id %s", c, id)
+		}
+	}
+}
+
+func TestRegisterDevice(t *testing.T) {
+	d := setupTestDB(t)
+
+	dev, err := d.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	if len(dev.ID) != 8 {
+		t.Fatalf("expected 8-char id, got %d", len(dev.ID))
+	}
+	if dev.Name != "Mac" {
+		t.Fatalf("expected name Mac, got %s", dev.Name)
+	}
+	if dev.Platform != "macos" {
+		t.Fatalf("expected platform macos, got %s", dev.Platform)
+	}
+}
+
+func TestRegisterDeviceIdempotent(t *testing.T) {
+	d := setupTestDB(t)
+
+	dev1, err := d.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	dev2, err := d.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("re-register device: %v", err)
+	}
+
+	if dev1.ID != dev2.ID {
+		t.Fatalf("expected same id on re-register, got %s vs %s", dev1.ID, dev2.ID)
+	}
+}
+
+func TestRegisterDeviceDifferentPlatform(t *testing.T) {
+	d := setupTestDB(t)
+
+	dev1, _ := d.RegisterDevice("MyPC", "macos")
+	dev2, _ := d.RegisterDevice("MyPC", "windows")
+
+	if dev1.ID == dev2.ID {
+		t.Fatal("expected different ids for different platforms")
+	}
+}
+
+func TestListDevices(t *testing.T) {
+	d := setupTestDB(t)
+
+	devices, err := d.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("expected 0 devices, got %d", len(devices))
+	}
+
+	d.RegisterDevice("Mac", "macos")
+	d.RegisterDevice("PC", "windows")
+
+	devices, err = d.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(devices))
+	}
+}
+
 func TestDatabaseCreatedAtStoragePath(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(dir)

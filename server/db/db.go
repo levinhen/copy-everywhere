@@ -14,6 +14,7 @@ import (
 
 const idChars = "abcdefghijklmnopqrstuvwxyz0123456789"
 const idLength = 6
+const deviceIDLength = 8
 
 type Clip struct {
 	ID          string    `json:"id"`
@@ -24,6 +25,14 @@ type Clip struct {
 	CreatedAt   time.Time `json:"created_at"`
 	ExpiresAt   time.Time `json:"expires_at"`
 	StoragePath string    `json:"storage_path"`
+}
+
+type Device struct {
+	ID         string    `json:"device_id"`
+	Name       string    `json:"name"`
+	Platform   string    `json:"platform"`
+	LastSeenAt time.Time `json:"last_seen_at"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 type DB struct {
@@ -72,11 +81,24 @@ func (d *DB) migrate() error {
 			storage_path TEXT NOT NULL DEFAULT ''
 		)
 	`)
+	if err != nil {
+		return err
+	}
+
+	_, err = d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS devices (
+			id           TEXT PRIMARY KEY,
+			name         TEXT NOT NULL,
+			platform     TEXT NOT NULL,
+			last_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`)
 	return err
 }
 
-func GenerateID() (string, error) {
-	b := make([]byte, idLength)
+func generateRandomID(length int) (string, error) {
+	b := make([]byte, length)
 	for i := range b {
 		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(idChars))))
 		if err != nil {
@@ -85,6 +107,14 @@ func GenerateID() (string, error) {
 		b[i] = idChars[n.Int64()]
 	}
 	return string(b), nil
+}
+
+func GenerateID() (string, error) {
+	return generateRandomID(idLength)
+}
+
+func GenerateDeviceID() (string, error) {
+	return generateRandomID(deviceIDLength)
 }
 
 func (d *DB) CreateClip(clip *Clip) error {
@@ -209,4 +239,76 @@ func (d *DB) GetStorageStats() (*StorageStats, error) {
 		return nil, err
 	}
 	return stats, nil
+}
+
+// RegisterDevice inserts a new device or returns the existing one if (name, platform) already exists.
+// In both cases last_seen_at is bumped to now.
+func (d *DB) RegisterDevice(name, platform string) (*Device, error) {
+	now := time.Now().UTC()
+
+	// Check for existing device with same name+platform
+	existing := &Device{}
+	err := d.conn.QueryRow(`
+		SELECT id, name, platform, last_seen_at, created_at
+		FROM devices WHERE name = ? AND platform = ?
+	`, name, platform).Scan(&existing.ID, &existing.Name, &existing.Platform, &existing.LastSeenAt, &existing.CreatedAt)
+
+	if err == nil {
+		// Bump last_seen_at
+		_, err = d.conn.Exec(`UPDATE devices SET last_seen_at = ? WHERE id = ?`, now, existing.ID)
+		if err != nil {
+			return nil, fmt.Errorf("bump last_seen_at: %w", err)
+		}
+		existing.LastSeenAt = now
+		return existing, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	// Create new device
+	id, err := GenerateDeviceID()
+	if err != nil {
+		return nil, fmt.Errorf("generate device id: %w", err)
+	}
+
+	_, err = d.conn.Exec(`
+		INSERT INTO devices (id, name, platform, last_seen_at, created_at)
+		VALUES (?, ?, ?, ?, ?)
+	`, id, name, platform, now, now)
+	if err != nil {
+		return nil, fmt.Errorf("insert device: %w", err)
+	}
+
+	return &Device{
+		ID:         id,
+		Name:       name,
+		Platform:   platform,
+		LastSeenAt: now,
+		CreatedAt:  now,
+	}, nil
+}
+
+// ListDevices returns all devices seen in the last 30 days.
+func (d *DB) ListDevices() ([]*Device, error) {
+	cutoff := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	rows, err := d.conn.Query(`
+		SELECT id, name, platform, last_seen_at, created_at
+		FROM devices WHERE last_seen_at > ?
+		ORDER BY last_seen_at DESC
+	`, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var devices []*Device
+	for rows.Next() {
+		dev := &Device{}
+		if err := rows.Scan(&dev.ID, &dev.Name, &dev.Platform, &dev.LastSeenAt, &dev.CreatedAt); err != nil {
+			return nil, err
+		}
+		devices = append(devices, dev)
+	}
+	return devices, rows.Err()
 }
