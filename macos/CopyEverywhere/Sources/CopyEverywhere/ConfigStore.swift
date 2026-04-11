@@ -30,6 +30,10 @@ final class ConfigStore: ObservableObject {
     private let tokenKey = "accessToken"
 
     // Chunked upload state
+    // History store reference (set externally)
+    var historyStore: HistoryStore?
+
+    // Chunked upload state
     private var chunkedUploadID: String?
     private var chunkedUploadFileURL: URL?
     private var chunkedUploadTask: Task<Void, Never>?
@@ -282,11 +286,17 @@ final class ConfigStore: ObservableObject {
                     displayFormatter.timeStyle = .short
 
                     var expiryDisplay = expiresAtStr
+                    var expiryDate = Date().addingTimeInterval(3600) // fallback
                     if let date = formatter.date(from: expiresAtStr) {
                         displayFormatter.timeZone = .current
                         expiryDisplay = displayFormatter.string(from: date)
+                        expiryDate = date
                     }
                     sendStatus = .success(clipID: clipID, expiresAt: expiryDisplay)
+                    historyStore?.addRecord(HistoryRecord(
+                        clipID: clipID, type: "text", filename: nil,
+                        timestamp: Date(), expiresAt: expiryDate, status: "success"
+                    ))
                 } else {
                     sendStatus = .error("Unexpected response format")
                 }
@@ -501,9 +511,11 @@ final class ConfigStore: ObservableObject {
                     displayFormatter.timeStyle = .short
 
                     var expiryDisplay = expiresAtStr
+                    var expiryDate = Date().addingTimeInterval(3600)
                     if let date = formatter.date(from: expiresAtStr) {
                         displayFormatter.timeZone = .current
                         expiryDisplay = displayFormatter.string(from: date)
+                        expiryDate = date
                     }
                     fileUploadProgress = 1.0
                     fileUploadStatus = .success(
@@ -512,6 +524,10 @@ final class ConfigStore: ObservableObject {
                         fileSize: formatBytes(fileSize),
                         expiresAt: expiryDisplay
                     )
+                    historyStore?.addRecord(HistoryRecord(
+                        clipID: clipID, type: clipType, filename: filename,
+                        timestamp: Date(), expiresAt: expiryDate, status: "success"
+                    ))
                 } else {
                     fileUploadStatus = .error("Unexpected response format")
                 }
@@ -533,10 +549,18 @@ final class ConfigStore: ObservableObject {
             default:
                 fileUploadStatus = .error("Network error: \(error.localizedDescription)")
             }
+            historyStore?.addRecord(HistoryRecord(
+                clipID: "—", type: clipType, filename: filename,
+                timestamp: Date(), expiresAt: Date(), status: "failed"
+            ))
         } catch {
             progressTask.cancel()
             session.invalidateAndCancel()
             fileUploadStatus = .error("Error: \(error.localizedDescription)")
+            historyStore?.addRecord(HistoryRecord(
+                clipID: "—", type: clipType, filename: filename,
+                timestamp: Date(), expiresAt: Date(), status: "failed"
+            ))
         }
     }
 
@@ -774,9 +798,11 @@ final class ConfigStore: ObservableObject {
                 displayFormatter.timeStyle = .short
 
                 var expiryDisplay = expiresAtStr
+                var expiryDate = Date().addingTimeInterval(3600)
                 if let date = formatter.date(from: expiresAtStr) {
                     displayFormatter.timeZone = .current
                     expiryDisplay = displayFormatter.string(from: date)
+                    expiryDate = date
                 }
                 fileUploadProgress = 1.0
                 fileUploadStatus = .success(
@@ -785,6 +811,10 @@ final class ConfigStore: ObservableObject {
                     fileSize: formatBytes(fileSize),
                     expiresAt: expiryDisplay
                 )
+                historyStore?.addRecord(HistoryRecord(
+                    clipID: clipID, type: "file", filename: filename,
+                    timestamp: Date(), expiresAt: expiryDate, status: "success"
+                ))
             } else {
                 fileUploadStatus = .error("Unexpected complete response format")
             }

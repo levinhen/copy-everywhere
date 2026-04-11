@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct MainPanelView: View {
     @EnvironmentObject var configStore: ConfigStore
+    @EnvironmentObject var historyStore: HistoryStore
     @State private var showingConfig = false
     @State private var clipboardText: String? = nil
     @State private var manualClipID: String = ""
@@ -541,6 +542,33 @@ struct MainPanelView: View {
 
             Divider()
 
+            // History section
+            VStack(alignment: .leading, spacing: 8) {
+                Text("History")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+
+                if historyStore.records.isEmpty {
+                    Text("No items yet")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .italic()
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(8)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 4) {
+                            ForEach(historyStore.records) { record in
+                                historyRow(record)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 160)
+                }
+            }
+
+            Divider()
+
             Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
@@ -591,6 +619,81 @@ struct MainPanelView: View {
                 await configStore.sendFile(url: url)
             }
         }
+    }
+
+    @ViewBuilder
+    private func historyRow(_ record: HistoryRecord) -> some View {
+        let isExpired = record.isExpired
+        let isFailed = record.status == "failed"
+
+        HStack(spacing: 8) {
+            Image(systemName: record.typeIcon)
+                .foregroundColor(isExpired || isFailed ? .secondary : .accentColor)
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(record.clipID)
+                        .fontWeight(.medium)
+                    if let filename = record.filename {
+                        Text("— \(filename)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .font(.caption)
+
+                HStack(spacing: 4) {
+                    Text(formatTimestamp(record.timestamp))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    if isFailed {
+                        Text("Upload Failed")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(.red)
+                    } else if isExpired {
+                        Text("Expired")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .opacity(isExpired || isFailed ? 0.6 : 1.0)
+
+            Spacer()
+
+            Button(action: {
+                historyStore.deleteRecord(clipID: record.clipID)
+            }) {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .cornerRadius(6)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(record.clipID, forType: .string)
+        }
+    }
+
+    private func formatTimestamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        let calendar = Calendar.current
+        if !calendar.isDateInToday(date) {
+            formatter.dateStyle = .short
+        }
+        return formatter.string(from: date)
     }
 
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
