@@ -51,6 +51,9 @@
 - Device registration is idempotent on (name, platform) — re-registering returns the existing ID and bumps `last_seen_at`
 - DeviceHandler is a separate struct from ClipHandler/UploadHandler, wired in main.go
 - Device routes: POST /api/v1/devices/register, GET /api/v1/devices
+- Clip columns: target_device_id (*string), sender_device_id (*string), consumed_at (*time.Time) — all nullable
+- SQLite migration uses `ALTER TABLE ADD COLUMN` with errors ignored for idempotence (no IF NOT EXISTS syntax)
+- POST /clips takes device IDs as multipart form fields; POST /uploads/init takes them as JSON body fields
 
 ---
 
@@ -296,4 +299,20 @@
   - Platform validation in the handler enforces macos|windows|linux — update if new platforms are added
   - ListDevices uses a 30-day cutoff on last_seen_at to avoid returning stale devices
   - Device JSON uses `device_id` key (not `id`) to match the API contract
+---
+
+## 2026-04-12 - US-019
+- What was implemented: Added target_device_id, sender_device_id (TEXT nullable), and consumed_at (DATETIME nullable) columns to clips table. POST /clips and POST /uploads/init now accept and persist the optional device ID fields. In-place migration via ALTER TABLE ADD COLUMN (errors ignored for idempotence).
+- Files changed:
+  - `server/db/db.go` — Clip struct extended with 3 new fields, migration adds columns, CreateClip and all Scan queries updated
+  - `server/db/db_test.go` — Added TestCreateClipWithDeviceIDs and TestCreateClipNullDeviceIDs
+  - `server/handlers/clips.go` — Upload handler reads optional target_device_id and sender_device_id from multipart form
+  - `server/handlers/clips_test.go` — Added TestUploadWithDeviceIDs and TestUploadWithoutDeviceIDs
+  - `server/handlers/uploads.go` — initUploadRequest struct extended with optional device ID fields, persisted on clip creation
+  - `server/handlers/uploads_test.go` — Added TestInitUploadWithDeviceIDs and TestInitUploadWithoutDeviceIDs
+- **Learnings for future iterations:**
+  - SQLite has no `ADD COLUMN IF NOT EXISTS` — use `d.conn.Exec()` and ignore errors for idempotent migration
+  - `*string` for nullable TEXT columns, `*time.Time` for nullable DATETIME columns — consistent with existing Filename pattern
+  - POST /clips uses multipart form fields for device IDs; POST /uploads/init uses JSON body fields — different content types
+  - All Scan calls across the codebase must be updated when adding columns to avoid column count mismatch
 ---
