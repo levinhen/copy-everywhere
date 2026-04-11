@@ -41,6 +41,10 @@
 - ApiClient uses `MultipartFormDataContent` for clip uploads matching server's multipart/form-data expectation
 - Clipboard text send uses "clipboard.txt" filename with "text/plain" content type
 - Receive flow: GET /clips/latest for metadata → GET /clips/:id/raw for content (same as macOS)
+- `ProgressStreamContent` (extends HttpContent) for tracking upload progress in .NET — no built-in alternative
+- WPF file dialogs (`OpenFileDialog`, `SaveFileDialog`) are in `Microsoft.Win32` namespace
+- `Process.Start("explorer.exe", "/select,\"path\"")` reveals file in Explorer
+- Chunked upload 409 from PUT parts means chunk already uploaded — treat as success during resume
 
 ---
 
@@ -241,4 +245,20 @@
   - Clipboard access can throw if locked by another process — wrap in try/catch
   - OnActivated override refreshes clipboard preview when user switches back to the app
   - ClipboardPanel visibility toggled based on IsConfigured — hides send/receive UI until server is configured
+---
+
+## 2026-04-11 - US-016
+- What was implemented: Windows send and receive files with chunked upload support — drop zone for drag-and-drop from Explorer, Choose File button with OpenFileDialog, small file upload (< 50MB) via single POST with ProgressStreamContent for progress tracking, large file upload (>= 50MB) via chunked upload with pause/resume, file download with streaming progress and Explorer reveal, metadata lookup before download
+- Files changed:
+  - `windows/CopyEverywhere/Services/ApiClient.cs` - Added SendFileAsync (with ProgressStreamContent), InitChunkedUploadAsync, UploadChunkAsync, CompleteChunkedUploadAsync, GetUploadStatusAsync, DownloadFileAsync methods; UploadInitResponse, UploadStatusResponse, ProgressStreamContent classes
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added Send File section (drop zone, Choose File button, progress bar, pause/resume buttons), Download File section (Clip ID lookup, metadata display, download button, progress bar), increased window height to 800
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added file upload/download event handlers, chunked upload state management, drag-and-drop handlers, FormatBytes/FormatSpeed helpers, ShowFileUploadStatus/ShowDownloadStatus helpers
+- **Learnings for future iterations:**
+  - `ProgressStreamContent` extends `HttpContent` to report upload progress via `IProgress<(long, long)>` — .NET has no built-in progress-tracking upload
+  - WPF drop zone uses `AllowDrop="True"` with `Drop`/`DragOver`/`DragLeave` events and `DataFormats.FileDrop`
+  - `OpenFileDialog` and `SaveFileDialog` are in `Microsoft.Win32` namespace (not `System.Windows.Forms`)
+  - `Process.Start("explorer.exe", "/select,\"path\"")` opens Explorer and selects the downloaded file
+  - Chunked upload pause works by cancelling CancellationTokenSource; resume queries server for received_parts
+  - 409 from chunk upload endpoint means already uploaded — safe to ignore during resume
+  - Download uses `HttpCompletionOption.ResponseHeadersRead` for streaming (doesn't buffer entire response)
 ---
