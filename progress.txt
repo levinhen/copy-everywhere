@@ -11,6 +11,9 @@
 - Clip API returns `clipResponse` (subset of Clip) to avoid leaking internal fields like StoragePath
 - Chunked uploads store parts in `STORAGE_PATH/uploads/<id>/part_N`, merged on complete to `STORAGE_PATH/<id>/<filename>`
 - `UpdateClip(id, status, sizeBytes, storagePath)` updates clip record after chunked upload completes
+- Cleanup package in `server/cleanup/` runs background goroutine with `Start(db, storagePath, interval)`
+- `GetExpiredClips()` returns all clips where `expires_at < now()` (both ready and uploading)
+- `GetStorageStats()` returns `{ClipCount, StorageUsedBytes}` via SQL COUNT/SUM
 
 ---
 
@@ -53,4 +56,18 @@
   - After complete, parts directory is cleaned up with `os.RemoveAll` and final file moved to `STORAGE_PATH/<clip_id>/`
   - Upload clip record is created at init time with status=uploading, updated to ready on complete
   - The `UpdateClip` DB helper updates status, size_bytes, and storage_path in one call
+---
+
+## 2026-04-11 - US-005
+- What was implemented: TTL cleanup background goroutine (every 10 minutes) that deletes expired clips from disk and DB, plus enhanced /health endpoint with storage_used_bytes and clip_count fields
+- Files changed:
+  - `server/cleanup/cleanup.go` (new) - Background cleanup goroutine with Start() entry point
+  - `server/db/db.go` - Added GetExpiredClips() and GetStorageStats() methods
+  - `server/db/db_test.go` - Added tests for GetExpiredClips and GetStorageStats
+  - `server/main.go` - Added cleanup.Start() call and storage stats to /health
+- **Learnings for future iterations:**
+  - Cleanup runs once immediately at startup then every ticker interval
+  - For uploading clips, cleanup removes both the upload parts dir and the DB record
+  - StorageStats uses COALESCE(SUM(size_bytes), 0) to handle empty table case
+  - /health endpoint gracefully degrades if stats query fails (still returns version/uptime)
 ---
