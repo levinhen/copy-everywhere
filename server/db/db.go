@@ -169,3 +169,44 @@ func (d *DB) UpdateClip(id string, status string, sizeBytes int64, storagePath s
 		status, sizeBytes, storagePath, id)
 	return err
 }
+
+// GetExpiredClips returns all clips where expires_at < now (both ready and uploading).
+func (d *DB) GetExpiredClips() ([]*Clip, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path
+		FROM clips WHERE expires_at < ?
+	`, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clips []*Clip
+	for rows.Next() {
+		clip := &Clip{}
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath); err != nil {
+			return nil, err
+		}
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
+}
+
+// StorageStats holds aggregate info about stored clips.
+type StorageStats struct {
+	ClipCount        int   `json:"clip_count"`
+	StorageUsedBytes int64 `json:"storage_used_bytes"`
+}
+
+// GetStorageStats returns count and total size of all clips.
+func (d *DB) GetStorageStats() (*StorageStats, error) {
+	stats := &StorageStats{}
+	err := d.conn.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+		FROM clips
+	`).Scan(&stats.ClipCount, &stats.StorageUsedBytes)
+	if err != nil {
+		return nil, err
+	}
+	return stats, nil
+}

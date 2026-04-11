@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/copy-everywhere/server/cleanup"
 	"github.com/copy-everywhere/server/config"
 	"github.com/copy-everywhere/server/db"
 	"github.com/copy-everywhere/server/handlers"
@@ -27,6 +28,9 @@ func main() {
 	}
 	defer database.Close()
 
+	// Start TTL cleanup goroutine (every 10 minutes)
+	cleanup.Start(database, cfg.StoragePath, 10*time.Minute)
+
 	clipHandler := &handlers.ClipHandler{
 		DB:            database,
 		StoragePath:   cfg.StoragePath,
@@ -45,10 +49,18 @@ func main() {
 
 	// Health endpoint (no auth required)
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{
+		resp := gin.H{
 			"version": "0.1.0",
 			"uptime":  time.Since(startTime).String(),
-		})
+		}
+		stats, err := database.GetStorageStats()
+		if err != nil {
+			log.Printf("ERROR: get storage stats: %v", err)
+		} else {
+			resp["storage_used_bytes"] = stats.StorageUsedBytes
+			resp["clip_count"] = stats.ClipCount
+		}
+		c.JSON(200, resp)
 	})
 
 	// API routes with auth

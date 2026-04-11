@@ -249,6 +249,94 @@ func TestCreateClipNullFilename(t *testing.T) {
 	}
 }
 
+func TestGetExpiredClips(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Create expired clip
+	expired := &Clip{
+		Type:        "text",
+		SizeBytes:   10,
+		Status:      "ready",
+		CreatedAt:   time.Now().UTC().Add(-2 * time.Hour),
+		ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
+		StoragePath: "/tmp/expired",
+	}
+	if err := d.CreateClip(expired); err != nil {
+		t.Fatalf("create expired clip: %v", err)
+	}
+
+	// Create expired uploading clip
+	expiredUploading := &Clip{
+		Type:        "file",
+		SizeBytes:   0,
+		Status:      "uploading",
+		CreatedAt:   time.Now().UTC().Add(-2 * time.Hour),
+		ExpiresAt:   time.Now().UTC().Add(-1 * time.Hour),
+		StoragePath: "",
+	}
+	if err := d.CreateClip(expiredUploading); err != nil {
+		t.Fatalf("create expired uploading clip: %v", err)
+	}
+
+	// Create valid clip
+	valid := &Clip{
+		Type:        "text",
+		SizeBytes:   20,
+		Status:      "ready",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+		StoragePath: "/tmp/valid",
+	}
+	if err := d.CreateClip(valid); err != nil {
+		t.Fatalf("create valid clip: %v", err)
+	}
+
+	got, err := d.GetExpiredClips()
+	if err != nil {
+		t.Fatalf("get expired clips: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 expired clips, got %d", len(got))
+	}
+}
+
+func TestGetStorageStats(t *testing.T) {
+	d := setupTestDB(t)
+
+	// Empty DB
+	stats, err := d.GetStorageStats()
+	if err != nil {
+		t.Fatalf("get stats: %v", err)
+	}
+	if stats.ClipCount != 0 || stats.StorageUsedBytes != 0 {
+		t.Fatalf("expected 0/0, got %d/%d", stats.ClipCount, stats.StorageUsedBytes)
+	}
+
+	// Add clips
+	for i := 0; i < 3; i++ {
+		clip := &Clip{
+			Type:        "text",
+			SizeBytes:   int64(100 * (i + 1)),
+			Status:      "ready",
+			ExpiresAt:   time.Now().UTC().Add(time.Hour),
+			StoragePath: "/tmp/stats",
+		}
+		if err := d.CreateClip(clip); err != nil {
+			t.Fatalf("create clip: %v", err)
+		}
+	}
+
+	stats, err = d.GetStorageStats()
+	if err != nil {
+		t.Fatalf("get stats: %v", err)
+	}
+	if stats.ClipCount != 3 {
+		t.Fatalf("expected 3 clips, got %d", stats.ClipCount)
+	}
+	if stats.StorageUsedBytes != 600 { // 100 + 200 + 300
+		t.Fatalf("expected 600 bytes, got %d", stats.StorageUsedBytes)
+	}
+}
+
 func TestDatabaseCreatedAtStoragePath(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(dir)
