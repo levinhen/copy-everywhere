@@ -71,3 +71,15 @@
   - StorageStats uses COALESCE(SUM(size_bytes), 0) to handle empty table case
   - /health endpoint gracefully degrades if stats query fails (still returns version/uptime)
 ---
+
+## 2026-04-11 - US-006
+- What was implemented: Multi-stage Dockerfile (golang:1.26-alpine build, alpine:3.20 runtime), docker-compose.yml with relay service exposing port 8080 and volume mount, .dockerignore for excluding unnecessary files
+- Files changed:
+  - `server/Dockerfile` (new) - Multi-stage build with CGO_ENABLED=0 for static binary
+  - `server/docker-compose.yml` (new) - Single relay service with env vars and named volume
+  - `server/.dockerignore` (new) - Excludes .git, tests, docs, compose/dockerfile themselves
+- **Learnings for future iterations:**
+  - Docker not installed on dev machine, so `docker-compose up --build` could not be verified locally
+  - Used CGO_ENABLED=0 for static binary since modernc.org/sqlite is pure Go (no CGO needed)
+  - docker-compose uses env var substitution with defaults (e.g., `${ACCESS_TOKEN:-changeme}`)
+---

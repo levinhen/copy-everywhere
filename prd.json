@@ -101,7 +101,7 @@
         ".dockerignore excludes unnecessary files"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
