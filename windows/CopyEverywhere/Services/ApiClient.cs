@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -215,8 +217,201 @@ public class ApiClient : IDisposable
         return await response.Content.ReadAsStringAsync(ct);
     }
 
+    public async Task<ClipResponse?> SendFileAsync(string filePath, IProgress<(long sent, long total)>? progress = null, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var fileInfo = new FileInfo(filePath);
+        var boundary = Guid.NewGuid().ToString();
+        using var content = new MultipartFormDataContent(boundary);
+        content.Add(new StringContent("file"), "type");
+
+        var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+        var streamContent = new ProgressStreamContent(fileStream, progress);
+        streamContent.Headers.ContentType = new MediaTypeHeaderValue(GetMimeType(filePath));
+        content.Add(streamContent, "content", fileInfo.Name);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/v1/clips");
+        request.Content = content;
+
+        // Use a longer timeout for file uploads
+        using var uploadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        uploadClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+
+        var response = await uploadClient.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<ClipResponse>(json);
+    }
+
+    public async Task<UploadInitResponse?> InitChunkedUploadAsync(string filename, long sizeBytes, int chunkSize, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var body = JsonSerializer.Serialize(new { filename, size_bytes = sizeBytes, chunk_size = chunkSize });
+        var content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/uploads/init", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<UploadInitResponse>(json);
+    }
+
+    public async Task UploadChunkAsync(string uploadId, int partNumber, byte[] data, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var content = new ByteArrayContent(data);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+
+        using var uploadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        uploadClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+
+        var response = await uploadClient.PutAsync($"{BaseUrl}/api/v1/uploads/{uploadId}/parts/{partNumber}", content, ct);
+        // 409 means chunk already uploaded (safe during resume)
+        if (response.StatusCode != HttpStatusCode.Conflict)
+            response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<ClipResponse?> CompleteChunkedUploadAsync(string uploadId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/uploads/{uploadId}/complete", null, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<ClipResponse>(json);
+    }
+
+    public async Task<UploadStatusResponse?> GetUploadStatusAsync(string uploadId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/uploads/{uploadId}/status", ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<UploadStatusResponse>(json);
+    }
+
+    public async Task DownloadFileAsync(string clipId, string savePath, IProgress<(long received, long total)>? progress = null, CancellationToken ct = default)
+    {
+        using var downloadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        downloadClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+
+        using var response = await downloadClient.GetAsync(
+            $"{BaseUrl}/api/v1/clips/{clipId}/raw",
+            HttpCompletionOption.ResponseHeadersRead,
+            ct);
+        response.EnsureSuccessStatusCode();
+
+        var totalBytes = response.Content.Headers.ContentLength ?? -1;
+        using var contentStream = await response.Content.ReadAsStreamAsync(ct);
+        using var fileStream = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192);
+
+        var buffer = new byte[8192];
+        long totalRead = 0;
+        int bytesRead;
+
+        while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+        {
+            await fileStream.WriteAsync(buffer, 0, bytesRead, ct);
+            totalRead += bytesRead;
+            progress?.Report((totalRead, totalBytes));
+        }
+    }
+
+    private static string GetMimeType(string filePath)
+    {
+        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        return ext switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            ".pdf" => "application/pdf",
+            ".txt" => "text/plain",
+            ".zip" => "application/zip",
+            _ => "application/octet-stream",
+        };
+    }
+
     public void Dispose()
     {
         _httpClient.Dispose();
+    }
+}
+
+public class UploadInitResponse
+{
+    [JsonPropertyName("upload_id")]
+    public string UploadId { get; set; } = "";
+
+    [JsonPropertyName("chunk_count")]
+    public int ChunkCount { get; set; }
+}
+
+public class UploadStatusResponse
+{
+    [JsonPropertyName("upload_id")]
+    public string UploadId { get; set; } = "";
+
+    [JsonPropertyName("received_parts")]
+    public List<int> ReceivedParts { get; set; } = new();
+
+    [JsonPropertyName("total_parts")]
+    public int TotalParts { get; set; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "";
+}
+
+public class ProgressStreamContent : HttpContent
+{
+    private readonly Stream _stream;
+    private readonly IProgress<(long sent, long total)>? _progress;
+
+    public ProgressStreamContent(Stream stream, IProgress<(long sent, long total)>? progress)
+    {
+        _stream = stream;
+        _progress = progress;
+    }
+
+    protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+    {
+        var buffer = new byte[8192];
+        long totalSent = 0;
+        var totalLength = _stream.Length;
+        int bytesRead;
+
+        while ((bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+        {
+            await stream.WriteAsync(buffer, 0, bytesRead);
+            totalSent += bytesRead;
+            _progress?.Report((totalSent, totalLength));
+        }
+    }
+
+    protected override bool TryComputeLength(out long length)
+    {
+        length = _stream.Length;
+        return true;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            _stream.Dispose();
+        base.Dispose(disposing);
     }
 }

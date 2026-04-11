@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="CopyEverywhere"
-        Width="420" Height="650"
+        Width="420" Height="800"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize">
 
@@ -130,6 +130,104 @@
                         Padding="10,8"
                         Margin="0,0,0,12">
                     <TextBlock x:Name="ReceiveStatusText"
+                               TextWrapping="Wrap"
+                               FontSize="12"/>
+                </Border>
+
+                <Separator Margin="0,4,0,16"/>
+
+                <!-- Send File Section -->
+                <TextBlock Text="Send File" Style="{StaticResource SectionHeader}"/>
+
+                <Border x:Name="DropZoneBorder"
+                        BorderBrush="Gray" BorderThickness="2"
+                        CornerRadius="4" Padding="16" Margin="0,0,0,8"
+                        MinHeight="80" AllowDrop="True"
+                        Drop="DropZone_Drop" DragOver="DropZone_DragOver"
+                        DragLeave="DropZone_DragLeave"
+                        Background="Transparent">
+                    <TextBlock x:Name="DropZoneText"
+                               Text="Drop a file here"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Foreground="Gray" FontSize="13"/>
+                </Border>
+
+                <Button x:Name="ChooseFileButton"
+                        Content="Choose File"
+                        Width="100" Height="30"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,8"
+                        Click="ChooseFileButton_Click"/>
+
+                <!-- Upload progress -->
+                <StackPanel x:Name="UploadProgressPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                    <ProgressBar x:Name="UploadProgressBar" Height="20" Minimum="0" Maximum="100" Value="0"/>
+                    <TextBlock x:Name="UploadProgressText" FontSize="11" Foreground="Gray" Margin="0,4,0,0"/>
+                </StackPanel>
+
+                <!-- Pause/Resume for chunked upload -->
+                <StackPanel x:Name="ChunkedControlPanel" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,0,8">
+                    <Button x:Name="PauseUploadButton" Content="Pause" Width="80" Height="28" Margin="0,0,8,0" Click="PauseUploadButton_Click"/>
+                    <Button x:Name="ResumeUploadButton" Content="Resume" Width="80" Height="28" Visibility="Collapsed" Click="ResumeUploadButton_Click"/>
+                </StackPanel>
+
+                <Border x:Name="FileUploadStatusBorder"
+                        Visibility="Collapsed"
+                        CornerRadius="4"
+                        Padding="10,8"
+                        Margin="0,0,0,12">
+                    <TextBlock x:Name="FileUploadStatusText"
+                               TextWrapping="Wrap"
+                               FontSize="12"/>
+                </Border>
+
+                <Separator Margin="0,4,0,16"/>
+
+                <!-- Download File Section -->
+                <TextBlock Text="Download File" Style="{StaticResource SectionHeader}"/>
+
+                <TextBlock Text="Enter Clip ID" Style="{StaticResource FieldLabel}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBox x:Name="DownloadClipIdTextBox"
+                             Width="120"
+                             Padding="6,4"
+                             MaxLength="6"
+                             Margin="0,0,8,0"/>
+                    <Button x:Name="LookupClipButton"
+                            Content="Lookup"
+                            Width="70" Height="28"
+                            Click="LookupClipButton_Click"/>
+                </StackPanel>
+
+                <!-- File metadata display -->
+                <Border x:Name="FileMetadataBorder"
+                        Visibility="Collapsed"
+                        BorderBrush="LightGray" BorderThickness="1"
+                        CornerRadius="4" Padding="10,8" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock x:Name="FileMetadataText" TextWrapping="Wrap" FontSize="12"/>
+                        <Button x:Name="DownloadFileButton"
+                                Content="Download"
+                                Width="90" Height="28"
+                                HorizontalAlignment="Left"
+                                Margin="0,8,0,0"
+                                Click="DownloadFileButton_Click"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Download progress -->
+                <StackPanel x:Name="DownloadProgressPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                    <ProgressBar x:Name="DownloadProgressBar" Height="20" Minimum="0" Maximum="100" Value="0"/>
+                    <TextBlock x:Name="DownloadProgressText" FontSize="11" Foreground="Gray" Margin="0,4,0,0"/>
+                </StackPanel>
+
+                <Border x:Name="DownloadStatusBorder"
+                        Visibility="Collapsed"
+                        CornerRadius="4"
+                        Padding="10,8"
+                        Margin="0,0,0,12">
+                    <TextBlock x:Name="DownloadStatusText"
                                TextWrapping="Wrap"
                                FontSize="12"/>
                 </Border>

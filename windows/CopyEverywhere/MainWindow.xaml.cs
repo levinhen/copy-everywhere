@@ -1,9 +1,14 @@
 using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using CopyEverywhere.Services;
 using Microsoft.Toolkit.Uwp.Notifications;
+using Microsoft.Win32;
 
 namespace CopyEverywhere;
 
@@ -11,6 +16,18 @@ public partial class MainWindow : Window
 {
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
+
+    private const int ChunkSize = 10 * 1024 * 1024; // 10MB
+    private const long ChunkedThreshold = 50L * 1024 * 1024; // 50MB
+
+    // Chunked upload state
+    private CancellationTokenSource? _uploadCts;
+    private string? _chunkedUploadId;
+    private string? _chunkedFilePath;
+    private bool _isChunkedUpload;
+
+    // Download state
+    private ClipResponse? _downloadClipMetadata;
 
     public MainWindow()
     {
@@ -194,6 +211,417 @@ public partial class MainWindow : Window
         {
             FetchClipButton.IsEnabled = true;
             FetchClipButton.Content = "Fetch";
+        }
+    }
+
+    // --- File Upload ---
+
+    private void DropZone_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            e.Effects = DragDropEffects.Copy;
+            DropZoneText.Text = "Drop to upload";
+            DropZoneText.Foreground = new SolidColorBrush(Color.FromRgb(21, 128, 61));
+        }
+        else
+        {
+            e.Effects = DragDropEffects.None;
+        }
+        e.Handled = true;
+    }
+
+    private void DropZone_DragLeave(object sender, DragEventArgs e)
+    {
+        DropZoneText.Text = "Drop a file here";
+        DropZoneText.Foreground = new SolidColorBrush(Colors.Gray);
+    }
+
+    private void DropZone_Drop(object sender, DragEventArgs e)
+    {
+        DropZoneText.Text = "Drop a file here";
+        DropZoneText.Foreground = new SolidColorBrush(Colors.Gray);
+
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            if (files.Length > 0 && File.Exists(files[0]))
+            {
+                _ = UploadFileAsync(files[0]);
+            }
+        }
+    }
+
+    private void ChooseFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose a file to upload",
+            Filter = "All files (*.*)|*.*",
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            _ = UploadFileAsync(dialog.FileName);
+        }
+    }
+
+    private async System.Threading.Tasks.Task UploadFileAsync(string filePath)
+    {
+        var fileInfo = new FileInfo(filePath);
+        _uploadCts = new CancellationTokenSource();
+
+        ChooseFileButton.IsEnabled = false;
+        UploadProgressPanel.Visibility = Visibility.Visible;
+        UploadProgressBar.Value = 0;
+        UploadProgressText.Text = "Starting upload...";
+
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            if (fileInfo.Length >= ChunkedThreshold)
+            {
+                _isChunkedUpload = true;
+                _chunkedFilePath = filePath;
+                ChunkedControlPanel.Visibility = Visibility.Visible;
+                PauseUploadButton.Visibility = Visibility.Visible;
+                ResumeUploadButton.Visibility = Visibility.Collapsed;
+
+                await UploadChunkedAsync(filePath, fileInfo.Length, _uploadCts.Token);
+            }
+            else
+            {
+                _isChunkedUpload = false;
+                ChunkedControlPanel.Visibility = Visibility.Collapsed;
+
+                var progress = new Progress<(long sent, long total)>(p =>
+                {
+                    var pct = p.total > 0 ? (double)p.sent / p.total * 100 : 0;
+                    UploadProgressBar.Value = pct;
+                    var speed = stopwatch.Elapsed.TotalSeconds > 0
+                        ? p.sent / stopwatch.Elapsed.TotalSeconds
+                        : 0;
+                    UploadProgressText.Text = $"{pct:F0}% — {FormatSpeed(speed)}";
+                });
+
+                var clip = await _apiClient.SendFileAsync(filePath, progress, _uploadCts.Token);
+                if (clip != null)
+                {
+                    var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
+                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            ShowFileUploadStatus("Upload cancelled", isError: true);
+        }
+        catch (Exception ex)
+        {
+            ShowFileUploadStatus($"Upload error: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            ChooseFileButton.IsEnabled = true;
+            if (!_isChunkedUpload || _uploadCts?.IsCancellationRequested == true)
+            {
+                UploadProgressPanel.Visibility = Visibility.Collapsed;
+                ChunkedControlPanel.Visibility = Visibility.Collapsed;
+            }
+        }
+    }
+
+    private async System.Threading.Tasks.Task UploadChunkedAsync(string filePath, long fileSize, CancellationToken ct)
+    {
+        var filename = Path.GetFileName(filePath);
+        var totalChunks = (int)Math.Ceiling((double)fileSize / ChunkSize);
+
+        ShowFileUploadStatus($"Initializing chunked upload ({totalChunks} chunks)...", isError: false);
+
+        var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileSize, ChunkSize, ct);
+        if (initResult == null)
+        {
+            ShowFileUploadStatus("Failed to initialize chunked upload", isError: true);
+            return;
+        }
+
+        _chunkedUploadId = initResult.UploadId;
+        await UploadChunksFromAsync(filePath, fileSize, _chunkedUploadId, totalChunks, startPart: 1, ct);
+    }
+
+    private async System.Threading.Tasks.Task UploadChunksFromAsync(string filePath, long fileSize, string uploadId, int totalChunks, int startPart, CancellationToken ct)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        using var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+
+        for (int i = startPart; i <= totalChunks; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            fileStream.Seek((long)(i - 1) * ChunkSize, SeekOrigin.Begin);
+            var remaining = fileSize - fileStream.Position;
+            var readSize = (int)Math.Min(ChunkSize, remaining);
+            var buffer = new byte[readSize];
+            await fileStream.ReadAsync(buffer, 0, readSize, ct);
+
+            UploadProgressText.Text = $"Chunk {i}/{totalChunks}";
+
+            await _apiClient.UploadChunkAsync(uploadId, i, buffer, ct);
+
+            var overallPct = (double)i / totalChunks * 100;
+            UploadProgressBar.Value = overallPct;
+
+            var bytesUploaded = Math.Min((long)i * ChunkSize, fileSize);
+            var speed = stopwatch.Elapsed.TotalSeconds > 0
+                ? bytesUploaded / stopwatch.Elapsed.TotalSeconds
+                : 0;
+            UploadProgressText.Text = $"Chunk {i}/{totalChunks} — {overallPct:F0}% — {FormatSpeed(speed)}";
+        }
+
+        ShowFileUploadStatus("Finalizing upload...", isError: false);
+        var clip = await _apiClient.CompleteChunkedUploadAsync(uploadId, ct);
+        if (clip != null)
+        {
+            var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
+            ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+        }
+
+        UploadProgressPanel.Visibility = Visibility.Collapsed;
+        ChunkedControlPanel.Visibility = Visibility.Collapsed;
+    }
+
+    private void PauseUploadButton_Click(object sender, RoutedEventArgs e)
+    {
+        _uploadCts?.Cancel();
+        PauseUploadButton.Visibility = Visibility.Collapsed;
+        ResumeUploadButton.Visibility = Visibility.Visible;
+        UploadProgressText.Text += " (Paused)";
+        ShowFileUploadStatus("Upload paused", isError: false);
+    }
+
+    private async void ResumeUploadButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_chunkedUploadId == null || _chunkedFilePath == null) return;
+
+        _uploadCts = new CancellationTokenSource();
+        PauseUploadButton.Visibility = Visibility.Visible;
+        ResumeUploadButton.Visibility = Visibility.Collapsed;
+
+        try
+        {
+            var status = await _apiClient.GetUploadStatusAsync(_chunkedUploadId);
+            if (status == null)
+            {
+                ShowFileUploadStatus("Upload not found on server", isError: true);
+                return;
+            }
+
+            var fileInfo = new FileInfo(_chunkedFilePath);
+            var totalChunks = (int)Math.Ceiling((double)fileInfo.Length / ChunkSize);
+            var receivedParts = status.ReceivedParts.ToHashSet();
+            var nextPart = 1;
+            for (int i = 1; i <= totalChunks; i++)
+            {
+                if (!receivedParts.Contains(i))
+                {
+                    nextPart = i;
+                    break;
+                }
+                if (i == totalChunks) nextPart = totalChunks + 1; // All done
+            }
+
+            if (nextPart > totalChunks)
+            {
+                // All chunks uploaded, just finalize
+                var clip = await _apiClient.CompleteChunkedUploadAsync(_chunkedUploadId, _uploadCts.Token);
+                if (clip != null)
+                {
+                    var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
+                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+                }
+                UploadProgressPanel.Visibility = Visibility.Collapsed;
+                ChunkedControlPanel.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                ShowFileUploadStatus($"Resuming from chunk {nextPart}/{totalChunks}...", isError: false);
+                await UploadChunksFromAsync(_chunkedFilePath, fileInfo.Length, _chunkedUploadId, totalChunks, nextPart, _uploadCts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Paused again
+        }
+        catch (Exception ex)
+        {
+            ShowFileUploadStatus($"Resume error: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            ChooseFileButton.IsEnabled = true;
+        }
+    }
+
+    // --- File Download ---
+
+    private async void LookupClipButton_Click(object sender, RoutedEventArgs e)
+    {
+        var clipId = DownloadClipIdTextBox.Text.Trim();
+        if (string.IsNullOrEmpty(clipId))
+        {
+            ShowDownloadStatus("Please enter a Clip ID", isError: true);
+            return;
+        }
+
+        LookupClipButton.IsEnabled = false;
+        LookupClipButton.Content = "Looking up...";
+        FileMetadataBorder.Visibility = Visibility.Collapsed;
+
+        try
+        {
+            var clip = await _apiClient.GetClipMetadataAsync(clipId);
+            if (clip == null)
+            {
+                ShowDownloadStatus($"Clip {clipId} not found or expired", isError: true);
+                return;
+            }
+
+            _downloadClipMetadata = clip;
+            var createdAt = clip.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+            FileMetadataText.Text = $"Filename: {clip.Filename ?? "(text)"}\nType: {clip.Type}\nSize: {FormatBytes(clip.SizeBytes)}\nUploaded: {createdAt}";
+            FileMetadataBorder.Visibility = Visibility.Visible;
+            DownloadStatusBorder.Visibility = Visibility.Collapsed;
+        }
+        catch (System.Net.Http.HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            ShowDownloadStatus("Upload incomplete — download unavailable", isError: true);
+        }
+        catch (Exception ex)
+        {
+            ShowDownloadStatus($"Error: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            LookupClipButton.IsEnabled = true;
+            LookupClipButton.Content = "Lookup";
+        }
+    }
+
+    private async void DownloadFileButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_downloadClipMetadata == null) return;
+
+        var suggestedName = _downloadClipMetadata.Filename ?? $"clip_{_downloadClipMetadata.Id}";
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save file",
+            FileName = suggestedName,
+            Filter = "All files (*.*)|*.*",
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        var savePath = dialog.FileName;
+        DownloadFileButton.IsEnabled = false;
+        DownloadProgressPanel.Visibility = Visibility.Visible;
+        DownloadProgressBar.Value = 0;
+        DownloadProgressText.Text = "Starting download...";
+
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            var progress = new Progress<(long received, long total)>(p =>
+            {
+                var pct = p.total > 0 ? (double)p.received / p.total * 100 : 0;
+                DownloadProgressBar.Value = pct;
+                var speed = stopwatch.Elapsed.TotalSeconds > 0
+                    ? p.received / stopwatch.Elapsed.TotalSeconds
+                    : 0;
+                DownloadProgressText.Text = $"{pct:F0}% — {FormatSpeed(speed)}";
+            });
+
+            await _apiClient.DownloadFileAsync(_downloadClipMetadata.Id, savePath, progress);
+
+            DownloadProgressPanel.Visibility = Visibility.Collapsed;
+            ShowDownloadStatus($"Downloaded to {Path.GetFileName(savePath)}", isError: false);
+
+            // Open Explorer and select the file
+            Process.Start("explorer.exe", $"/select,\"{savePath}\"");
+        }
+        catch (System.Net.Http.HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            DownloadProgressPanel.Visibility = Visibility.Collapsed;
+            ShowDownloadStatus("Upload incomplete — download unavailable", isError: true);
+        }
+        catch (Exception ex)
+        {
+            DownloadProgressPanel.Visibility = Visibility.Collapsed;
+            ShowDownloadStatus($"Download error: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            DownloadFileButton.IsEnabled = true;
+        }
+    }
+
+    // --- Helpers ---
+
+    private static string FormatBytes(long bytes)
+    {
+        string[] sizes = ["B", "KB", "MB", "GB"];
+        double len = bytes;
+        int order = 0;
+        while (len >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            len /= 1024;
+        }
+        return $"{len:F1} {sizes[order]}";
+    }
+
+    private static string FormatSpeed(double bytesPerSecond)
+    {
+        if (bytesPerSecond >= 1024 * 1024)
+            return $"{bytesPerSecond / (1024 * 1024):F1} MB/s";
+        if (bytesPerSecond >= 1024)
+            return $"{bytesPerSecond / 1024:F1} KB/s";
+        return $"{bytesPerSecond:F0} B/s";
+    }
+
+    private void ShowFileUploadStatus(string message, bool isError)
+    {
+        FileUploadStatusBorder.Visibility = Visibility.Visible;
+        FileUploadStatusText.Text = message;
+
+        if (isError)
+        {
+            FileUploadStatusBorder.Background = new SolidColorBrush(Color.FromRgb(254, 226, 226));
+            FileUploadStatusText.Foreground = new SolidColorBrush(Color.FromRgb(185, 28, 28));
+        }
+        else
+        {
+            FileUploadStatusBorder.Background = new SolidColorBrush(Color.FromRgb(220, 252, 231));
+            FileUploadStatusText.Foreground = new SolidColorBrush(Color.FromRgb(21, 128, 61));
+        }
+    }
+
+    private void ShowDownloadStatus(string message, bool isError)
+    {
+        DownloadStatusBorder.Visibility = Visibility.Visible;
+        DownloadStatusText.Text = message;
+
+        if (isError)
+        {
+            DownloadStatusBorder.Background = new SolidColorBrush(Color.FromRgb(254, 226, 226));
+            DownloadStatusText.Foreground = new SolidColorBrush(Color.FromRgb(185, 28, 28));
+        }
+        else
+        {
+            DownloadStatusBorder.Background = new SolidColorBrush(Color.FromRgb(220, 252, 231));
+            DownloadStatusText.Foreground = new SolidColorBrush(Color.FromRgb(21, 128, 61));
         }
     }
 
