@@ -405,3 +405,13 @@
   - File drops reuse existing sendFile(url:) which already handles both small (<50MB single POST) and large (>=50MB chunked) paths
   - sendNotification(body:) must check Bundle.main.bundleIdentifier != nil to avoid crash in unbundled SPM builds
 ---
+## 2026-04-12 - US-025
+- What was implemented: Full-panel drag-and-drop on MainPanelView — added .onDrop(of: [.fileURL, .plainText]) on the outermost VStack so the entire panel accepts dropped files and text. During drag hover, a dashed-border overlay with "Drop to send" appears. File drops trigger configStore.sendFile(url:), text drops trigger configStore.sendText(_:) — same paths as US-024's status item drop.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` — Added isFullPanelDragTargeted state, overlay with dashed border + "Drop to send" label, .onDrop modifier on body VStack, handlePanelDrop method handling both file URLs and plain text
+- **Learnings for future iterations:**
+  - SwiftUI .onDrop uses UTType identifiers: .fileURL for file drops, .plainText for text drops
+  - Overlay with allowsHitTesting(false) prevents the overlay from intercepting the drop gesture itself
+  - NSItemProvider.hasItemConformingToTypeIdentifier checks type before attempting to load — prioritize fileURL over plainText since files also carry text representations
+  - The existing small drop zone in the "Send File" section still works independently for file-only drops
+---

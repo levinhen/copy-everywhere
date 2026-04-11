@@ -9,6 +9,7 @@ struct MainPanelView: View {
     @State private var clipboardText: String? = nil
     @State private var manualClipID: String = ""
     @State private var isDragTargeted = false
+    @State private var isFullPanelDragTargeted = false
     @State private var downloadClipID: String = ""
 
     var body: some View {
@@ -575,6 +576,33 @@ struct MainPanelView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding()
+        .overlay(
+            Group {
+                if isFullPanelDragTargeted {
+                    ZStack {
+                        Color.accentColor.opacity(0.08)
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(
+                                Color.accentColor,
+                                style: StrokeStyle(lineWidth: 2, dash: [8, 4])
+                            )
+                            .padding(4)
+                        VStack(spacing: 6) {
+                            Image(systemName: "arrow.down.doc.fill")
+                                .font(.title)
+                                .foregroundColor(.accentColor)
+                            Text("Drop to send")
+                                .font(.headline)
+                                .foregroundColor(.accentColor)
+                        }
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+        )
+        .onDrop(of: [.fileURL, .plainText], isTargeted: $isFullPanelDragTargeted) { providers in
+            handlePanelDrop(providers)
+        }
         .onAppear {
             refreshClipboard()
         }
@@ -694,6 +722,35 @@ struct MainPanelView: View {
             formatter.dateStyle = .short
         }
         return formatter.string(from: date)
+    }
+
+    private func handlePanelDrop(_ providers: [NSItemProvider]) -> Bool {
+        // Try file URLs first
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier("public.file-url") {
+                provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                    guard let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                    Task { @MainActor in
+                        await configStore.sendFile(url: url)
+                    }
+                }
+                return true
+            }
+        }
+        // Fall back to text
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier("public.plain-text") {
+                provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { item, _ in
+                    guard let text = item as? String else { return }
+                    Task { @MainActor in
+                        let _ = await configStore.sendText(text)
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
