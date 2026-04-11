@@ -1,0 +1,22 @@
+## Codebase Patterns
+- Use `modernc.org/sqlite` (pure Go, no CGO) for SQLite
+- Database package lives in `server/db/` with `Open(storagePath)` constructor
+- Clip model uses `*string` for nullable fields (e.g., Filename)
+- ID generation: 6-char alphanumeric via crypto/rand
+- Tests use `t.TempDir()` for isolated DB instances
+- SQLite connection uses `SetMaxOpenConns(1)` for write safety
+
+---
+
+## 2026-04-11 - US-002
+- What was implemented: SQLite database schema with clips table, Clip model struct, and all CRUD helper functions (CreateClip, GetClipByID, GetLatestClip, ListClips, DeleteClip) plus 6-char alphanumeric ID generation
+- Files changed:
+  - `server/db/db.go` (new) - Database initialization, schema migration, model, and helpers
+  - `server/db/db_test.go` (new) - 9 tests covering all helpers, ID generation, null fields, and DB creation
+  - `server/go.mod` / `server/go.sum` - Added modernc.org/sqlite dependency
+- **Learnings for future iterations:**
+  - `modernc.org/sqlite` is a pure Go SQLite driver, no CGO required - good for cross-compilation
+  - GetLatestClip filters by `status = 'ready'` AND `expires_at > now()` - important for future API endpoints
+  - Clip.Filename is `*string` (nullable) - text clips don't need a filename
+  - The `Open()` function auto-creates the storage directory and runs migrations with `IF NOT EXISTS`
+---
