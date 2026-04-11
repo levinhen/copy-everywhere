@@ -484,6 +484,87 @@ func TestCreateClipNullDeviceIDs(t *testing.T) {
 	}
 }
 
+func TestListQueueClips(t *testing.T) {
+	d := setupTestDB(t)
+	now := time.Now().UTC()
+
+	// Untargeted, unconsumed
+	d.CreateClip(&Clip{ID: "lq0001", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour)})
+	// Targeted to dev_a
+	targetA := "dev_a"
+	d.CreateClip(&Clip{ID: "lq0002", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now.Add(-1 * time.Minute), ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetA})
+	// Targeted to dev_b — not visible to dev_a
+	targetB := "dev_b"
+	d.CreateClip(&Clip{ID: "lq0003", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now, ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetB})
+	// Already consumed
+	consumed := now
+	d.CreateClip(&Clip{ID: "lq0004", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now, ExpiresAt: now.Add(time.Hour), ConsumedAt: &consumed})
+	// Status uploading
+	d.CreateClip(&Clip{ID: "lq0005", Type: "file", SizeBytes: 0, Status: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+	// Expired
+	d.CreateClip(&Clip{ID: "lq0006", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-1 * time.Hour)})
+
+	clips, err := d.ListQueueClips("dev_a")
+	if err != nil {
+		t.Fatalf("list queue: %v", err)
+	}
+	if len(clips) != 2 {
+		t.Fatalf("expected 2 clips, got %d", len(clips))
+	}
+	// Newest first
+	if clips[0].ID != "lq0002" {
+		t.Errorf("expected lq0002 first, got %s", clips[0].ID)
+	}
+	if clips[1].ID != "lq0001" {
+		t.Errorf("expected lq0001 second, got %s", clips[1].ID)
+	}
+}
+
+func TestConsumeClip(t *testing.T) {
+	d := setupTestDB(t)
+
+	d.CreateClip(&Clip{
+		ID: "csm001", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+
+	// First consume should succeed
+	ok, err := d.ConsumeClip("csm001")
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected first consume to succeed")
+	}
+
+	// Second consume should fail
+	ok, err = d.ConsumeClip("csm001")
+	if err != nil {
+		t.Fatalf("second consume: %v", err)
+	}
+	if ok {
+		t.Fatal("expected second consume to fail")
+	}
+
+	// Verify consumed_at is set
+	clip, _ := d.GetClipByID("csm001")
+	if clip.ConsumedAt == nil {
+		t.Fatal("expected consumed_at to be set")
+	}
+}
+
+func TestConsumeClipNotFound(t *testing.T) {
+	d := setupTestDB(t)
+
+	ok, err := d.ConsumeClip("nonexist")
+	if err != nil {
+		t.Fatalf("consume nonexistent: %v", err)
+	}
+	if ok {
+		t.Fatal("expected consume of nonexistent clip to return false")
+	}
+}
+
 func TestDatabaseCreatedAtStoragePath(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(dir)

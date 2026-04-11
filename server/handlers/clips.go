@@ -150,8 +150,10 @@ func (h *ClipHandler) GetByID(c *gin.Context) {
 	c.JSON(http.StatusOK, clipToResponse(clip))
 }
 
-// GetLatest handles GET /api/v1/clips/latest
+// GetLatest handles GET /api/v1/clips/latest (deprecated — use GET /clips?device_id=)
 func (h *ClipHandler) GetLatest(c *gin.Context) {
+	c.Header("Deprecation", "true")
+
 	clip, err := h.DB.GetLatestClip()
 	if err != nil {
 		log.Printf("ERROR: get latest clip: %v", err)
@@ -166,7 +168,30 @@ func (h *ClipHandler) GetLatest(c *gin.Context) {
 	c.JSON(http.StatusOK, clipToResponse(clip))
 }
 
+// ListQueue handles GET /api/v1/clips?device_id=XXX
+func (h *ClipHandler) ListQueue(c *gin.Context) {
+	deviceID := c.Query("device_id")
+	if deviceID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "device_id query parameter is required"})
+		return
+	}
+
+	clips, err := h.DB.ListQueueClips(deviceID)
+	if err != nil {
+		log.Printf("ERROR: list queue clips: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+
+	result := make([]*clipResponse, 0, len(clips))
+	for _, clip := range clips {
+		result = append(result, clipToResponse(clip))
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 // GetRaw handles GET /api/v1/clips/:id/raw
+// This is an atomic claim: the first caller gets the body, subsequent callers get 410 Gone.
 func (h *ClipHandler) GetRaw(c *gin.Context) {
 	id := c.Param("id")
 
@@ -183,6 +208,18 @@ func (h *ClipHandler) GetRaw(c *gin.Context) {
 
 	if clip.Status == "failed" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "upload incomplete - download unavailable"})
+		return
+	}
+
+	// Atomic consume: UPDATE ... WHERE consumed_at IS NULL
+	claimed, err := h.DB.ConsumeClip(id)
+	if err != nil {
+		log.Printf("ERROR: consume clip: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
+	if !claimed {
+		c.JSON(http.StatusGone, gin.H{"error": "already_consumed"})
 		return
 	}
 
@@ -205,4 +242,17 @@ func (h *ClipHandler) GetRaw(c *gin.Context) {
 	}
 
 	c.File(clip.StoragePath)
+
+	// Clean up on-disk file and DB record after response is flushed
+	go func() {
+		if clip.StoragePath != "" {
+			dir := filepath.Dir(clip.StoragePath)
+			if err := os.RemoveAll(dir); err != nil {
+				log.Printf("ERROR: cleanup consumed clip %s files: %v", id, err)
+			}
+		}
+		if err := h.DB.DeleteClip(id); err != nil {
+			log.Printf("ERROR: cleanup consumed clip %s record: %v", id, err)
+		}
+	}()
 }

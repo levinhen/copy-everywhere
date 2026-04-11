@@ -72,6 +72,7 @@ func main() {
 	api.Use(middleware.AuthRequired(cfg.AccessToken))
 	{
 		api.POST("/clips", clipHandler.Upload)
+		api.GET("/clips", clipHandler.ListQueue)
 		api.GET("/clips/latest", clipHandler.GetLatest)
 		api.GET("/clips/:id", clipHandler.GetByID)
 		api.GET("/clips/:id/raw", clipHandler.GetRaw)

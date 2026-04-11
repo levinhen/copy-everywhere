@@ -241,6 +241,52 @@ type StorageStats struct {
 	StorageUsedBytes int64 `json:"storage_used_bytes"`
 }
 
+// ListQueueClips returns unconsumed, ready, non-expired clips visible to the given device.
+// A clip is visible if it has no target_device_id or target_device_id matches deviceID.
+// Results are newest first.
+func (d *DB) ListQueueClips(deviceID string) ([]*Clip, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
+		FROM clips
+		WHERE consumed_at IS NULL
+		  AND status = 'ready'
+		  AND expires_at > ?
+		  AND (target_device_id IS NULL OR target_device_id = ?)
+		ORDER BY created_at DESC
+	`, time.Now().UTC(), deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clips []*Clip
+	for rows.Next() {
+		clip := &Clip{}
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt); err != nil {
+			return nil, err
+		}
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
+}
+
+// ConsumeClip atomically marks a clip as consumed. Returns true if the clip was
+// successfully claimed (i.e. it was not already consumed). Returns false if
+// another caller already consumed it.
+func (d *DB) ConsumeClip(id string) (bool, error) {
+	res, err := d.conn.Exec(`
+		UPDATE clips SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL
+	`, time.Now().UTC(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // GetStorageStats returns count and total size of all clips.
 func (d *DB) GetStorageStats() (*StorageStats, error) {
 	stats := &StorageStats{}

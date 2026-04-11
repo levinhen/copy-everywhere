@@ -41,6 +41,7 @@ func setupTestHandler(t *testing.T) (*ClipHandler, *gin.Engine) {
 	r := gin.New()
 	api := r.Group("/api/v1")
 	api.POST("/clips", h.Upload)
+	api.GET("/clips", h.ListQueue)
 	api.GET("/clips/latest", h.GetLatest)
 	api.GET("/clips/:id", h.GetByID)
 	api.GET("/clips/:id/raw", h.GetRaw)
@@ -384,6 +385,187 @@ func TestUploadWithoutDeviceIDs(t *testing.T) {
 	}
 	if clip.SenderDeviceID != nil {
 		t.Errorf("expected nil sender_device_id, got %v", clip.SenderDeviceID)
+	}
+}
+
+func TestGetRawAtomicConsume(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	// Create a real file
+	clipDir := filepath.Join(h.StoragePath, "con123")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "hello.txt")
+	os.WriteFile(filePath, []byte("consume me"), 0644)
+
+	filename := "hello.txt"
+	h.DB.CreateClip(&db.Clip{
+		ID: "con123", Type: "text", Filename: &filename, SizeBytes: 10, Status: "ready",
+		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		StoragePath: filePath,
+	})
+
+	// First call should succeed
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/con123/raw", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("first call: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if w.Body.String() != "consume me" {
+		t.Errorf("expected body 'consume me', got %q", w.Body.String())
+	}
+
+	// Second call should get 410 Gone
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/clips/con123/raw", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusGone {
+		t.Fatalf("second call: expected 410, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var errResp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &errResp)
+	if errResp["error"] != "already_consumed" {
+		t.Errorf("expected error=already_consumed, got %q", errResp["error"])
+	}
+}
+
+func TestGetRawRaceCondition(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	// Create a real file
+	clipDir := filepath.Join(h.StoragePath, "race12")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "data.txt")
+	os.WriteFile(filePath, []byte("race data"), 0644)
+
+	filename := "data.txt"
+	h.DB.CreateClip(&db.Clip{
+		ID: "race12", Type: "text", Filename: &filename, SizeBytes: 9, Status: "ready",
+		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+		StoragePath: filePath,
+	})
+
+	// Fire two parallel GET /raw requests
+	results := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/race12/raw", nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			results <- w.Code
+		}()
+	}
+
+	codes := make(map[int]int)
+	for i := 0; i < 2; i++ {
+		code := <-results
+		codes[code]++
+	}
+
+	// Exactly one should get 200, the other should get 410
+	if codes[http.StatusOK] != 1 {
+		t.Errorf("expected exactly 1 x 200, got %d (codes: %v)", codes[http.StatusOK], codes)
+	}
+	if codes[http.StatusGone] != 1 {
+		t.Errorf("expected exactly 1 x 410, got %d (codes: %v)", codes[http.StatusGone], codes)
+	}
+}
+
+func TestListQueue(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	// Create clips with various states
+	now := time.Now().UTC()
+
+	// Unconsumed, no target — visible to any device
+	h.DB.CreateClip(&db.Clip{
+		ID: "q00001", Type: "text", SizeBytes: 5, Status: "ready",
+		CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour),
+	})
+	// Unconsumed, targeted to dev_a — visible to dev_a only
+	targetA := "dev_a"
+	h.DB.CreateClip(&db.Clip{
+		ID: "q00002", Type: "text", SizeBytes: 5, Status: "ready",
+		CreatedAt: now.Add(-1 * time.Minute), ExpiresAt: now.Add(time.Hour),
+		TargetDeviceID: &targetA,
+	})
+	// Unconsumed, targeted to dev_b — NOT visible to dev_a
+	targetB := "dev_b"
+	h.DB.CreateClip(&db.Clip{
+		ID: "q00003", Type: "text", SizeBytes: 5, Status: "ready",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		TargetDeviceID: &targetB,
+	})
+	// Already consumed — NOT visible
+	consumed := now
+	h.DB.CreateClip(&db.Clip{
+		ID: "q00004", Type: "text", SizeBytes: 5, Status: "ready",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		ConsumedAt: &consumed,
+	})
+	// Uploading status — NOT visible
+	h.DB.CreateClip(&db.Clip{
+		ID: "q00005", Type: "file", SizeBytes: 0, Status: "uploading",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips?device_id=dev_a", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var clips []clipResponse
+	json.Unmarshal(w.Body.Bytes(), &clips)
+
+	if len(clips) != 2 {
+		t.Fatalf("expected 2 clips for dev_a, got %d", len(clips))
+	}
+
+	// Newest first: q00002 then q00001
+	if clips[0].ID != "q00002" {
+		t.Errorf("expected first clip q00002, got %s", clips[0].ID)
+	}
+	if clips[1].ID != "q00001" {
+		t.Errorf("expected second clip q00001, got %s", clips[1].ID)
+	}
+}
+
+func TestListQueueMissingDeviceID(t *testing.T) {
+	_, r := setupTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestGetLatestDeprecationHeader(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	h.DB.CreateClip(&db.Clip{
+		ID: "dep123", Type: "text", SizeBytes: 5, Status: "ready",
+		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/latest", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	if w.Header().Get("Deprecation") != "true" {
+		t.Error("expected Deprecation header to be 'true'")
 	}
 }
 
