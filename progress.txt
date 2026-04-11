@@ -355,4 +355,19 @@
   - Heartbeat is a comment line (`: heartbeat\n\n`) per SSE spec — comments start with colon
   - Broker uses buffered channels (size 16) with non-blocking send to prevent slow subscribers from blocking Notify
   - `c.Request.Context()` in Gin gives the request cancellation context — use it to detect SSE client disconnect
+- Cleanup goroutine handles both expired (TTL) and consumed clips; `CLEANUP_INTERVAL_SECONDS` env configurable (default 30)
+- `GetConsumedClips(olderThan)` uses a duration threshold to avoid deleting clips that are still being streamed
+---
+
+## 2026-04-12 - US-022
+- What was implemented: Cleanup loop now deletes consumed clips (consumed_at IS NOT NULL and older than 60s) in addition to TTL-expired clips. Cleanup interval is configurable via CLEANUP_INTERVAL_SECONDS env (default 30s, was hardcoded to 10 minutes). Refactored cleanup into shared deleteClips helper.
+- Files changed:
+  - `server/config/config.go` — Added CleanupIntervalSeconds field with CLEANUP_INTERVAL_SECONDS env
+  - `server/db/db.go` — Added GetConsumedClips(olderThan) method
+  - `server/db/db_test.go` — Added TestGetConsumedClips and TestGetConsumedClipsEmpty
+  - `server/cleanup/cleanup.go` — Rewrote run() to handle both expired and consumed clips, extracted deleteClips helper
+  - `server/main.go` — Changed cleanup interval from hardcoded 10min to cfg.CleanupIntervalSeconds
+- **Learnings for future iterations:**
+  - GetConsumedClips uses a duration threshold (60s) to avoid racing with in-flight response streaming from US-020's atomic consume
+  - Cleanup refactored into deleteClips(database, storagePath, clips) helper to avoid duplicating the disk+DB deletion logic
 ---
