@@ -33,6 +33,10 @@
 - Clip metadata API (`GET /clips/:id`) returns `clipResponse` without `status` field; `/raw` returns 403 for failed uploads
 - HistoryStore uses UserDefaults with JSON encoding (Codable) for local history persistence
 - ConfigStore receives `historyStore` reference via MenuBarView `.onAppear` (not init param) to work with @EnvironmentObject
+- Windows project in `windows/CopyEverywhere/` uses .NET 8 WPF with `Hardcodet.NotifyIcon.Wpf` for system tray
+- Windows config stored in Windows Credential Manager via `CredentialManagement` NuGet package
+- Windows WPF PasswordBox doesn't support data binding — use `PasswordChanged` event handler to sync
+- `ShutdownMode="OnExplicitShutdown"` in App.xaml prevents app from closing when main window hides to tray
 
 ---
 
@@ -199,4 +203,22 @@
   - ConfigStore can't take HistoryStore as init parameter when using @StateObject — use onAppear assignment instead
   - HistoryRecord.isExpired computed property checks Date() > expiresAt for dynamic expired status display
   - `contentShape(Rectangle())` on history rows ensures the entire row area is tappable, not just the text
+---
+
+## 2026-04-11 - US-014
+- What was implemented: Windows WPF (.NET 8) project with system tray (Hardcodet.NotifyIcon.Wpf), server config UI with Host URL and Access Token fields, Windows Credential Manager storage via CredentialManagement NuGet, Test Connection with specific error messages (connection refused, auth failed 401, timeout)
+- Files changed:
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` (new) - .NET 8 WPF project with NuGet dependencies
+  - `windows/CopyEverywhere/App.xaml` / `App.xaml.cs` (new) - App startup with TaskbarIcon system tray, left-click handler, context menu with Exit
+  - `windows/CopyEverywhere/MainWindow.xaml` / `MainWindow.xaml.cs` (new) - Config UI with save, test connection, minimize-to-tray on close
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` (new) - Config storage via Windows Credential Manager
+  - `windows/CopyEverywhere/Services/ApiClient.cs` (new) - HTTP client with TestConnectionAsync, specific error handling
+  - `windows/CopyEverywhere/.gitignore` (new) - Excludes bin/, obj/, .vs/
+- **Learnings for future iterations:**
+  - dotnet SDK not available on dev machine — build verification requires Windows environment
+  - WPF PasswordBox doesn't support two-way data binding — must use PasswordChanged event to sync value
+  - `ShutdownMode="OnExplicitShutdown"` prevents WPF app from shutting down when hiding main window to tray
+  - `Hardcodet.NotifyIcon.Wpf` v1.1.0 is the standard WPF system tray library for .NET 8
+  - CredentialManagement NuGet wraps Windows Credential Manager with simple Target/Password/Save/Load API
+  - Test Connection verifies both /health (no auth) and /api/v1/clips/latest (auth) to confirm full connectivity
 ---
