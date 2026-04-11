@@ -77,10 +77,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 **macOS:**
 
 - `NSApp.setActivationPolicy(.accessory)` is how the dock icon is hidden (no Info.plist needed for SPM builds).
-- Use `MenuBarExtra(... style: .window)` for a popover, not `.menu`.
+- **MenuBarExtra replaced with manual NSStatusItem + NSPopover** (US-024). `AppDelegate` (`@MainActor`) owns the status item, popover, `ConfigStore`, and `HistoryStore`. `StatusItemDropView` is a transparent overlay on the button for drag-and-drop. `MenuBarView` is hosted via `NSHostingController`. The popover uses `.applicationDefined` behavior + `NSEvent.addGlobalMonitorForEvents` to avoid the double-toggle issue with `.transient`.
 - Use `UserNotifications` (not the deprecated `NSUserNotification`).
 - Multipart bodies are built by hand with a UUID boundary — there is no Swift helper.
-- `ConfigStore` cannot take `HistoryStore` as an init parameter when using `@StateObject`; wire it via `.onAppear` instead. (Note: `HistoryStore` is being removed in US-027 — the new server-queue panel replaces it.)
+- `ConfigStore.historyStore` is wired via `MenuBarView.onAppear` (not init param). (Note: `HistoryStore` is being removed in US-027 — the new server-queue panel replaces it.)
 - **`URLSession` progress → `AsyncStream` bridge.** `UploadProgressDelegate` / `DownloadProgressDelegate` (in `ApiClient`) implement `URLSessionTaskDelegate` / `URLSessionDownloadDelegate` and surface progress as `AsyncStream<Double>` so views can `for await` over it. Reuse this pattern — don't roll a new delegate per call site.
 - **Stream chunks with `FileHandle`.** The chunked uploader opens a `FileHandle` and `read(upToCount:)`s one chunk at a time. Don't `Data(contentsOf:)` the whole file — large uploads will OOM.
 

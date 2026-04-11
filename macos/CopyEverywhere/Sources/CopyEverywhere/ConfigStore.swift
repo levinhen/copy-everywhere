@@ -359,6 +359,53 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    /// Fire-and-forget text send for drag-and-drop (does not touch sendStatus).
+    func sendText(_ text: String) async -> (success: Bool, message: String) {
+        guard isConfigured else { return (false, "Not configured") }
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(urlString)/api/v1/clips") else {
+            return (false, "Invalid server URL")
+        }
+
+        let boundary = UUID().uuidString
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        var body = Data()
+        let textData = Data(text.utf8)
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"type\"\r\n\r\n".data(using: .utf8)!)
+        body.append("text\r\n".data(using: .utf8)!)
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"content\"; filename=\"clipboard.txt\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: text/plain\r\n\r\n".data(using: .utf8)!)
+        body.append(textData)
+        body.append("\r\n".data(using: .utf8)!)
+
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return (false, "Invalid response")
+            }
+            if httpResponse.statusCode == 201 {
+                return (true, "text (\(text.count) chars)")
+            }
+            return (false, "Server error (\(httpResponse.statusCode))")
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+
     // MARK: - Receive Operations
 
     func receiveLatest() async {

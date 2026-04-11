@@ -61,6 +61,13 @@
 - SSE stream handler sends `: connected\n\n` on open, then loops on event channel + 25s heartbeat ticker
 - SSE tests use `httptest.NewServer` (not `httptest.NewRecorder`) because SSE requires streaming response
 - Broker, ClipHandler, and UploadHandler all share the same `*sse.Broker` instance wired in main.go
+- MenuBarExtra replaced with manual NSStatusItem + NSPopover in AppDelegate for drag-and-drop support
+- StatusItemDropView is an NSView overlay on NSStatusBarButton — hitTest returns nil so clicks pass through, drag destination still works (AppKit resolves via frame, not hitTest)
+- AppDelegate must be `@MainActor` to access `@MainActor`-isolated ConfigStore/HistoryStore properties synchronously
+- NSPopover with `.applicationDefined` behavior + global event monitor avoids the double-toggle issue with `.transient`
+- `sendText(_:)` is a fire-and-forget text send (returns tuple) that doesn't touch `sendStatus` — separate from `sendClipboardText()` which updates UI state
+- File drops reuse existing `sendFile(url:)` which handles both small (<50MB) and chunked (>=50MB) paths
+- `AppDelegate.sendNotification(body:)` is static; checks `Bundle.main.bundleIdentifier != nil` to avoid crashes in unbundled SPM builds
 
 ---
 
@@ -382,4 +389,19 @@
   - `Host.current().localizedName` returns the user-visible computer name on macOS
   - Registration is best-effort from save() — errors are silently ignored to not block config save
   - Server-side idempotence on (name, platform) means re-registering on every save is safe
+---
+
+## 2026-04-12 - US-024
+- What was implemented: Drag-and-drop file or text onto menu bar icon for instant upload
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/StatusItemDropView.swift` (new) - NSView overlay for drag-and-drop on status item button
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` (rewritten) - Replaced MenuBarExtra with manual NSStatusItem + NSPopover + drag-and-drop support in AppDelegate
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` (modified) - Added `sendText(_:)` fire-and-forget method for drop-initiated text sends
+- **Learnings for future iterations:**
+  - MenuBarExtra does not expose its NSStatusItem, so drag-and-drop requires replacing it with a manually managed NSStatusItem + NSPopover
+  - StatusItemDropView overlay on NSStatusBarButton: hitTest returns nil for click pass-through, drag destination still works because AppKit resolves drop targets via frame rectangles not hitTest
+  - AppDelegate must be @MainActor when it holds references to @MainActor ObservableObjects (ConfigStore, HistoryStore)
+  - NSPopover.behavior = .applicationDefined + NSEvent.addGlobalMonitorForEvents avoids the double-toggle issue with .transient behavior
+  - File drops reuse existing sendFile(url:) which already handles both small (<50MB single POST) and large (>=50MB chunked) paths
+  - sendNotification(body:) must check Bundle.main.bundleIdentifier != nil to avoid crash in unbundled SPM builds
 ---
