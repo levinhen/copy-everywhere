@@ -9,6 +9,8 @@
 - Gin route order matters: `/clips/latest` must be registered before `/clips/:id` to avoid param conflict
 - Use `c.File()` for streaming file content in Gin (handles range requests automatically)
 - Clip API returns `clipResponse` (subset of Clip) to avoid leaking internal fields like StoragePath
+- Chunked uploads store parts in `STORAGE_PATH/uploads/<id>/part_N`, merged on complete to `STORAGE_PATH/<id>/<filename>`
+- `UpdateClip(id, status, sizeBytes, storagePath)` updates clip record after chunked upload completes
 
 ---
 
@@ -36,4 +38,19 @@
   - Use `clipResponse` struct to avoid leaking internal fields (StoragePath, Status) in API responses
   - `c.File()` in Gin handles Content-Type detection and range requests automatically
   - Handler tests use `httptest.NewRecorder()` + `gin.New()` without middleware for isolation
+---
+
+## 2026-04-11 - US-004
+- What was implemented: Chunked upload API with four endpoints - init upload (POST /api/v1/uploads/init), upload part (PUT /api/v1/uploads/:id/parts/:n), complete upload (POST /api/v1/uploads/:id/complete), and get status (GET /api/v1/uploads/:id/status)
+- Files changed:
+  - `server/handlers/uploads.go` (new) - UploadHandler struct with InitUpload, UploadPart, CompleteUpload, GetUploadStatus methods
+  - `server/handlers/uploads_test.go` (new) - 10 tests including full round-trip with chunk merge verification
+  - `server/db/db.go` - Added UpdateClip helper for updating status, size, and storage path
+  - `server/main.go` - Added UploadHandler initialization and route registration
+- **Learnings for future iterations:**
+  - Chunk parts stored as `part_N` files in `STORAGE_PATH/uploads/<upload_id>/` directory
+  - `getPartsInfo` infers total chunk count from first part's file size - works because all chunks except last are same size
+  - After complete, parts directory is cleaned up with `os.RemoveAll` and final file moved to `STORAGE_PATH/<clip_id>/`
+  - Upload clip record is created at init time with status=uploading, updated to ready on complete
+  - The `UpdateClip` DB helper updates status, size_bytes, and storage_path in one call
 ---
