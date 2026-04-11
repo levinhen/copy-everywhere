@@ -116,6 +116,13 @@ func (h *ClipHandler) Upload(c *gin.Context) {
 		StoragePath: destPath,
 	}
 
+	if targetDeviceID := c.PostForm("target_device_id"); targetDeviceID != "" {
+		clip.TargetDeviceID = &targetDeviceID
+	}
+	if senderDeviceID := c.PostForm("sender_device_id"); senderDeviceID != "" {
+		clip.SenderDeviceID = &senderDeviceID
+	}
+
 	if err := h.DB.CreateClip(clip); err != nil {
 		log.Printf("ERROR: create clip record: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})

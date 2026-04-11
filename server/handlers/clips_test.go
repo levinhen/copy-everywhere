@@ -324,6 +324,69 @@ func TestGetRawNotFound(t *testing.T) {
 	}
 }
 
+func TestUploadWithDeviceIDs(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("type", "text")
+	writer.WriteField("target_device_id", "dev12345")
+	writer.WriteField("sender_device_id", "dev67890")
+	part, _ := writer.CreateFormFile("content", "clipboard.txt")
+	io.WriteString(part, "Hello!")
+	writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/clips", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp clipResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	// Verify device IDs were persisted in DB
+	clip, err := h.DB.GetClipByID(resp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clip.TargetDeviceID == nil || *clip.TargetDeviceID != "dev12345" {
+		t.Errorf("expected target_device_id=dev12345, got %v", clip.TargetDeviceID)
+	}
+	if clip.SenderDeviceID == nil || *clip.SenderDeviceID != "dev67890" {
+		t.Errorf("expected sender_device_id=dev67890, got %v", clip.SenderDeviceID)
+	}
+}
+
+func TestUploadWithoutDeviceIDs(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	req := createMultipartRequest(t, "text", "clipboard.txt", "Hello!")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp clipResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	clip, err := h.DB.GetClipByID(resp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clip.TargetDeviceID != nil {
+		t.Errorf("expected nil target_device_id, got %v", clip.TargetDeviceID)
+	}
+	if clip.SenderDeviceID != nil {
+		t.Errorf("expected nil sender_device_id, got %v", clip.SenderDeviceID)
+	}
+}
+
 func TestUploadAndDownloadRoundTrip(t *testing.T) {
 	_, r := setupTestHandler(t)
 

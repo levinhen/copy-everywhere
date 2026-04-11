@@ -422,6 +422,68 @@ func TestListDevices(t *testing.T) {
 	}
 }
 
+func TestCreateClipWithDeviceIDs(t *testing.T) {
+	d := setupTestDB(t)
+
+	target := "dev12345"
+	sender := "dev67890"
+	clip := &Clip{
+		Type:           "text",
+		SizeBytes:      10,
+		Status:         "ready",
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    "/tmp/dev",
+		TargetDeviceID: &target,
+		SenderDeviceID: &sender,
+	}
+	if err := d.CreateClip(clip); err != nil {
+		t.Fatalf("create clip: %v", err)
+	}
+
+	got, err := d.GetClipByID(clip.ID)
+	if err != nil {
+		t.Fatalf("get clip: %v", err)
+	}
+	if got.TargetDeviceID == nil || *got.TargetDeviceID != target {
+		t.Fatalf("expected target_device_id=%s, got %v", target, got.TargetDeviceID)
+	}
+	if got.SenderDeviceID == nil || *got.SenderDeviceID != sender {
+		t.Fatalf("expected sender_device_id=%s, got %v", sender, got.SenderDeviceID)
+	}
+	if got.ConsumedAt != nil {
+		t.Fatalf("expected consumed_at=nil, got %v", got.ConsumedAt)
+	}
+}
+
+func TestCreateClipNullDeviceIDs(t *testing.T) {
+	d := setupTestDB(t)
+
+	clip := &Clip{
+		Type:        "text",
+		SizeBytes:   10,
+		Status:      "ready",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+		StoragePath: "/tmp/null",
+	}
+	if err := d.CreateClip(clip); err != nil {
+		t.Fatalf("create clip: %v", err)
+	}
+
+	got, err := d.GetClipByID(clip.ID)
+	if err != nil {
+		t.Fatalf("get clip: %v", err)
+	}
+	if got.TargetDeviceID != nil {
+		t.Fatalf("expected nil target_device_id, got %v", got.TargetDeviceID)
+	}
+	if got.SenderDeviceID != nil {
+		t.Fatalf("expected nil sender_device_id, got %v", got.SenderDeviceID)
+	}
+	if got.ConsumedAt != nil {
+		t.Fatalf("expected nil consumed_at, got %v", got.ConsumedAt)
+	}
+}
+
 func TestDatabaseCreatedAtStoragePath(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(dir)

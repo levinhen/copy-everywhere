@@ -50,7 +50,7 @@
         "go build succeeds with no errors"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -67,7 +67,7 @@
         "go build succeeds with no errors"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -82,7 +82,7 @@
         "go build succeeds with no errors"
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -97,7 +97,7 @@
         "swift build succeeds"
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -114,7 +114,7 @@
         "swift build succeeds"
       ],
       "priority": 7,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -128,7 +128,7 @@
         "swift build succeeds"
       ],
       "priority": 8,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -145,7 +145,7 @@
         "swift build succeeds"
       ],
       "priority": 9,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -161,7 +161,7 @@
         "swift build succeeds"
       ],
       "priority": 10,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -177,7 +177,7 @@
         "swift build succeeds"
       ],
       "priority": 11,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -192,7 +192,7 @@
         "dotnet build succeeds"
       ],
       "priority": 12,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -209,7 +209,7 @@
         "dotnet build succeeds"
       ],
       "priority": 13,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -223,7 +223,7 @@
         "dotnet build succeeds"
       ],
       "priority": 14,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -240,7 +240,7 @@
         "dotnet build succeeds"
       ],
       "priority": 15,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -256,7 +256,7 @@
         "dotnet build succeeds"
       ],
       "priority": 16,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
@@ -272,7 +272,7 @@
         "dotnet build succeeds"
       ],
       "priority": 17,
-      "passes": true,
+      "passes": false,
       "notes": ""
     }
   ]

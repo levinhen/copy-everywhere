@@ -17,14 +17,17 @@ const idLength = 6
 const deviceIDLength = 8
 
 type Clip struct {
-	ID          string    `json:"id"`
-	Type        string    `json:"type"`
-	Filename    *string   `json:"filename"`
-	SizeBytes   int64     `json:"size_bytes"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	StoragePath string    `json:"storage_path"`
+	ID             string     `json:"id"`
+	Type           string     `json:"type"`
+	Filename       *string    `json:"filename"`
+	SizeBytes      int64      `json:"size_bytes"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"created_at"`
+	ExpiresAt      time.Time  `json:"expires_at"`
+	StoragePath    string     `json:"storage_path"`
+	TargetDeviceID *string    `json:"target_device_id"`
+	SenderDeviceID *string    `json:"sender_device_id"`
+	ConsumedAt     *time.Time `json:"consumed_at"`
 }
 
 type Device struct {
@@ -94,7 +97,17 @@ func (d *DB) migrate() error {
 			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// In-place migration: add new columns to clips if they don't exist.
+	// SQLite doesn't have ADD COLUMN IF NOT EXISTS, so we ignore errors from duplicate columns.
+	d.conn.Exec(`ALTER TABLE clips ADD COLUMN target_device_id TEXT`)
+	d.conn.Exec(`ALTER TABLE clips ADD COLUMN sender_device_id TEXT`)
+	d.conn.Exec(`ALTER TABLE clips ADD COLUMN consumed_at DATETIME`)
+
+	return nil
 }
 
 func generateRandomID(length int) (string, error) {
@@ -131,18 +144,18 @@ func (d *DB) CreateClip(clip *Clip) error {
 	}
 
 	_, err := d.conn.Exec(`
-		INSERT INTO clips (id, type, filename, size_bytes, status, created_at, expires_at, storage_path)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, clip.ID, clip.Type, clip.Filename, clip.SizeBytes, clip.Status, clip.CreatedAt, clip.ExpiresAt, clip.StoragePath)
+		INSERT INTO clips (id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, clip.ID, clip.Type, clip.Filename, clip.SizeBytes, clip.Status, clip.CreatedAt, clip.ExpiresAt, clip.StoragePath, clip.TargetDeviceID, clip.SenderDeviceID, clip.ConsumedAt)
 	return err
 }
 
 func (d *DB) GetClipByID(id string) (*Clip, error) {
 	clip := &Clip{}
 	err := d.conn.QueryRow(`
-		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
 		FROM clips WHERE id = ?
-	`, id).Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath)
+	`, id).Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -155,10 +168,10 @@ func (d *DB) GetClipByID(id string) (*Clip, error) {
 func (d *DB) GetLatestClip() (*Clip, error) {
 	clip := &Clip{}
 	err := d.conn.QueryRow(`
-		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
 		FROM clips WHERE expires_at > ? AND status = 'ready'
 		ORDER BY created_at DESC LIMIT 1
-	`, time.Now().UTC()).Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath)
+	`, time.Now().UTC()).Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -170,7 +183,7 @@ func (d *DB) GetLatestClip() (*Clip, error) {
 
 func (d *DB) ListClips() ([]*Clip, error) {
 	rows, err := d.conn.Query(`
-		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
 		FROM clips ORDER BY created_at DESC
 	`)
 	if err != nil {
@@ -181,7 +194,7 @@ func (d *DB) ListClips() ([]*Clip, error) {
 	var clips []*Clip
 	for rows.Next() {
 		clip := &Clip{}
-		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath); err != nil {
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt); err != nil {
 			return nil, err
 		}
 		clips = append(clips, clip)
@@ -203,7 +216,7 @@ func (d *DB) UpdateClip(id string, status string, sizeBytes int64, storagePath s
 // GetExpiredClips returns all clips where expires_at < now (both ready and uploading).
 func (d *DB) GetExpiredClips() ([]*Clip, error) {
 	rows, err := d.conn.Query(`
-		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
 		FROM clips WHERE expires_at < ?
 	`, time.Now().UTC())
 	if err != nil {
@@ -214,7 +227,7 @@ func (d *DB) GetExpiredClips() ([]*Clip, error) {
 	var clips []*Clip
 	for rows.Next() {
 		clip := &Clip{}
-		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath); err != nil {
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt); err != nil {
 			return nil, err
 		}
 		clips = append(clips, clip)

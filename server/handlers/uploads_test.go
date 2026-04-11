@@ -252,6 +252,75 @@ func TestGetUploadStatusNotFound(t *testing.T) {
 	}
 }
 
+func TestInitUploadWithDeviceIDs(t *testing.T) {
+	uh, _, r := setupUploadTestHandler(t)
+
+	target := "dev12345"
+	sender := "dev67890"
+	body, _ := json.Marshal(map[string]interface{}{
+		"filename":         "bigfile.zip",
+		"size_bytes":       1000,
+		"chunk_size":       300,
+		"target_device_id": target,
+		"sender_device_id": sender,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/init", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp initUploadResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	// Verify device IDs persisted
+	clip, err := uh.DB.GetClipByID(resp.UploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clip.TargetDeviceID == nil || *clip.TargetDeviceID != target {
+		t.Errorf("expected target_device_id=%s, got %v", target, clip.TargetDeviceID)
+	}
+	if clip.SenderDeviceID == nil || *clip.SenderDeviceID != sender {
+		t.Errorf("expected sender_device_id=%s, got %v", sender, clip.SenderDeviceID)
+	}
+}
+
+func TestInitUploadWithoutDeviceIDs(t *testing.T) {
+	uh, _, r := setupUploadTestHandler(t)
+
+	body, _ := json.Marshal(initUploadRequest{
+		Filename:  "bigfile.zip",
+		SizeBytes: 1000,
+		ChunkSize: 300,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/init", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp initUploadResponse
+	json.Unmarshal(w.Body.Bytes(), &resp)
+
+	clip, err := uh.DB.GetClipByID(resp.UploadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clip.TargetDeviceID != nil {
+		t.Errorf("expected nil target_device_id, got %v", clip.TargetDeviceID)
+	}
+	if clip.SenderDeviceID != nil {
+		t.Errorf("expected nil sender_device_id, got %v", clip.SenderDeviceID)
+	}
+}
+
 func TestChunkedUploadFullRoundTrip(t *testing.T) {
 	_, _, r := setupUploadTestHandler(t)
 
