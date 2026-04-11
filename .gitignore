@@ -10,6 +10,5 @@ scripts/ralph/
 .claude/skills/ralph/
 
 # Ralph runtime state
-prd.json
 progress.txt
 archive/

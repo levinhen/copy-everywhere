@@ -1,0 +1,298 @@
+{
+  "project": "CopyEverywhere",
+  "branchName": "ralph/copy-everywhere-mvp",
+  "description": "Cross-device clipboard and file transfer tool via a user-specified relay server. MVP supports macOS (Swift+SwiftUI) and Windows (C#+WPF) clients with TLS-encrypted transfer, chunked upload for large files, and TTL-based auto-cleanup.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Server: project scaffolding, health endpoint, and auth middleware",
+      "description": "As a developer, I need the Go server project initialized with routing, a /health endpoint, and Bearer Token auth middleware so all subsequent API work has a foundation.",
+      "acceptanceCriteria": [
+        "Go module initialized with Gin dependency",
+        "GET /health returns JSON with version string and server uptime",
+        "Auth middleware reads Bearer token from Authorization header and rejects requests with 401 if token does not match ACCESS_TOKEN env var",
+        "Server reads config from environment variables: ACCESS_TOKEN, PORT (default 8080), STORAGE_PATH (default ./data), MAX_CLIP_SIZE_MB (default 500), TTL_HOURS (default 1)",
+        "go build succeeds with no errors"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Server: SQLite schema and clip metadata model",
+      "description": "As a developer, I need a SQLite database with a clips table so clip metadata can be persisted and queried.",
+      "acceptanceCriteria": [
+        "SQLite database created at STORAGE_PATH/copy_everywhere.db on startup",
+        "clips table with columns: id (TEXT PK, 6-char alphanumeric), type (TEXT: text/image/file), filename (TEXT nullable), size_bytes (INTEGER), status (TEXT: ready/uploading/failed), created_at (DATETIME), expires_at (DATETIME), storage_path (TEXT)",
+        "Helper functions: CreateClip, GetClipByID, GetLatestClip, ListClips, DeleteClip",
+        "ID generation produces unique 6-char alphanumeric codes",
+        "go build succeeds with no errors",
+        "Tests pass"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Server: clips API - upload, get metadata, get latest, download",
+      "description": "As a client app, I need API endpoints to upload text/small files, retrieve clip metadata, get the latest clip, and download raw content.",
+      "acceptanceCriteria": [
+        "POST /api/v1/clips accepts multipart/form-data with fields: type (text/image/file), content (file part), stores file to STORAGE_PATH/<id>/<filename>",
+        "POST /api/v1/clips returns JSON: {id, type, filename, size_bytes, created_at, expires_at}",
+        "POST /api/v1/clips rejects files exceeding MAX_CLIP_SIZE_MB with 413",
+        "GET /api/v1/clips/:id returns clip metadata JSON",
+        "GET /api/v1/clips/:id returns 404 for expired or non-existent clips",
+        "GET /api/v1/clips/latest returns the most recent non-expired clip metadata",
+        "GET /api/v1/clips/:id/raw streams the file content with correct Content-Type and Content-Disposition headers",
+        "GET /api/v1/clips/:id/raw returns 403 for clips with status=failed",
+        "go build succeeds with no errors",
+        "Tests pass"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Server: chunked upload API",
+      "description": "As a client app, I need chunked upload endpoints so large files can be uploaded in parts with resume support.",
+      "acceptanceCriteria": [
+        "POST /api/v1/uploads/init accepts JSON {filename, size_bytes, chunk_size} and returns {upload_id, chunk_count}",
+        "Creates a clip record with status=uploading and a directory STORAGE_PATH/uploads/<upload_id>/",
+        "PUT /api/v1/uploads/:id/parts/:n accepts binary body and saves chunk to parts directory",
+        "PUT returns 409 if chunk already uploaded, 404 if upload_id not found",
+        "POST /api/v1/uploads/:id/complete merges all chunks into final file, updates clip status to ready, returns clip metadata with Clip ID",
+        "POST /api/v1/uploads/:id/complete returns 400 if any chunks are missing",
+        "GET /api/v1/uploads/:id/status returns {upload_id, received_parts: [1,3,5], total_parts, status}",
+        "go build succeeds with no errors",
+        "Tests pass"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Server: TTL cleanup and health storage stats",
+      "description": "As a server operator, I need expired clips auto-cleaned and storage usage visible in the health endpoint.",
+      "acceptanceCriteria": [
+        "Background goroutine runs every 10 minutes scanning for clips where expires_at < now()",
+        "Expired clips: delete file from disk, delete row from SQLite",
+        "Failed uploads (status=uploading) follow the same TTL expiry and cleanup",
+        "GET /health response includes storage_used_bytes and clip_count fields",
+        "Cleanup logs number of deleted clips per run",
+        "go build succeeds with no errors"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Server: Dockerfile and docker-compose.yml",
+      "description": "As a server operator, I want to deploy the relay server with a single docker-compose up command.",
+      "acceptanceCriteria": [
+        "Multi-stage Dockerfile: build stage (golang:1.22) and runtime stage (alpine)",
+        "docker-compose.yml with service 'relay' exposing port 8080, volume mount for data persistence",
+        "docker-compose.yml includes environment variables: ACCESS_TOKEN, MAX_CLIP_SIZE_MB, TTL_HOURS, STORAGE_PATH",
+        "docker-compose up --build starts the server successfully",
+        ".dockerignore excludes unnecessary files"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "macOS: Xcode project, MenuBarExtra shell, and server config UI",
+      "description": "As a macOS user, I want a menu bar app where I can configure my relay server connection.",
+      "acceptanceCriteria": [
+        "SwiftUI app with MenuBarExtra (macOS 13+), no Dock icon by default",
+        "Menu bar icon shows app popover panel on click",
+        "First launch shows config screen: Host URL text field, Access Token secure field",
+        "Config saved to macOS Keychain using Security framework",
+        "Test Connection button calls GET /health and shows latency or error message",
+        "Config errors show specific messages: connection refused, auth failed (401), timeout",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "macOS: send clipboard text",
+      "description": "As a macOS user, I want to send my current clipboard text to the relay server with one click.",
+      "acceptanceCriteria": [
+        "Main panel shows current clipboard text preview (max 500 chars, truncated with ellipsis)",
+        "Send Clipboard button reads NSPasteboard.general.string and POSTs to /api/v1/clips with type=text",
+        "On success: displays Clip ID and expiry time",
+        "On failure: shows error message with Retry button",
+        "Send button disabled when clipboard is empty",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "macOS: receive clipboard text",
+      "description": "As a macOS user, I want to receive the latest text from the relay server into my clipboard.",
+      "acceptanceCriteria": [
+        "Receive Latest button calls GET /api/v1/clips/latest",
+        "If text clip received: writes to NSPasteboard.general, shows macOS notification 'Copied to clipboard'",
+        "If no content available: shows 'No content available or expired' message",
+        "Manual Clip ID input field: enter a 6-char ID to GET /api/v1/clips/:id/raw for specific content",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "macOS: send small file (< 50MB)",
+      "description": "As a macOS user, I want to send a file by dragging it into the app or picking it from a file dialog.",
+      "acceptanceCriteria": [
+        "Drop zone area in main panel accepts dragged files from Finder",
+        "Choose File button opens NSOpenPanel file picker",
+        "Upload progress bar shows percentage and speed (e.g. '45% - 2.3 MB/s')",
+        "On completion: displays Clip ID, filename, file size, and expiry time",
+        "Files >= 50MB are rejected with message directing to chunked upload (handled in next story)",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "macOS: send large file with chunked upload",
+      "description": "As a macOS user, I want to send large files (>= 50MB) with chunk-based upload and pause/resume support.",
+      "acceptanceCriteria": [
+        "Files >= 50MB automatically use chunked upload (10MB chunks)",
+        "Progress shows chunk progress (e.g. 'Chunk 3/24') and overall percentage",
+        "Pause button cancels current chunk upload task and records completed chunk numbers",
+        "Resume button queries GET /api/v1/uploads/:id/status for received parts and resumes from next missing chunk",
+        "On completion: POST /api/v1/uploads/:id/complete called, displays Clip ID",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "macOS: receive and download file",
+      "description": "As a macOS user, I want to download a file from the relay server to a local directory.",
+      "acceptanceCriteria": [
+        "Enter Clip ID shows file metadata: filename, size, type, upload time",
+        "Download button opens NSSavePanel for choosing save location",
+        "Download progress bar shows percentage and speed",
+        "Large files download via streaming (URLSessionDownloadTask)",
+        "On completion: reveals file in Finder using NSWorkspace.shared.activateFileViewerSelecting",
+        "Clips with status=failed show 'Upload incomplete - download unavailable'",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "macOS: send history list and management",
+      "description": "As a macOS user, I want to see my sent items history so I can copy Clip IDs or clean up old entries.",
+      "acceptanceCriteria": [
+        "History list in main panel shows locally-stored records: Clip ID, type icon, timestamp, expired status",
+        "History stored in UserDefaults or local SQLite (not on server)",
+        "Click a record copies its Clip ID to clipboard",
+        "Expired items shown in gray with 'Expired' label",
+        "Failed uploads shown with 'Upload Failed' label",
+        "Swipe-to-delete or delete button removes entry from local history",
+        "Xcode build succeeds with no errors",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Windows: WPF project, system tray, and server config UI",
+      "description": "As a Windows user, I want a system tray app where I can configure my relay server connection.",
+      "acceptanceCriteria": [
+        "WPF app (.NET 8) with NotifyIcon system tray, left-click opens main window",
+        "App starts minimized to tray, no taskbar icon when minimized",
+        "First launch shows config screen: Host URL text field, Access Token password field",
+        "Config saved to Windows Credential Manager via CredentialManager NuGet",
+        "Test Connection button calls GET /health and shows latency or error",
+        "Config errors show specific messages: connection refused, auth failed (401), timeout",
+        "dotnet build succeeds with no errors"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Windows: send and receive clipboard text",
+      "description": "As a Windows user, I want to send my clipboard text and receive text from the relay server.",
+      "acceptanceCriteria": [
+        "Main panel shows clipboard text preview (max 500 chars, truncated)",
+        "Send Clipboard reads System.Windows.Clipboard.GetText() and POSTs to /api/v1/clips",
+        "On success: displays Clip ID and expiry time",
+        "Receive Latest calls GET /api/v1/clips/latest, writes text to Clipboard.SetText()",
+        "Shows Windows toast notification 'Copied to clipboard' on receive",
+        "Manual Clip ID input for specific clip retrieval",
+        "dotnet build succeeds with no errors"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Windows: send and receive files with chunked upload support",
+      "description": "As a Windows user, I want to send and receive files with the same capabilities as the macOS client.",
+      "acceptanceCriteria": [
+        "Drop zone accepts files dragged from Explorer",
+        "Choose File button opens OpenFileDialog",
+        "Small files (< 50MB) upload via single POST with progress bar",
+        "Large files (>= 50MB) use chunked upload with pause/resume",
+        "Progress bar shows percentage and speed for both upload and download",
+        "Download: enter Clip ID, view metadata, SaveFileDialog for save location",
+        "Download completion opens Explorer and selects the file (Process.Start explorer.exe /select)",
+        "dotnet build succeeds with no errors"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Windows: send history list and management",
+      "description": "As a Windows user, I want to see my sent items history, copy Clip IDs, and manage entries.",
+      "acceptanceCriteria": [
+        "History list shows locally-stored records: Clip ID, type icon, timestamp, expired/failed status",
+        "History stored in local SQLite database in AppData",
+        "Click a record copies Clip ID to clipboard",
+        "Expired items shown grayed out with 'Expired' label",
+        "Failed uploads shown with 'Upload Failed' label",
+        "Delete button removes entry from local history",
+        "dotnet build succeeds with no errors"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
