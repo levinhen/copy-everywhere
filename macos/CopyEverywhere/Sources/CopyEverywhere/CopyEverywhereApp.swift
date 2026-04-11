@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var eventMonitor: Any?
+    private var keyMonitor: Any?
 
     private let normalIcon = NSImage(
         systemSymbolName: "doc.on.clipboard",
@@ -33,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         setupPopover()
         setupStatusItem()
+        setupKeyMonitor()
     }
 
     // MARK: - Popover
@@ -99,6 +101,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusItem.button?.image = self?.normalIcon
         }
         button.addSubview(dropView)
+    }
+
+    // MARK: - Keyboard Monitor
+
+    private func setupKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+            // Intercept ⌘V while popover is shown
+            if self.popover.isShown,
+               event.modifierFlags.contains(.command),
+               event.charactersIgnoringModifiers == "v" {
+                self.handlePasteShortcut()
+                return nil // consume the event
+            }
+            return event
+        }
+    }
+
+    private func handlePasteShortcut() {
+        let pb = NSPasteboard.general
+
+        // Priority: text → image → file URL
+        if let text = pb.string(forType: .string), !text.isEmpty {
+            Task { @MainActor in
+                let result = await configStore.sendText(text)
+                if result.success {
+                    let preview = text.count > 40 ? String(text.prefix(40)) + "..." : text
+                    configStore.toastMessage = "Sent: \(preview)"
+                } else {
+                    configStore.toastMessage = "Failed to send: \(result.message)"
+                }
+                dismissToastAfterDelay()
+            }
+        } else if let imgData = pb.data(forType: .png) ?? pb.data(forType: .tiff), !imgData.isEmpty {
+            // Save image to temp file and send as file
+            let ext = pb.data(forType: .png) != nil ? "png" : "tiff"
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("clipboard_image.\(ext)")
+            do {
+                try imgData.write(to: tempURL)
+                Task { @MainActor in
+                    await configStore.sendFile(url: tempURL)
+                    switch configStore.fileUploadStatus {
+                    case .success(_, let filename, _, _):
+                        configStore.toastMessage = "Sent: \(filename)"
+                    case .error(let msg):
+                        configStore.toastMessage = "Failed to send: \(msg)"
+                    default:
+                        break
+                    }
+                    dismissToastAfterDelay()
+                    try? FileManager.default.removeItem(at: tempURL)
+                }
+            } catch {
+                configStore.toastMessage = "Failed to send image: \(error.localizedDescription)"
+                dismissToastAfterDelay()
+            }
+        } else if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+                  let fileURL = urls.first {
+            Task { @MainActor in
+                await configStore.sendFile(url: fileURL)
+                switch configStore.fileUploadStatus {
+                case .success(_, let filename, _, _):
+                    configStore.toastMessage = "Sent: \(filename)"
+                case .error(let msg):
+                    configStore.toastMessage = "Failed to send: \(msg)"
+                default:
+                    break
+                }
+                dismissToastAfterDelay()
+            }
+        } else {
+            configStore.toastMessage = "Clipboard is empty"
+            dismissToastAfterDelay()
+        }
+    }
+
+    private func dismissToastAfterDelay() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+            configStore.toastMessage = nil
+        }
     }
 
     // MARK: - Drop Handlers

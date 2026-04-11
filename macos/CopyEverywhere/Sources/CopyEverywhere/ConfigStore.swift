@@ -24,6 +24,7 @@ final class ConfigStore: ObservableObject {
     @Published var fileDownloadSpeed: String = ""
     @Published var deviceID: String = ""
     @Published var deviceName: String = ""
+    @Published var toastMessage: String? = nil
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB

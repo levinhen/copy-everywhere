@@ -415,3 +415,15 @@
   - NSItemProvider.hasItemConformingToTypeIdentifier checks type before attempting to load — prioritize fileURL over plainText since files also carry text representations
   - The existing small drop zone in the "Send File" section still works independently for file-only drops
 ---
+## 2026-04-12 - US-026
+- What was implemented: ⌘V while panel open sends current clipboard — NSEvent.addLocalMonitorForEvents intercepts keyDown Cmd+V when popover is shown, sends clipboard with priority text → image → file URL. Toast banner shows "Sent: <preview>" on success or "Clipboard is empty" if nothing to send. Toast auto-dismisses after 3 seconds.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` — Added keyMonitor for local keyDown events, setupKeyMonitor(), handlePasteShortcut() with text/image/file priority, dismissToastAfterDelay()
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added toastMessage @Published property
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` — Added toast banner UI at top of panel with slide-in animation
+- **Learnings for future iterations:**
+  - NSEvent.addLocalMonitorForEvents(matching: .keyDown) intercepts events within the app's own windows — return nil to consume the event
+  - Returning nil from a local event monitor prevents the event from reaching any text fields in the popover — this is how Cmd+V hijack works
+  - NSPasteboard image data can be .png or .tiff — check both; save to temp file to reuse the sendFile path
+  - Toast pattern: @Published String? on ConfigStore + conditional view in MainPanelView + Task.sleep for auto-dismiss
+---

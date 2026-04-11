@@ -14,6 +14,26 @@ struct MainPanelView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            // Toast banner for ⌘V send feedback
+            if let toast = configStore.toastMessage {
+                HStack(spacing: 6) {
+                    Image(systemName: "paperplane.fill")
+                        .foregroundColor(.white)
+                    Text(toast)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(Color.accentColor)
+                .cornerRadius(6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: configStore.toastMessage)
+            }
+
             HStack {
                 Text("CopyEverywhere")
                     .font(.headline)
