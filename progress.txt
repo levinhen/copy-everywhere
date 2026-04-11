@@ -14,6 +14,12 @@
 - Cleanup package in `server/cleanup/` runs background goroutine with `Start(db, storagePath, interval)`
 - `GetExpiredClips()` returns all clips where `expires_at < now()` (both ready and uploading)
 - `GetStorageStats()` returns `{ClipCount, StorageUsedBytes}` via SQL COUNT/SUM
+- macOS app uses Swift Package Manager (not .xcodeproj) in `macos/CopyEverywhere/`
+- Build with `swift build` from `macos/CopyEverywhere/` directory
+- MenuBarExtra with `.window` style creates popover panel from menu bar icon
+- `NSApp.setActivationPolicy(.accessory)` hides dock icon programmatically
+- Keychain access via Security framework: `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete`
+- ConfigStore is `@MainActor` ObservableObject shared via `.environmentObject()`
 
 ---
 
@@ -82,4 +88,23 @@
   - Docker not installed on dev machine, so `docker-compose up --build` could not be verified locally
   - Used CGO_ENABLED=0 for static binary since modernc.org/sqlite is pure Go (no CGO needed)
   - docker-compose uses env var substitution with defaults (e.g., `${ACCESS_TOKEN:-changeme}`)
+---
+
+## 2026-04-11 - US-007
+- What was implemented: macOS SwiftUI menu bar app with MenuBarExtra shell, server config UI with Keychain storage, and Test Connection functionality
+- Files changed:
+  - `macos/CopyEverywhere/Package.swift` (new) - SPM manifest targeting macOS 13+
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` (new) - App entry point with MenuBarExtra and AppDelegate for hiding dock icon
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` (new) - ObservableObject managing config, Keychain CRUD, and connection testing
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` (new) - Config UI with Host URL, Access Token, Test Connection, Save
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` (new) - Main panel with gear icon to toggle config, quit button
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` (new) - Root view routing between config and main panel
+  - `macos/CopyEverywhere/.gitignore` (new) - Excludes .build/ and .swiftpm/
+- **Learnings for future iterations:**
+  - SPM executable targets can create macOS menu bar apps without Xcode project files
+  - `NSApp.setActivationPolicy(.accessory)` is the programmatic way to hide dock icon (no Info.plist needed for SPM builds)
+  - MenuBarExtra `.window` style gives a proper popover panel vs `.menu` which gives a dropdown menu
+  - ConfigStore uses `@MainActor` annotation since it interacts with UI-bound state
+  - Keychain operations: delete-before-add pattern for updates (SecItemUpdate is more complex)
+  - URLError codes `.cannotConnectToHost`, `.timedOut` map well to user-friendly error messages
 ---
