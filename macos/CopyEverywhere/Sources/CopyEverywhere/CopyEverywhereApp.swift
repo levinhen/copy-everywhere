@@ -34,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupPopover()
         setupStatusItem()
         setupKeyMonitor()
+        // Start SSE connection if already configured
+        configStore.startSSE()
     }
 
     // MARK: - Popover

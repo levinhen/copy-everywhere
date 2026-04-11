@@ -83,6 +83,9 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **`HistoryStore` removed (US-027).** The panel now shows the live server queue via `GET /clips?device_id=<self>` (polled every 5s while open). `QueueItem` model and `fetchQueue()`/`receiveQueueItem()` live in `ConfigStore`. Receive is atomic — first caller gets 200, subsequent get 410 Gone.
 - **`URLSession` progress → `AsyncStream` bridge.** `UploadProgressDelegate` / `DownloadProgressDelegate` (in `ApiClient`) implement `URLSessionTaskDelegate` / `URLSessionDownloadDelegate` and surface progress as `AsyncStream<Double>` so views can `for await` over it. Reuse this pattern — don't roll a new delegate per call site.
 - **Stream chunks with `FileHandle`.** The chunked uploader opens a `FileHandle` and `read(upToCount:)`s one chunk at a time. Don't `Data(contentsOf:)` the whole file — large uploads will OOM.
+- **SSE client uses `URLSession.shared.bytes(for:)` + `bytes.lines`** for async line-by-line streaming. Set `request.timeoutInterval = .infinity` for long-lived SSE. Parse events by empty-line boundaries, `event:` prefix, and `data:` prefix.
+- **`appendDeviceFields(to:boundary:)`** is a shared helper that appends `sender_device_id` and `target_device_id` multipart fields to any outgoing clip POST body. Chunked uploads add device IDs directly to the JSON init body instead.
+- **SSE reconnect loop** lives in `ConfigStore.sseLoop()` with exponential backoff (1s → 2s → 4s → capped at 30s). `startSSE()` is idempotent (checks `sseTask != nil`). Call `stopSSE()` before `startSSE()` when credentials change.
 
 **Windows:**
 

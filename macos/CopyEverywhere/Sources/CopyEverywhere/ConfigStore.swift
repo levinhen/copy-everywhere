@@ -8,6 +8,13 @@ struct ClipResult {
     let expiresAt: Date
 }
 
+struct DeviceInfo: Identifiable, Equatable, Hashable {
+    let id: String
+    let name: String
+    let platform: String
+    let lastSeenAt: Date
+}
+
 struct QueueItem: Identifiable, Equatable {
     let id: String
     let type: String
@@ -60,6 +67,13 @@ final class ConfigStore: ObservableObject {
     @Published var toastMessage: String? = nil
     @Published var queueItems: [QueueItem] = []
     @Published var queueError: String? = nil
+    @Published var availableDevices: [DeviceInfo] = []
+    @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
+
+    // SSE state
+    private var sseTask: Task<Void, Never>?
+    private var sseRetryDelay: TimeInterval = 1.0
+    private let sseMaxRetryDelay: TimeInterval = 30.0
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
@@ -136,7 +150,12 @@ final class ConfigStore: ObservableObject {
         saveToKeychain(account: tokenKey, value: accessToken)
         isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
         if isConfigured {
-            Task { await registerDevice() }
+            Task {
+                await registerDevice()
+                // Restart SSE with new credentials
+                stopSSE()
+                startSSE()
+            }
         }
     }
 
@@ -330,6 +349,9 @@ final class ConfigStore: ObservableObject {
         body.append(textData)
         body.append("\r\n".data(using: .utf8)!)
 
+        // Device ID fields
+        appendDeviceFields(to: &body, boundary: boundary)
+
         // End boundary
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
@@ -416,6 +438,9 @@ final class ConfigStore: ObservableObject {
         body.append("Content-Type: text/plain\r\n\r\n".data(using: .utf8)!)
         body.append(textData)
         body.append("\r\n".data(using: .utf8)!)
+
+        // Device ID fields
+        appendDeviceFields(to: &body, boundary: boundary)
 
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
         request.httpBody = body
@@ -567,6 +592,10 @@ final class ConfigStore: ObservableObject {
         body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
+
+        // Device ID fields
+        appendDeviceFields(to: &body, boundary: boundary)
+
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         // Write body to temp file for upload task (enables progress tracking)
@@ -688,11 +717,17 @@ final class ConfigStore: ObservableObject {
         initRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         initRequest.timeoutInterval = 30
 
-        let initBody: [String: Any] = [
+        var initBody: [String: Any] = [
             "filename": filename,
             "size_bytes": fileSize,
             "chunk_size": chunkSize
         ]
+        if !deviceID.isEmpty {
+            initBody["sender_device_id"] = deviceID
+        }
+        if let targetID = targetDeviceID {
+            initBody["target_device_id"] = targetID
+        }
         initRequest.httpBody = try? JSONSerialization.data(withJSONObject: initBody)
 
         do {
@@ -1266,11 +1301,220 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // MARK: - Device List
+
+    func fetchDevices() async {
+        guard isConfigured else { return }
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let url = URL(string: "\(urlString)/api/v1/devices") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+            guard let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+
+            var devices: [DeviceInfo] = []
+            for json in jsonArray {
+                guard let id = json["device_id"] as? String,
+                      let name = json["name"] as? String,
+                      let platform = json["platform"] as? String else { continue }
+                // Exclude self
+                if id == deviceID { continue }
+                let lastSeenAtStr = json["last_seen_at"] as? String ?? ""
+                let lastSeenAt = isoFormatter.date(from: lastSeenAtStr) ?? Date()
+                devices.append(DeviceInfo(id: id, name: name, platform: platform, lastSeenAt: lastSeenAt))
+            }
+            availableDevices = devices
+        } catch {
+            // Best-effort — don't block
+        }
+    }
+
+    // MARK: - SSE Auto-Receive
+
+    func startSSE() {
+        guard isConfigured, !deviceID.isEmpty else { return }
+        // Don't start a second connection
+        guard sseTask == nil else { return }
+        sseRetryDelay = 1.0
+        sseTask = Task { await sseLoop() }
+    }
+
+    func stopSSE() {
+        sseTask?.cancel()
+        sseTask = nil
+    }
+
+    private func sseLoop() async {
+        while !Task.isCancelled {
+            do {
+                try await connectSSE()
+            } catch is CancellationError {
+                return
+            } catch {
+                // Reconnect with exponential backoff
+                if Task.isCancelled { return }
+                try? await Task.sleep(nanoseconds: UInt64(sseRetryDelay * 1_000_000_000))
+                if Task.isCancelled { return }
+                sseRetryDelay = min(sseRetryDelay * 2, sseMaxRetryDelay)
+            }
+        }
+    }
+
+    private func connectSSE() async throws {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let url = URL(string: "\(urlString)/api/v1/devices/\(deviceID)/stream") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = .infinity
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        // Connected successfully — reset backoff
+        sseRetryDelay = 1.0
+
+        var eventType = ""
+        var dataBuffer = ""
+
+        for try await line in bytes.lines {
+            if Task.isCancelled { return }
+
+            if line.isEmpty {
+                // Empty line = end of event
+                if eventType == "clip" && !dataBuffer.isEmpty {
+                    await handleSSEClipEvent(dataBuffer)
+                }
+                eventType = ""
+                dataBuffer = ""
+            } else if line.hasPrefix("event: ") {
+                eventType = String(line.dropFirst(7))
+            } else if line.hasPrefix("data: ") {
+                dataBuffer = String(line.dropFirst(6))
+            }
+            // Ignore id:, comments (:), etc.
+        }
+    }
+
+    private func handleSSEClipEvent(_ jsonString: String) async {
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let clipID = json["clip_id"] as? String,
+              let clipType = json["type"] as? String else { return }
+
+        let filename = json["filename"] as? String
+
+        // Auto-receive the targeted clip
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(clipID)/raw") else { return }
+
+        var request = URLRequest(url: rawURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+
+        do {
+            if clipType == "text" {
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                if let text = String(data: responseData, encoding: .utf8) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    toastMessage = "Received text from sender"
+                    dismissToastAfterDelay()
+                    AppDelegate.sendNotification(body: "Received text from sender")
+                }
+            } else if clipType == "image" {
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setData(responseData, forType: .png)
+                toastMessage = "Received image from sender"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Received image from sender")
+            } else {
+                // File — download to ~/Downloads/
+                let delegate = DownloadProgressDelegate()
+                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+
+                let (tempURL, response) = try await session.download(for: request)
+                session.invalidateAndCancel()
+
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+
+                let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Downloads")
+                let destFilename = filename ?? clipID
+                var destURL = downloadsURL.appendingPathComponent(destFilename)
+
+                // Avoid overwriting existing files
+                let fm = FileManager.default
+                if fm.fileExists(atPath: destURL.path) {
+                    let base = destURL.deletingPathExtension().lastPathComponent
+                    let ext = destURL.pathExtension
+                    var counter = 1
+                    repeat {
+                        let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+                        destURL = downloadsURL.appendingPathComponent(newName)
+                        counter += 1
+                    } while fm.fileExists(atPath: destURL.path)
+                }
+
+                try fm.moveItem(at: tempURL, to: destURL)
+                toastMessage = "Saved \(destURL.lastPathComponent) to Downloads"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Saved \(destURL.lastPathComponent) to Downloads")
+                NSWorkspace.shared.activateFileViewerSelecting([destURL])
+            }
+
+            // Remove from local queue if present
+            queueItems.removeAll { $0.id == clipID }
+        } catch {
+            // Auto-receive failed silently — the item remains in the queue for manual receive
+        }
+    }
+
     func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+
+    /// Appends sender_device_id and target_device_id multipart fields to a body.
+    private func appendDeviceFields(to body: inout Data, boundary: String) {
+        if !deviceID.isEmpty {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"sender_device_id\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(deviceID)\r\n".data(using: .utf8)!)
+        }
+        if let targetID = targetDeviceID {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"target_device_id\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(targetID)\r\n".data(using: .utf8)!)
+        }
     }
 
     private func fetchAndCopyText(clipID: String) async {

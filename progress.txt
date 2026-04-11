@@ -73,6 +73,10 @@
 - `sendText(_:)` is a fire-and-forget text send (returns tuple) that doesn't touch `sendStatus` — separate from `sendClipboardText()` which updates UI state
 - File drops reuse existing `sendFile(url:)` which handles both small (<50MB) and chunked (>=50MB) paths
 - `AppDelegate.sendNotification(body:)` is static; checks `Bundle.main.bundleIdentifier != nil` to avoid crashes in unbundled SPM builds
+- SSE client uses `URLSession.shared.bytes(for:)` + `bytes.lines` for async line-by-line streaming; set `timeoutInterval = .infinity` for long-lived connections
+- `appendDeviceFields(to:boundary:)` is a shared helper for adding sender/target device IDs to multipart POST bodies; chunked uploads add device IDs to the JSON init body instead
+- SSE reconnect with exponential backoff: 1s → 2s → 4s → capped at 30s; `startSSE()` is idempotent, call `stopSSE()` before `startSSE()` when credentials change
+- Target device selection stored in `ConfigStore.targetDeviceID` (*String? nil = queue/any device*); device list fetched from `GET /api/v1/devices` excluding self
 
 ---
 
@@ -447,4 +451,20 @@
   - File receive saves to ~/Downloads with de-duplication (appends counter to filename if exists). Uses FileManager.homeDirectoryForCurrentUser.
   - Timer.scheduledTimer in SwiftUI needs manual invalidation on view disappear to avoid leaks.
   - Removing HistoryStore also left pre-existing `expiryDate` variables unused (were only consumed by addRecord calls). These are warnings, not errors.
+---
+
+## 2026-04-12 - US-028
+- What was implemented: macOS target-device selector and SSE auto-receive. Added a target device picker to ConfigView (populated from GET /devices, excluding self), wired target_device_id and sender_device_id into all send paths (sendClipboardText, sendText, sendFile, sendFileChunked), implemented a long-lived SSE connection to /devices/<self>/stream with auto-reconnect, and added auto-receive handling for text (→clipboard), image (→clipboard), and file (→~/Downloads) on SSE clip events.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added DeviceInfo model, target device properties (targetDeviceID, availableDevices), fetchDevices(), SSE connection (startSSE/stopSSE/sseLoop/connectSSE), handleSSEClipEvent auto-receive, appendDeviceFields helper, device ID fields in all send multipart bodies and chunked init JSON.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` — Added target device Picker populated from availableDevices, platformIcon helper.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` — Start SSE on applicationDidFinishLaunching.
+  - `CLAUDE.md` — Added SSE client, appendDeviceFields, and SSE reconnect patterns.
+  - `prd.json` — Marked US-028 passes: true.
+- **Learnings for future iterations:**
+  - `URLSession.shared.bytes(for:)` with `bytes.lines` is the cleanest async way to consume SSE in Swift — no need for custom delegates or third-party libraries.
+  - Set `timeoutInterval = .infinity` on SSE requests to prevent URLSession from timing out the long-lived connection.
+  - SSE event parsing: empty line = event boundary; accumulate `event:` and `data:` lines, then dispatch on empty line.
+  - `startSSE()` must be idempotent — guard against `sseTask != nil` to avoid duplicate connections.
+  - Multipart sends use `appendDeviceFields` helper; chunked uploads use JSON body — two different patterns for the same device ID fields.
 ---
