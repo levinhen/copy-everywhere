@@ -5,6 +5,10 @@
 - ID generation: 6-char alphanumeric via crypto/rand
 - Tests use `t.TempDir()` for isolated DB instances
 - SQLite connection uses `SetMaxOpenConns(1)` for write safety
+- Handlers live in `server/handlers/` with struct-based dependency injection (DB, config)
+- Gin route order matters: `/clips/latest` must be registered before `/clips/:id` to avoid param conflict
+- Use `c.File()` for streaming file content in Gin (handles range requests automatically)
+- Clip API returns `clipResponse` (subset of Clip) to avoid leaking internal fields like StoragePath
 
 ---
 
@@ -19,4 +23,17 @@
   - GetLatestClip filters by `status = 'ready'` AND `expires_at > now()` - important for future API endpoints
   - Clip.Filename is `*string` (nullable) - text clips don't need a filename
   - The `Open()` function auto-creates the storage directory and runs migrations with `IF NOT EXISTS`
+---
+
+## 2026-04-11 - US-003
+- What was implemented: Clips API with four endpoints - upload (POST /api/v1/clips), get metadata (GET /api/v1/clips/:id), get latest (GET /api/v1/clips/latest), and download raw content (GET /api/v1/clips/:id/raw)
+- Files changed:
+  - `server/handlers/clips.go` (new) - ClipHandler struct with Upload, GetByID, GetLatest, GetRaw methods
+  - `server/handlers/clips_test.go` (new) - 12 tests covering all endpoints, error cases, size limits, and round-trip
+  - `server/main.go` - Added DB initialization and route registration
+- **Learnings for future iterations:**
+  - Register `/clips/latest` before `/clips/:id` in Gin to avoid route param conflicts
+  - Use `clipResponse` struct to avoid leaking internal fields (StoragePath, Status) in API responses
+  - `c.File()` in Gin handles Content-Type detection and range requests automatically
+  - Handler tests use `httptest.NewRecorder()` + `gin.New()` without middleware for isolation
 ---
