@@ -22,6 +22,8 @@ final class ConfigStore: ObservableObject {
     @Published var fileDownloadStatus: FileDownloadStatus = .idle
     @Published var fileDownloadProgress: Double = 0
     @Published var fileDownloadSpeed: String = ""
+    @Published var deviceID: String = ""
+    @Published var deviceName: String = ""
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
@@ -91,6 +93,8 @@ final class ConfigStore: ObservableObject {
 
     init() {
         loadFromKeychain()
+        deviceID = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceID") ?? ""
+        deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
     }
 
     // MARK: - Keychain Operations
@@ -99,6 +103,40 @@ final class ConfigStore: ObservableObject {
         saveToKeychain(account: hostKey, value: hostURL)
         saveToKeychain(account: tokenKey, value: accessToken)
         isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
+        if isConfigured {
+            Task { await registerDevice() }
+        }
+    }
+
+    func registerDevice() async {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(urlString)/api/v1/devices/register") else { return }
+
+        let name = Host.current().localizedName ?? "Mac"
+        let payload: [String: String] = ["name": name, "platform": "macos"]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        request.timeoutInterval = 15
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let id = json["device_id"] as? String {
+                deviceID = id
+                deviceName = name
+                UserDefaults.standard.set(id, forKey: "com.copyeverywhere.deviceID")
+                UserDefaults.standard.set(name, forKey: "com.copyeverywhere.deviceName")
+            }
+        } catch {
+            // Registration is best-effort — don't block the save flow
+        }
     }
 
     func clearConfig() {

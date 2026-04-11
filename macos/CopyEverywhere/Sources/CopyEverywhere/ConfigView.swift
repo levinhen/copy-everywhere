@@ -24,6 +24,22 @@ struct ConfigView: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            if !configStore.deviceID.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Registered Device")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        Image(systemName: "desktopcomputer")
+                            .foregroundColor(.accentColor)
+                        Text(configStore.deviceName)
+                        Text("(\(configStore.deviceID))")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+            }
+
             HStack {
                 Button("Test Connection") {
                     Task {
