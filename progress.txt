@@ -27,6 +27,10 @@
 - 50MB threshold separates small file (single POST) from chunked upload flow
 - Chunked upload flow: init → upload parts (1-indexed) → complete; pause/resume via server status query
 - `FileHandle` for reading file chunks without loading entire file into memory
+- File download uses `URLSession.download(for:)` with `URLSessionDownloadDelegate` for streaming + progress
+- `DownloadProgressDelegate` yields `(totalBytesWritten, totalBytesExpectedToWrite)` via `AsyncStream`
+- `NSSavePanel` for choosing download save location; `NSWorkspace.shared.activateFileViewerSelecting` to reveal in Finder
+- Clip metadata API (`GET /clips/:id`) returns `clipResponse` without `status` field; `/raw` returns 403 for failed uploads
 
 ---
 
@@ -166,4 +170,16 @@
   - `FileHandle.seek(toOffset:)` + `read(upToCount:)` reads specific chunk ranges without loading entire file into memory
   - Pause works by setting a flag and cancelling the current task; resume queries GET /uploads/:id/status for received_parts to skip already-uploaded chunks
   - 409 from PUT parts endpoint means chunk already uploaded (safe to treat as success during resume)
+---
+
+## 2026-04-11 - US-012
+- What was implemented: macOS file download feature - Clip ID lookup shows file metadata (filename, type, size, upload time, expiry), Download button opens NSSavePanel, streaming download via URLSessionDownloadTask with progress bar (percentage + speed), Finder reveal on completion, 403 handling for incomplete uploads
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added ClipMetadata struct, FileDownloadStatus enum, fileDownloadProgress/fileDownloadSpeed properties, fetchClipMetadata() and downloadFile() methods, DownloadProgressDelegate class
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added Download File section with Clip ID lookup, metadata display, download progress, success/error/uploadIncomplete states, chooseDownloadLocation() helper
+- **Learnings for future iterations:**
+  - `URLSession.download(for:)` works with `URLSessionDownloadDelegate` for progress tracking - delegate receives `didWriteData` callbacks during download
+  - `DownloadProgressDelegate` uses `AsyncStream<(Int64, Int64)>` to bridge bytesWritten/totalExpected to async/await
+  - Clip metadata API does not expose `status` field - must handle 403 from `/raw` endpoint to detect failed uploads
+  - `NSSavePanel.nameFieldStringValue` sets the suggested filename; `NSWorkspace.shared.activateFileViewerSelecting([url])` reveals the file in Finder
 ---
