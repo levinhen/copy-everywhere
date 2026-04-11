@@ -1,0 +1,17 @@
+services:
+  relay:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - ACCESS_TOKEN=${ACCESS_TOKEN:-changeme}
+      - PORT=8080
+      - STORAGE_PATH=/data
+      - MAX_CLIP_SIZE_MB=${MAX_CLIP_SIZE_MB:-500}
+      - TTL_HOURS=${TTL_HOURS:-1}
+    volumes:
+      - relay-data:/data
+    restart: unless-stopped
+
+volumes:
+  relay-data:
