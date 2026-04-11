@@ -31,6 +31,8 @@
 - `DownloadProgressDelegate` yields `(totalBytesWritten, totalBytesExpectedToWrite)` via `AsyncStream`
 - `NSSavePanel` for choosing download save location; `NSWorkspace.shared.activateFileViewerSelecting` to reveal in Finder
 - Clip metadata API (`GET /clips/:id`) returns `clipResponse` without `status` field; `/raw` returns 403 for failed uploads
+- HistoryStore uses UserDefaults with JSON encoding (Codable) for local history persistence
+- ConfigStore receives `historyStore` reference via MenuBarView `.onAppear` (not init param) to work with @EnvironmentObject
 
 ---
 
@@ -182,4 +184,19 @@
   - `DownloadProgressDelegate` uses `AsyncStream<(Int64, Int64)>` to bridge bytesWritten/totalExpected to async/await
   - Clip metadata API does not expose `status` field - must handle 403 from `/raw` endpoint to detect failed uploads
   - `NSSavePanel.nameFieldStringValue` sets the suggested filename; `NSWorkspace.shared.activateFileViewerSelecting([url])` reveals the file in Finder
+---
+
+## 2026-04-11 - US-013
+- What was implemented: macOS send history list and management - HistoryStore with UserDefaults persistence, HistoryRecord model (Codable), history section in MainPanelView with type icons/timestamps/expired+failed labels, click-to-copy Clip ID, delete button per entry, history recording on text send, file upload success, and file upload failure
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/HistoryStore.swift` (new) - HistoryRecord struct and HistoryStore ObservableObject with UserDefaults persistence
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added historyStore property, recording history entries after text send, file upload success, and file upload failure
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added History section with scrollable list, historyRow helper, formatTimestamp helper, delete button per row
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` - Added HistoryStore @EnvironmentObject and onAppear to wire it to ConfigStore
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` - Added HistoryStore @StateObject and environmentObject injection
+- **Learnings for future iterations:**
+  - HistoryStore uses UserDefaults with JSON encoding (Codable) — simpler than SQLite for small datasets
+  - ConfigStore can't take HistoryStore as init parameter when using @StateObject — use onAppear assignment instead
+  - HistoryRecord.isExpired computed property checks Date() > expiresAt for dynamic expired status display
+  - `contentShape(Rectangle())` on history rows ensures the entire row area is tappable, not just the text
 ---
