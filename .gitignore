@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Ralph (upstream MIT code, install from marketplace instead)
+scripts/ralph/
+.claude/skills/prd/
+.claude/skills/ralph/
+
+# Ralph runtime state
+prd.json
+progress.txt
+archive/
