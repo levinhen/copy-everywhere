@@ -22,6 +22,11 @@
 - ConfigStore is `@MainActor` ObservableObject shared via `.environmentObject()`
 - Use `UserNotifications` framework (not deprecated `NSUserNotification`) for macOS notifications
 - Receive flow: first GET /api/v1/clips/latest for metadata, then GET /api/v1/clips/:id/raw for content
+- File upload uses `URLSession.upload(for:fromFile:)` with `URLSessionTaskDelegate` for progress tracking
+- `UploadProgressDelegate` bridges delegate callbacks to `AsyncStream<Double>` for async/await consumption
+- 50MB threshold separates small file (single POST) from chunked upload flow
+- Chunked upload flow: init → upload parts (1-indexed) → complete; pause/resume via server status query
+- `FileHandle` for reading file chunks without loading entire file into memory
 
 ---
 
@@ -134,4 +139,31 @@
   - Receive flow is two-step: GET /latest for metadata (to check type), then GET /:id/raw for content
   - `ReceiveStatus` enum mirrors `SendStatus` pattern but adds `.noContent` case for 404/empty scenarios
   - Manual Clip ID fetch reuses `fetchAndCopyText()` private method - good for code reuse across receive paths
+---
+
+## 2026-04-11 - US-010
+- What was implemented: macOS send small file feature - drop zone for drag-and-drop from Finder, Choose File button with NSOpenPanel, upload progress bar with percentage and speed, file size validation (< 50MB), and result display with Clip ID, filename, size, and expiry
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added FileUploadStatus enum, fileUploadProgress/fileUploadSpeed published properties, sendFile(url:) method, formatBytes() helper, and UploadProgressDelegate class for tracking upload progress
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added Send File section with drop zone (onDrop + .fileURL), Choose File button, upload progress view, and result display; added chooseFile() and handleFileDrop() helpers
+- **Learnings for future iterations:**
+  - Use `URLSession.upload(for:fromFile:)` with a custom `URLSessionTaskDelegate` to track upload progress via `didSendBodyData`
+  - `UploadProgressDelegate` uses `AsyncStream<Double>` to bridge delegate callbacks to async/await
+  - File drop uses `NSItemProvider.loadItem(forTypeIdentifier: "public.file-url")` to get file URLs from drag providers
+  - `ByteCountFormatter` provides clean human-readable file sizes (e.g., "12.3 MB")
+  - Image types are detected by extension for correct MIME type; everything else uses `application/octet-stream`
+  - 50MB threshold matches US-011 chunked upload boundary
+---
+
+## 2026-04-11 - US-011
+- What was implemented: macOS chunked upload for large files (>= 50MB) - automatic chunked upload with 10MB chunks, chunk-by-chunk progress display, pause/resume support with server-side status check
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added `chunkedUploading`/`chunkedPaused` enum cases, `sendFileChunked()`, `pauseChunkedUpload()`, `resumeChunkedUpload()`, `uploadChunks()` methods, chunked upload state properties
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added chunked upload progress UI with Pause/Resume buttons, updated `isFileUploading` and status switch to handle new cases
+- **Learnings for future iterations:**
+  - Chunked upload API: POST /uploads/init → PUT /uploads/:id/parts/:n → POST /uploads/:id/complete
+  - Server accepts both 200 and 201 for init/complete responses
+  - `FileHandle.seek(toOffset:)` + `read(upToCount:)` reads specific chunk ranges without loading entire file into memory
+  - Pause works by setting a flag and cancelling the current task; resume queries GET /uploads/:id/status for received_parts to skip already-uploaded chunks
+  - 409 from PUT parts endpoint means chunk already uploaded (safe to treat as success during resume)
 ---
