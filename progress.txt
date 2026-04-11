@@ -37,6 +37,10 @@
 - Windows config stored in Windows Credential Manager via `CredentialManagement` NuGet package
 - Windows WPF PasswordBox doesn't support data binding — use `PasswordChanged` event handler to sync
 - `ShutdownMode="OnExplicitShutdown"` in App.xaml prevents app from closing when main window hides to tray
+- Windows toast notifications via `Microsoft.Toolkit.Uwp.Notifications` NuGet (works with .NET 8 WPF)
+- ApiClient uses `MultipartFormDataContent` for clip uploads matching server's multipart/form-data expectation
+- Clipboard text send uses "clipboard.txt" filename with "text/plain" content type
+- Receive flow: GET /clips/latest for metadata → GET /clips/:id/raw for content (same as macOS)
 
 ---
 
@@ -221,4 +225,20 @@
   - `Hardcodet.NotifyIcon.Wpf` v1.1.0 is the standard WPF system tray library for .NET 8
   - CredentialManagement NuGet wraps Windows Credential Manager with simple Target/Password/Save/Load API
   - Test Connection verifies both /health (no auth) and /api/v1/clips/latest (auth) to confirm full connectivity
+---
+
+## 2026-04-11 - US-015
+- What was implemented: Windows send and receive clipboard text — clipboard preview (max 500 chars truncated), Send Clipboard button with multipart POST to /api/v1/clips, Receive Latest button fetching latest text clip and writing to clipboard, manual Clip ID input with Fetch button, Windows toast notifications on receive, per-section status display
+- Files changed:
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` - Added Microsoft.Toolkit.Uwp.Notifications NuGet for toast notifications
+  - `windows/CopyEverywhere/Services/ApiClient.cs` - Added ClipResponse model, SendTextClipAsync, GetLatestClipAsync, GetClipMetadataAsync, GetClipRawTextAsync methods
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added Send Clipboard section (preview, send button), Receive section (Receive Latest, Clip ID input, Fetch), status borders, increased window height to 650
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added event handlers for send/receive/fetch, clipboard preview refresh on window activation, toast notification helper, separate status methods for send/receive sections
+- **Learnings for future iterations:**
+  - `Microsoft.Toolkit.Uwp.Notifications` v7.1.3 works with .NET 8 WPF for toast notifications (despite "Uwp" in name)
+  - `MultipartFormDataContent` in .NET handles boundary generation automatically
+  - `Clipboard.ContainsText()` check is needed before `GetText()` — clipboard may be empty or contain non-text
+  - Clipboard access can throw if locked by another process — wrap in try/catch
+  - OnActivated override refreshes clipboard preview when user switches back to the app
+  - ClipboardPanel visibility toggled based on IsConfigured — hides send/receive UI until server is configured
 ---
