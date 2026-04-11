@@ -56,6 +56,11 @@
 - Clip columns: target_device_id (*string), sender_device_id (*string), consumed_at (*time.Time) — all nullable
 - SQLite migration uses `ALTER TABLE ADD COLUMN` with errors ignored for idempotence (no IF NOT EXISTS syntax)
 - POST /clips takes device IDs as multipart form fields; POST /uploads/init takes them as JSON body fields
+- SSE broker lives in `server/sse/` with `NewBroker()`, `Subscribe(deviceID)`, `Unsubscribe(deviceID, ch)`, `Notify(deviceID, event)`
+- SSE subscriber channels have buffer size 16; overflow events are dropped (non-blocking send)
+- SSE stream handler sends `: connected\n\n` on open, then loops on event channel + 25s heartbeat ticker
+- SSE tests use `httptest.NewServer` (not `httptest.NewRecorder`) because SSE requires streaming response
+- Broker, ClipHandler, and UploadHandler all share the same `*sse.Broker` instance wired in main.go
 
 ---
 
@@ -332,4 +337,22 @@
   - Cleanup after consume uses a goroutine (async) so the response streams immediately; the cleanup loop in US-022 is the safety net
   - GET /clips (no :id) is a separate Gin route from GET /clips/:id — no conflict because Gin matches exact paths before parameterized ones
   - ListQueueClips filters on: consumed_at IS NULL, status='ready', expires_at > now, and (target_device_id IS NULL OR target_device_id = deviceID)
+---
+
+## 2026-04-12 - US-021
+- What was implemented: SSE push channel for targeted clips — in-memory fan-out broker in `server/sse/`, SSE stream endpoint at GET /api/v1/devices/:id/stream with 25s heartbeat, clip notification on single-shot upload and chunked upload complete for targeted clips only
+- Files changed:
+  - `server/sse/broker.go` (new) — Broker struct with Subscribe/Unsubscribe/Notify, sync.RWMutex-protected subscriber map, buffered channels with non-blocking send
+  - `server/sse/broker_test.go` (new) — Unit tests for subscribe, notify, unsubscribe cleanup, cross-device isolation, concurrent notify
+  - `server/handlers/devices.go` — Added Broker field to DeviceHandler, Stream handler with SSE headers/heartbeat/event loop
+  - `server/handlers/devices_test.go` — Added SSE tests: headers, event delivery, multiple subscribers fan-out, untargeted-does-not-push
+  - `server/handlers/clips.go` — Added Broker field to ClipHandler, SSE notification after targeted clip upload
+  - `server/handlers/uploads.go` — Added Broker field to UploadHandler, SSE notification after targeted chunked upload complete
+  - `server/main.go` — Created shared Broker, wired to all handlers, registered GET /devices/:id/stream route
+- **Learnings for future iterations:**
+  - `httptest.NewServer` is needed for SSE tests (not `httptest.NewRecorder`) because the recorder doesn't support streaming/flushing
+  - SSE format: `id: N\nevent: clip\ndata: {json}\n\n` — double newline terminates each message
+  - Heartbeat is a comment line (`: heartbeat\n\n`) per SSE spec — comments start with colon
+  - Broker uses buffered channels (size 16) with non-blocking send to prevent slow subscribers from blocking Notify
+  - `c.Request.Context()` in Gin gives the request cancellation context — use it to detect SSE client disconnect
 ---

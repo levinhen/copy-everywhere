@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/copy-everywhere/server/db"
+	"github.com/copy-everywhere/server/sse"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,6 +20,7 @@ type ClipHandler struct {
 	StoragePath   string
 	MaxClipSizeMB int
 	TTLHours      int
+	Broker        *sse.Broker
 }
 
 type clipResponse struct {
@@ -127,6 +129,20 @@ func (h *ClipHandler) Upload(c *gin.Context) {
 		log.Printf("ERROR: create clip record: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
+	}
+
+	// Notify SSE subscribers if this clip targets a specific device
+	if clip.TargetDeviceID != nil && h.Broker != nil {
+		fname := ""
+		if clip.Filename != nil {
+			fname = *clip.Filename
+		}
+		h.Broker.Notify(*clip.TargetDeviceID, sse.ClipEvent{
+			ClipID:    clip.ID,
+			Type:      clip.Type,
+			Filename:  fname,
+			SizeBytes: clip.SizeBytes,
+		})
 	}
 
 	c.JSON(http.StatusCreated, clipToResponse(clip))

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/copy-everywhere/server/db"
+	"github.com/copy-everywhere/server/sse"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,6 +42,7 @@ type UploadHandler struct {
 	StoragePath   string
 	MaxClipSizeMB int
 	TTLHours      int
+	Broker        *sse.Broker
 }
 
 // InitUpload handles POST /api/v1/uploads/init
@@ -247,6 +249,20 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	// Re-read updated clip
 	clip, _ = h.DB.GetClipByID(uploadID)
+
+	// Notify SSE subscribers if this clip targets a specific device
+	if clip != nil && clip.TargetDeviceID != nil && h.Broker != nil {
+		fname := ""
+		if clip.Filename != nil {
+			fname = *clip.Filename
+		}
+		h.Broker.Notify(*clip.TargetDeviceID, sse.ClipEvent{
+			ClipID:    clip.ID,
+			Type:      clip.Type,
+			Filename:  fname,
+			SizeBytes: clip.SizeBytes,
+		})
+	}
 
 	c.JSON(http.StatusOK, clipToResponse(clip))
 }

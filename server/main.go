@@ -10,6 +10,7 @@ import (
 	"github.com/copy-everywhere/server/db"
 	"github.com/copy-everywhere/server/handlers"
 	"github.com/copy-everywhere/server/middleware"
+	"github.com/copy-everywhere/server/sse"
 	"github.com/gin-gonic/gin"
 )
 
@@ -31,11 +32,14 @@ func main() {
 	// Start TTL cleanup goroutine (every 10 minutes)
 	cleanup.Start(database, cfg.StoragePath, 10*time.Minute)
 
+	broker := sse.NewBroker()
+
 	clipHandler := &handlers.ClipHandler{
 		DB:            database,
 		StoragePath:   cfg.StoragePath,
 		MaxClipSizeMB: cfg.MaxClipSizeMB,
 		TTLHours:      cfg.TTLHours,
+		Broker:        broker,
 	}
 
 	uploadHandler := &handlers.UploadHandler{
@@ -43,10 +47,12 @@ func main() {
 		StoragePath:   cfg.StoragePath,
 		MaxClipSizeMB: cfg.MaxClipSizeMB,
 		TTLHours:      cfg.TTLHours,
+		Broker:        broker,
 	}
 
 	deviceHandler := &handlers.DeviceHandler{
-		DB: database,
+		DB:     database,
+		Broker: broker,
 	}
 
 	r := gin.Default()
@@ -84,6 +90,7 @@ func main() {
 
 		api.POST("/devices/register", deviceHandler.Register)
 		api.GET("/devices", deviceHandler.List)
+		api.GET("/devices/:id/stream", deviceHandler.Stream)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)

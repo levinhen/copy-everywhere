@@ -62,6 +62,7 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 
 **Server (Go):**
 
+- **SSE broker is a shared singleton.** `sse.NewBroker()` is created once in `main.go` and injected into `ClipHandler`, `UploadHandler`, and `DeviceHandler`. Targeted clip notifications flow through `Broker.Notify(targetDeviceID, event)` — call it after a clip with `TargetDeviceID != nil` becomes `ready` (single-shot upload or chunked complete). SSE tests need `httptest.NewServer` (not `NewRecorder`) because streaming requires a real HTTP connection.
 - **Gin route order matters.** Register `/clips/latest` *before* `/clips/:id`, otherwise `latest` is captured as an `:id` param.
 - **`clipResponse` vs `Clip`.** Handlers return a trimmed `clipResponse` struct so internal fields (`StoragePath`, `Status`) don't leak. Don't return the raw model.
 - **SQLite single writer.** `db.Open` sets `SetMaxOpenConns(1)`. Don't crank it up — `modernc.org/sqlite` corrupts under concurrent writes otherwise.
