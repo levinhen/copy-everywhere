@@ -178,7 +178,7 @@ struct MainPanelView: View {
                     }
                     .disabled(isFileUploading)
 
-                    // Upload progress
+                    // Upload progress (small file)
                     if case .uploading(let filename) = configStore.fileUploadStatus {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(filename)
@@ -201,9 +201,62 @@ struct MainPanelView: View {
                         .cornerRadius(6)
                     }
 
+                    // Chunked upload progress
+                    if case .chunkedUploading(let filename, let chunk, let total) = configStore.fileUploadStatus {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(filename)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            ProgressView(value: configStore.fileUploadProgress)
+                            HStack {
+                                Text("Chunk \(chunk)/\(total) — \(Int(configStore.fileUploadProgress * 100))%")
+                                if !configStore.fileUploadSpeed.isEmpty {
+                                    Text("- \(configStore.fileUploadSpeed)")
+                                }
+                                Spacer()
+                                Button("Pause") {
+                                    configStore.pauseChunkedUpload()
+                                }
+                                .font(.caption2)
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .cornerRadius(6)
+                    }
+
+                    // Chunked upload paused
+                    if case .chunkedPaused(let filename, let chunk, let total) = configStore.fileUploadStatus {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(filename)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            ProgressView(value: configStore.fileUploadProgress)
+                            HStack {
+                                Text("Paused at chunk \(chunk)/\(total)")
+                                Spacer()
+                                Button("Resume") {
+                                    Task {
+                                        await configStore.resumeChunkedUpload()
+                                    }
+                                }
+                                .font(.caption2)
+                            }
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+
                     // File upload result
                     switch configStore.fileUploadStatus {
-                    case .idle, .uploading:
+                    case .idle, .uploading, .chunkedUploading, .chunkedPaused:
                         EmptyView()
                     case .success(let clipID, let filename, let fileSize, let expiresAt):
                         VStack(alignment: .leading, spacing: 4) {
@@ -361,8 +414,12 @@ struct MainPanelView: View {
     }
 
     private var isFileUploading: Bool {
-        if case .uploading = configStore.fileUploadStatus { return true }
-        return false
+        switch configStore.fileUploadStatus {
+        case .uploading, .chunkedUploading:
+            return true
+        default:
+            return false
+        }
     }
 
     private func refreshClipboard() {

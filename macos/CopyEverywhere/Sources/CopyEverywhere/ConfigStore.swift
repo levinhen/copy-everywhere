@@ -22,8 +22,15 @@ final class ConfigStore: ObservableObject {
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
+    private let chunkSize: Int64 = 10 * 1024 * 1024 // 10MB chunks
     private let hostKey = "hostURL"
     private let tokenKey = "accessToken"
+
+    // Chunked upload state
+    private var chunkedUploadID: String?
+    private var chunkedUploadFileURL: URL?
+    private var chunkedUploadTask: Task<Void, Never>?
+    private var chunkedIsPaused = false
 
     enum ConnectionStatus: Equatable {
         case idle
@@ -50,6 +57,8 @@ final class ConfigStore: ObservableObject {
     enum FileUploadStatus: Equatable {
         case idle
         case uploading(filename: String)
+        case chunkedUploading(filename: String, currentChunk: Int, totalChunks: Int)
+        case chunkedPaused(filename: String, currentChunk: Int, totalChunks: Int)
         case success(clipID: String, filename: String, fileSize: String, expiresAt: String)
         case error(String)
     }
@@ -366,7 +375,7 @@ final class ConfigStore: ObservableObject {
         }
 
         if fileSize >= maxSmallFileSize {
-            fileUploadStatus = .error("File is \(formatBytes(fileSize)) — files >= 50MB require chunked upload (coming soon)")
+            await sendFileChunked(url: fileURL, filename: filename, fileSize: fileSize)
             return
         }
 
@@ -507,6 +516,263 @@ final class ConfigStore: ObservableObject {
             session.invalidateAndCancel()
             fileUploadStatus = .error("Error: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Chunked Upload
+
+    func sendFileChunked(url fileURL: URL, filename: String, fileSize: Int64) async {
+        chunkedIsPaused = false
+        chunkedUploadFileURL = fileURL
+
+        let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        // Step 1: Init upload
+        guard let initURL = URL(string: "\(urlString)/api/v1/uploads/init") else {
+            fileUploadStatus = .error("Invalid server URL")
+            return
+        }
+
+        var initRequest = URLRequest(url: initURL)
+        initRequest.httpMethod = "POST"
+        initRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        initRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        initRequest.timeoutInterval = 30
+
+        let initBody: [String: Any] = [
+            "filename": filename,
+            "size_bytes": fileSize,
+            "chunk_size": chunkSize
+        ]
+        initRequest.httpBody = try? JSONSerialization.data(withJSONObject: initBody)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: initRequest)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 || httpResponse.statusCode == 201 else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if statusCode == 401 {
+                    fileUploadStatus = .error("Authentication failed (401)")
+                } else if statusCode == 413 {
+                    fileUploadStatus = .error("File too large for server")
+                } else {
+                    fileUploadStatus = .error("Failed to init upload (status \(statusCode))")
+                }
+                return
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let uploadID = json["upload_id"] as? String else {
+                fileUploadStatus = .error("Invalid init response")
+                return
+            }
+
+            chunkedUploadID = uploadID
+            await uploadChunks(uploadID: uploadID, fileURL: fileURL, filename: filename, fileSize: fileSize, totalChunks: totalChunks, startChunk: 1)
+        } catch {
+            fileUploadStatus = .error("Network error: \(error.localizedDescription)")
+        }
+    }
+
+    func pauseChunkedUpload() {
+        chunkedIsPaused = true
+        chunkedUploadTask?.cancel()
+        chunkedUploadTask = nil
+        if case .chunkedUploading(let filename, let chunk, let total) = fileUploadStatus {
+            fileUploadStatus = .chunkedPaused(filename: filename, currentChunk: chunk, totalChunks: total)
+        }
+    }
+
+    func resumeChunkedUpload() async {
+        guard let uploadID = chunkedUploadID,
+              let fileURL = chunkedUploadFileURL else {
+            fileUploadStatus = .error("No upload to resume")
+            return
+        }
+
+        let filename = fileURL.lastPathComponent
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let fileSize = attrs[.size] as? Int64 else {
+            fileUploadStatus = .error("Cannot read file")
+            return
+        }
+
+        let totalChunks = Int((fileSize + chunkSize - 1) / chunkSize)
+
+        // Query server for received parts
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let statusURL = URL(string: "\(urlString)/api/v1/uploads/\(uploadID)/status") else {
+            fileUploadStatus = .error("Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: statusURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                fileUploadStatus = .error("Failed to check upload status (\(statusCode))")
+                return
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let receivedParts = json["received_parts"] as? [Int] else {
+                fileUploadStatus = .error("Invalid status response")
+                return
+            }
+
+            let receivedSet = Set(receivedParts)
+            // Find first missing chunk (1-indexed)
+            var startChunk = 1
+            for i in 1...totalChunks {
+                if !receivedSet.contains(i) {
+                    startChunk = i
+                    break
+                }
+            }
+
+            chunkedIsPaused = false
+            await uploadChunks(uploadID: uploadID, fileURL: fileURL, filename: filename, fileSize: fileSize, totalChunks: totalChunks, startChunk: startChunk, receivedParts: receivedSet)
+        } catch {
+            fileUploadStatus = .error("Network error: \(error.localizedDescription)")
+        }
+    }
+
+    private func uploadChunks(uploadID: String, fileURL: URL, filename: String, fileSize: Int64, totalChunks: Int, startChunk: Int, receivedParts: Set<Int> = []) async {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let fileHandle = try? FileHandle(forReadingFrom: fileURL) else {
+            fileUploadStatus = .error("Cannot open file")
+            return
+        }
+        defer { try? fileHandle.close() }
+
+        let startTime = Date()
+
+        for chunkIndex in startChunk...totalChunks {
+            if chunkedIsPaused || Task.isCancelled {
+                return
+            }
+
+            // Skip already-received parts
+            if receivedParts.contains(chunkIndex) {
+                continue
+            }
+
+            fileUploadStatus = .chunkedUploading(filename: filename, currentChunk: chunkIndex, totalChunks: totalChunks)
+            fileUploadProgress = Double(chunkIndex - 1) / Double(totalChunks)
+
+            // Read chunk data
+            let offset = Int64(chunkIndex - 1) * chunkSize
+            try? fileHandle.seek(toOffset: UInt64(offset))
+            let readSize = min(chunkSize, fileSize - offset)
+            guard let chunkData = try? fileHandle.read(upToCount: Int(readSize)), !chunkData.isEmpty else {
+                fileUploadStatus = .error("Failed to read chunk \(chunkIndex)")
+                return
+            }
+
+            // Upload chunk
+            guard let partURL = URL(string: "\(urlString)/api/v1/uploads/\(uploadID)/parts/\(chunkIndex)") else {
+                fileUploadStatus = .error("Invalid server URL")
+                return
+            }
+
+            var request = URLRequest(url: partURL)
+            request.httpMethod = "PUT"
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 120
+            request.httpBody = chunkData
+
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    fileUploadStatus = .error("Invalid response for chunk \(chunkIndex)")
+                    return
+                }
+
+                if httpResponse.statusCode != 200 && httpResponse.statusCode != 201 && httpResponse.statusCode != 409 {
+                    fileUploadStatus = .error("Failed to upload chunk \(chunkIndex) (status \(httpResponse.statusCode))")
+                    return
+                }
+
+                // Update speed
+                let elapsed = Date().timeIntervalSince(startTime)
+                let bytesUploaded = Int64(chunkIndex) * chunkSize
+                let speed = elapsed > 0 ? Double(bytesUploaded) / elapsed : 0
+                fileUploadSpeed = "\(formatBytes(Int64(speed)))/s"
+                fileUploadProgress = Double(chunkIndex) / Double(totalChunks)
+            } catch {
+                if chunkedIsPaused || Task.isCancelled {
+                    return
+                }
+                fileUploadStatus = .error("Network error on chunk \(chunkIndex): \(error.localizedDescription)")
+                return
+            }
+        }
+
+        if chunkedIsPaused || Task.isCancelled {
+            return
+        }
+
+        // Step 3: Complete upload
+        guard let completeURL = URL(string: "\(urlString)/api/v1/uploads/\(uploadID)/complete") else {
+            fileUploadStatus = .error("Invalid server URL")
+            return
+        }
+
+        var completeRequest = URLRequest(url: completeURL)
+        completeRequest.httpMethod = "POST"
+        completeRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        completeRequest.timeoutInterval = 60
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: completeRequest)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 || httpResponse.statusCode == 201 else {
+                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                fileUploadStatus = .error("Failed to complete upload (status \(statusCode))")
+                return
+            }
+
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let clipID = json["id"] as? String,
+               let expiresAtStr = json["expires_at"] as? String {
+                let formatter = ISO8601DateFormatter()
+                formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let displayFormatter = DateFormatter()
+                displayFormatter.dateStyle = .none
+                displayFormatter.timeStyle = .short
+
+                var expiryDisplay = expiresAtStr
+                if let date = formatter.date(from: expiresAtStr) {
+                    displayFormatter.timeZone = .current
+                    expiryDisplay = displayFormatter.string(from: date)
+                }
+                fileUploadProgress = 1.0
+                fileUploadStatus = .success(
+                    clipID: clipID,
+                    filename: filename,
+                    fileSize: formatBytes(fileSize),
+                    expiresAt: expiryDisplay
+                )
+            } else {
+                fileUploadStatus = .error("Unexpected complete response format")
+            }
+        } catch {
+            fileUploadStatus = .error("Network error completing upload: \(error.localizedDescription)")
+        }
+
+        // Clear chunked state on success
+        chunkedUploadID = nil
+        chunkedUploadFileURL = nil
     }
 
     func formatBytes(_ bytes: Int64) -> String {
