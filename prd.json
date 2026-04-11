@@ -15,7 +15,7 @@
         "go build succeeds with no errors"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
