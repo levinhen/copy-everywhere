@@ -108,3 +108,16 @@
   - Keychain operations: delete-before-add pattern for updates (SecItemUpdate is more complex)
   - URLError codes `.cannotConnectToHost`, `.timedOut` map well to user-friendly error messages
 ---
+
+## 2026-04-11 - US-008
+- What was implemented: macOS send clipboard text feature - clipboard preview in main panel (max 500 chars truncated), Send Clipboard button that POSTs multipart/form-data to /api/v1/clips, success/error display with Retry button
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added SendStatus enum, ClipResult struct, getClipboardText() and sendClipboardText() methods with multipart upload
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Replaced "Ready" placeholder with clipboard preview, send button, and status display
+- **Learnings for future iterations:**
+  - Server upload API expects multipart/form-data with "type" field and "content" file part (filename required)
+  - For text clips, use filename "clipboard.txt" with Content-Type text/plain
+  - Build multipart body manually with UUID boundary - no built-in Swift multipart helper
+  - Clipboard refresh on `NSApplication.didBecomeActiveNotification` keeps preview current when user switches back to app
+  - `SendStatus` enum with associated values (clipID, expiresAt) works well for displaying contextual results
+---
