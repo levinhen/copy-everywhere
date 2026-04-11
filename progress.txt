@@ -47,6 +47,8 @@
 - Chunked upload 409 from PUT parts means chunk already uploaded — treat as success during resume
 - Windows HistoryStore uses JSON file in AppData/Local/CopyEverywhere/history.json (mirrors macOS UserDefaults approach)
 - WPF history list built programmatically with DockPanel rows, Border.MouseLeftButtonUp for click-to-copy, Button.Tag for passing ClipId
+- GET /api/v1/clips/:id/raw is now an atomic consume: first caller wins, second gets 410 Gone; async goroutine cleans up files/DB after response
+- GET /api/v1/clips?device_id=XXX returns the queue view; GET /api/v1/clips/latest is deprecated (sends Deprecation header)
 - Device IDs are 8-char alphanumeric (vs 6-char for clip IDs); both use `generateRandomID(length)` in `db/db.go`
 - Device registration is idempotent on (name, platform) — re-registering returns the existing ID and bumps `last_seen_at`
 - DeviceHandler is a separate struct from ClipHandler/UploadHandler, wired in main.go
@@ -315,4 +317,19 @@
   - `*string` for nullable TEXT columns, `*time.Time` for nullable DATETIME columns — consistent with existing Filename pattern
   - POST /clips uses multipart form fields for device IDs; POST /uploads/init uses JSON body fields — different content types
   - All Scan calls across the codebase must be updated when adding columns to avoid column count mismatch
+---
+
+## 2026-04-12 - US-020
+- What was implemented: Queue listing endpoint (GET /clips?device_id=XXX) returning unconsumed clips visible to a device, atomic consume-and-delete on GET /clips/:id/raw (first caller gets body, second gets 410 Gone), async cleanup of consumed clip files and DB records, deprecation header on GET /clips/latest
+- Files changed:
+  - `server/db/db.go` — Added ListQueueClips(deviceID) and ConsumeClip(id) methods
+  - `server/db/db_test.go` — Added TestListQueueClips, TestConsumeClip, TestConsumeClipNotFound
+  - `server/handlers/clips.go` — Added ListQueue handler, rewrote GetRaw with atomic consume + async cleanup, added Deprecation header to GetLatest
+  - `server/handlers/clips_test.go` — Added TestGetRawAtomicConsume, TestGetRawRaceCondition, TestListQueue, TestListQueueMissingDeviceID, TestGetLatestDeprecationHeader; registered /clips route in test setup
+  - `server/main.go` — Registered GET /clips route for ListQueue
+- **Learnings for future iterations:**
+  - ConsumeClip uses UPDATE WHERE consumed_at IS NULL + RowsAffected to implement atomic claim — SQLite single-writer guarantees exactly one winner
+  - Cleanup after consume uses a goroutine (async) so the response streams immediately; the cleanup loop in US-022 is the safety net
+  - GET /clips (no :id) is a separate Gin route from GET /clips/:id — no conflict because Gin matches exact paths before parameterized ones
+  - ListQueueClips filters on: consumed_at IS NULL, status='ready', expires_at > now, and (target_device_id IS NULL OR target_device_id = deviceID)
 ---
