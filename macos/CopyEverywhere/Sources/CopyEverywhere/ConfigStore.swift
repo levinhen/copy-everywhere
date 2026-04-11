@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Security
+import UserNotifications
 
 struct ClipResult {
     let id: String
@@ -14,6 +15,7 @@ final class ConfigStore: ObservableObject {
     @Published var isConfigured: Bool = false
     @Published var connectionStatus: ConnectionStatus = .idle
     @Published var sendStatus: SendStatus = .idle
+    @Published var receiveStatus: ReceiveStatus = .idle
 
     private let service = "com.copyeverywhere.relay"
     private let hostKey = "hostURL"
@@ -30,6 +32,14 @@ final class ConfigStore: ObservableObject {
         case idle
         case sending
         case success(clipID: String, expiresAt: String)
+        case error(String)
+    }
+
+    enum ReceiveStatus: Equatable {
+        case idle
+        case receiving
+        case success(String)
+        case noContent
         case error(String)
     }
 
@@ -256,6 +266,142 @@ final class ConfigStore: ObservableObject {
             }
         } catch {
             sendStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Receive Operations
+
+    func receiveLatest() async {
+        receiveStatus = .receiving
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let metaURL = URL(string: "\(urlString)/api/v1/clips/latest") else {
+            receiveStatus = .error("Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: metaURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                receiveStatus = .error("Invalid response")
+                return
+            }
+
+            switch httpResponse.statusCode {
+            case 200:
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let clipID = json["id"] as? String,
+                      let clipType = json["type"] as? String else {
+                    receiveStatus = .error("Unexpected response format")
+                    return
+                }
+
+                if clipType == "text" {
+                    await fetchAndCopyText(clipID: clipID)
+                } else {
+                    receiveStatus = .error("Latest clip is a \(clipType), not text")
+                }
+            case 404:
+                receiveStatus = .noContent
+            case 401:
+                receiveStatus = .error("Authentication failed (401)")
+            default:
+                receiveStatus = .error("Server error (\(httpResponse.statusCode))")
+            }
+        } catch let error as URLError {
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                receiveStatus = .error("Connection refused - check server URL")
+            case .timedOut:
+                receiveStatus = .error("Request timed out")
+            default:
+                receiveStatus = .error("Network error: \(error.localizedDescription)")
+            }
+        } catch {
+            receiveStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
+    func receiveByID(_ clipID: String) async {
+        receiveStatus = .receiving
+
+        let trimmedID = clipID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else {
+            receiveStatus = .error("Please enter a Clip ID")
+            return
+        }
+
+        await fetchAndCopyText(clipID: trimmedID)
+    }
+
+    private func fetchAndCopyText(clipID: String) async {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(clipID)/raw") else {
+            receiveStatus = .error("Invalid server URL")
+            return
+        }
+
+        var request = URLRequest(url: rawURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 30
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                receiveStatus = .error("Invalid response")
+                return
+            }
+
+            switch httpResponse.statusCode {
+            case 200:
+                guard let text = String(data: data, encoding: .utf8) else {
+                    receiveStatus = .error("Could not decode content as text")
+                    return
+                }
+
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+
+                // Show macOS notification
+                let content = UNMutableNotificationContent()
+                content.title = "CopyEverywhere"
+                content.body = "Copied to clipboard"
+                let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
+                try? await UNUserNotificationCenter.current().add(request)
+
+                receiveStatus = .success(clipID)
+            case 403:
+                receiveStatus = .error("Upload incomplete - download unavailable")
+            case 404:
+                receiveStatus = .noContent
+            case 401:
+                receiveStatus = .error("Authentication failed (401)")
+            default:
+                receiveStatus = .error("Server error (\(httpResponse.statusCode))")
+            }
+        } catch let error as URLError {
+            switch error.code {
+            case .cannotConnectToHost, .cannotFindHost:
+                receiveStatus = .error("Connection refused - check server URL")
+            case .timedOut:
+                receiveStatus = .error("Request timed out")
+            default:
+                receiveStatus = .error("Network error: \(error.localizedDescription)")
+            }
+        } catch {
+            receiveStatus = .error("Error: \(error.localizedDescription)")
         }
     }
 }

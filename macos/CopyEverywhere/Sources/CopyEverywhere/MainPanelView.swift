@@ -5,6 +5,7 @@ struct MainPanelView: View {
     @EnvironmentObject var configStore: ConfigStore
     @State private var showingConfig = false
     @State private var clipboardText: String? = nil
+    @State private var manualClipID: String = ""
 
     var body: some View {
         VStack(spacing: 12) {
@@ -124,6 +125,89 @@ struct MainPanelView: View {
                                 }
                             }
                             .font(.caption)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(6)
+                    }
+                }
+
+                Divider()
+
+                // Receive section
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Receive")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    Button(action: {
+                        Task {
+                            await configStore.receiveLatest()
+                        }
+                    }) {
+                        HStack {
+                            if configStore.receiveStatus == .receiving {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                                    .frame(width: 16, height: 16)
+                                Text("Receiving...")
+                            } else {
+                                Image(systemName: "arrow.down.circle.fill")
+                                Text("Receive Latest")
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .disabled(configStore.receiveStatus == .receiving)
+
+                    HStack(spacing: 8) {
+                        TextField("Clip ID", text: $manualClipID)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+
+                        Button("Fetch") {
+                            Task {
+                                await configStore.receiveByID(manualClipID)
+                            }
+                        }
+                        .disabled(manualClipID.trimmingCharacters(in: .whitespaces).isEmpty || configStore.receiveStatus == .receiving)
+                    }
+
+                    // Receive status display
+                    switch configStore.receiveStatus {
+                    case .idle:
+                        EmptyView()
+                    case .receiving:
+                        EmptyView()
+                    case .success(let clipID):
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                            Text("Clip \(clipID) copied to clipboard")
+                                .foregroundColor(.green)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(6)
+                    case .noContent:
+                        HStack {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundColor(.orange)
+                            Text("No content available or expired")
+                                .foregroundColor(.orange)
+                        }
+                        .font(.caption)
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(6)
+                    case .error(let message):
+                        HStack {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                            Text(message)
+                                .foregroundColor(.red)
                         }
                         .font(.caption)
                         .padding(8)
