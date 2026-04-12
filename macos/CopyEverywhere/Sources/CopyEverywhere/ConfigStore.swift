@@ -292,11 +292,16 @@ final class ConfigStore: ObservableObject {
         transferMode = mode
         saveTransferMode()
 
-        // Start/stop RFCOMM server based on mode
         if mode == .bluetooth {
+            // Stop LAN services, start Bluetooth
+            stopSSE()
             startBluetoothServerIfNeeded()
         } else {
+            // Stop Bluetooth, restart LAN services
             bluetoothService.stopServer()
+            startSSE()
+            // Resume queue polling if panel is open
+            Task { await fetchQueue() }
         }
     }
 
