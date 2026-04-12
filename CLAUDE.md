@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-- Three iterations have shipped and are now archived — there is no active `prd.json` in the repo root right now. Historical context only:
+- Four iterations have shipped and are now archived — there is no active `prd.json` in the repo root right now. Historical context only:
   - **MVP (US-001 … US-017)** under [archive/mvp/](archive/mvp/) — initial clipboard-relay feature set.
   - **Queue + frictionless UX (US-018 … US-034)** under [archive/queue-and-frictionless-ux/](archive/queue-and-frictionless-ux/) — device registration, targeted queue, SSE push, drag-and-drop, auto-receive.
   - **LAN & Bluetooth (US-035 … US-050)** under [archive/lan-and-bluetooth/](archive/lan-and-bluetooth/) — LAN self-hosted server, mDNS discovery, MenuBarExtra host app, Bluetooth RFCOMM peer-to-peer mode.
+  - **Android Client (US-051 … US-068)** under [archive/android-client/](archive/android-client/) — Kotlin + Jetpack Compose Android client with LAN server mode, Bluetooth RFCOMM, share sheet, foreground service, boot receiver.
 - When a new iteration starts, drop its fresh `prd.json` + `progress.txt` at the repo root and its PRD doc at `tasks/prd-*.md`, then update this section to point at them.
 - This repo is driven by the Ralph autonomous agent loop ([scripts/ralph/ralph.sh](scripts/ralph/ralph.sh) + [scripts/ralph/CLAUDE.md](scripts/ralph/CLAUDE.md)). One commit ≈ one user story; commit messages follow `feat: [US-XXX] - [Title]`. The hard-won "do this / don't do that" list lives in the **Conventions and gotchas** section below — add to it (don't replace) when you discover a new reusable pattern.
 
