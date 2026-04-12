@@ -402,19 +402,51 @@
 
                 <Separator Margin="0,4,0,16"/>
 
-                <!-- Server Queue Section -->
-                <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
+                <!-- Server Queue Section (LAN mode) -->
+                <StackPanel x:Name="LanQueueSection">
+                    <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
 
-                <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
-                    <StackPanel x:Name="QueueListPanel">
-                        <TextBlock x:Name="QueueEmptyText"
-                                   Text="Queue is empty — copy something and click the icon."
-                                   Foreground="Gray"
-                                   FontSize="12"
-                                   HorizontalAlignment="Center"
-                                   Margin="0,8,0,8"/>
-                    </StackPanel>
-                </ScrollViewer>
+                    <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
+                        <StackPanel x:Name="QueueListPanel">
+                            <TextBlock x:Name="QueueEmptyText"
+                                       Text="Queue is empty — copy something and click the icon."
+                                       Foreground="Gray"
+                                       FontSize="12"
+                                       HorizontalAlignment="Center"
+                                       Margin="0,8,0,8"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </StackPanel>
+
+                <!-- Bluetooth Status Section (BT mode) -->
+                <StackPanel x:Name="BtStatusSection" Visibility="Collapsed">
+                    <TextBlock Text="Bluetooth" Style="{StaticResource SectionHeader}"/>
+
+                    <Border x:Name="BtStatusBadge"
+                            Background="#F0F0F0"
+                            CornerRadius="4"
+                            Padding="8"
+                            Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="BtStatusDot" Width="8" Height="8" Fill="Gray" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="BtStatusLabel" Text="Disconnected" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="BtConnectedDeviceText"
+                               FontSize="12"
+                               Foreground="#0066CC"
+                               Margin="0,0,0,8"
+                               Visibility="Collapsed"/>
+
+                    <TextBlock x:Name="BtPairHintText"
+                               Text="Pair a device in the Bluetooth section above to send and receive."
+                               Foreground="Gray"
+                               FontSize="12"
+                               HorizontalAlignment="Center"
+                               Margin="0,8,0,8"
+                               Visibility="Collapsed"/>
+                </StackPanel>
             </StackPanel>
 
             <!-- Not configured placeholder -->

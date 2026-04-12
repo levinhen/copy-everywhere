@@ -1265,15 +1265,25 @@ public partial class MainWindow : Window
         _configStore.PersistConfig();
         UpdateBluetoothSectionVisibility();
 
-        // Start/stop RFCOMM server based on mode
         if (newMode == TransferMode.Bluetooth)
         {
+            // Stop LAN services, start Bluetooth
+            StopSSE();
+            StopQueuePolling();
             StartBluetoothServerIfNeeded();
         }
         else
         {
+            // Stop Bluetooth, restart LAN services
             _bluetoothService.StopServer();
+            if (_configStore.IsConfigured)
+            {
+                StartSSE();
+                StartQueuePolling();
+                _ = RefreshQueueAsync();
+            }
         }
+        UpdateMainPanelState();
     }
 
     private void UpdateBluetoothSectionVisibility()
@@ -1321,7 +1331,62 @@ public partial class MainWindow : Window
             }
 
             RenderPairedDevices();
+            if (_configStore.TransferMode == TransferMode.Bluetooth)
+            {
+                UpdateBtStatusPanel();
+            }
         });
+    }
+
+    private void UpdateBtStatusPanel()
+    {
+        var status = _configStore.BluetoothConnectionStatus;
+
+        SolidColorBrush dotColor;
+        string statusText;
+        System.Windows.Media.Color bgColor;
+
+        switch (status)
+        {
+            case BluetoothConnectionStatus.Connected:
+                dotColor = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+                statusText = "Connected";
+                bgColor = Color.FromArgb(25, 34, 197, 94);
+                break;
+            case BluetoothConnectionStatus.Connecting:
+                dotColor = new SolidColorBrush(Color.FromRgb(234, 179, 8));
+                statusText = "Connecting\u2026";
+                bgColor = Color.FromArgb(25, 234, 179, 8);
+                break;
+            case BluetoothConnectionStatus.Error:
+                dotColor = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+                statusText = !string.IsNullOrEmpty(_configStore.BluetoothErrorMessage)
+                    ? $"Error: {_configStore.BluetoothErrorMessage}"
+                    : "Error";
+                bgColor = Color.FromArgb(25, 239, 68, 68);
+                break;
+            default:
+                dotColor = Brushes.Gray;
+                statusText = "Disconnected";
+                bgColor = Color.FromArgb(25, 128, 128, 128);
+                break;
+        }
+
+        BtStatusDot.Fill = dotColor;
+        BtStatusLabel.Text = statusText;
+        BtStatusBadge.Background = new SolidColorBrush(bgColor);
+
+        if (_configStore.BluetoothConnectedDeviceName != null)
+        {
+            BtConnectedDeviceText.Text = $"Connected to {_configStore.BluetoothConnectedDeviceName}";
+            BtConnectedDeviceText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BtConnectedDeviceText.Visibility = Visibility.Collapsed;
+        }
+
+        BtPairHintText.Visibility = !_configStore.IsSendReady ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void RenderPairedDevices()
@@ -2056,14 +2121,29 @@ public partial class MainWindow : Window
 
     private void UpdateMainPanelState()
     {
-        if (_configStore.IsConfigured)
+        var isBtMode = _configStore.TransferMode == TransferMode.Bluetooth;
+        var showPanel = isBtMode || _configStore.IsConfigured;
+
+        if (showPanel)
         {
             MainPanelPlaceholder.Visibility = Visibility.Collapsed;
             ClipboardPanel.Visibility = Visibility.Visible;
             RefreshClipboardPreview();
-            StartQueuePolling();
-            _ = LoadDeviceListAsync();
-            StartSSE();
+
+            // Toggle queue vs BT status sections
+            LanQueueSection.Visibility = isBtMode ? Visibility.Collapsed : Visibility.Visible;
+            BtStatusSection.Visibility = isBtMode ? Visibility.Visible : Visibility.Collapsed;
+
+            if (isBtMode)
+            {
+                UpdateBtStatusPanel();
+            }
+            else
+            {
+                StartQueuePolling();
+                _ = LoadDeviceListAsync();
+                StartSSE();
+            }
         }
         else
         {
@@ -2078,11 +2158,15 @@ public partial class MainWindow : Window
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
-        if (_configStore.IsConfigured)
+        RefreshClipboardPreview();
+        if (_configStore.TransferMode == TransferMode.LanServer && _configStore.IsConfigured)
         {
-            RefreshClipboardPreview();
             _ = RefreshQueueAsync();
             StartQueuePolling();
+        }
+        else if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            UpdateBtStatusPanel();
         }
     }
 
