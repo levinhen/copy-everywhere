@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import IOBluetooth
 import Network
 import Security
 import UserNotifications
@@ -49,6 +50,13 @@ struct QueueItem: Identifiable, Equatable {
     }
 }
 
+// MARK: - Transfer Mode
+
+enum TransferMode: String, CaseIterable {
+    case lanServer = "LAN Server"
+    case bluetooth = "Bluetooth Direct"
+}
+
 @MainActor
 final class ConfigStore: ObservableObject {
     @Published var hostURL: String = ""
@@ -72,7 +80,22 @@ final class ConfigStore: ObservableObject {
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
 
+    // Bluetooth state
+    @Published var transferMode: TransferMode = .lanServer
+    @Published var pairedDevices: [PairedBluetoothDevice] = []
+    @Published var bluetoothConnectionStatus: BluetoothConnectionStatus = .disconnected
+    @Published var bluetoothConnectedDeviceName: String?
+
     let bonjourBrowser = BonjourBrowser()
+    let bluetoothDiscovery = BluetoothDiscovery()
+    let bluetoothService = BluetoothService()
+
+    enum BluetoothConnectionStatus: Equatable {
+        case disconnected
+        case connecting
+        case connected
+        case error(String)
+    }
 
     // SSE state
     private var sseTask: Task<Void, Never>?
@@ -141,11 +164,17 @@ final class ConfigStore: ObservableObject {
         case error(String)
     }
 
+    private let pairedDevicesKey = "com.copyeverywhere.pairedBluetoothDevices"
+    private let transferModeKey = "com.copyeverywhere.transferMode"
+
     init() {
         loadFromKeychain()
         deviceID = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceID") ?? ""
         deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
+        loadPairedDevices()
+        loadTransferMode()
         bonjourBrowser.startBrowsing()
+        bluetoothService.delegate = self
     }
 
     func selectDiscoveredServer(_ server: DiscoveredServer) {
@@ -155,6 +184,101 @@ final class ConfigStore: ObservableObject {
             accessToken = ""
         }
     }
+
+    // MARK: - Bluetooth Pairing & Connection
+
+    /// Pair with a discovered Bluetooth device. Triggers system pairing dialog if needed.
+    func pairBluetoothDevice(_ discovered: DiscoveredBluetoothDevice) {
+        bluetoothConnectionStatus = .connecting
+
+        let device = discovered.device
+
+        // IOBluetoothDevice.openConnection triggers system-level pairing if not already paired
+        let pairHelper = BluetoothPairHelper(configStore: self, device: device, discoveredDevice: discovered)
+        currentPairHelper = pairHelper
+        pairHelper.startPairing()
+    }
+
+    /// Called after system pairing + RFCOMM connection + handshake succeeds.
+    fileprivate func bluetoothPairingSucceeded(device: IOBluetoothDevice, discovered: DiscoveredBluetoothDevice) {
+        let paired = PairedBluetoothDevice(
+            id: discovered.id,
+            name: discovered.name,
+            address: discovered.address
+        )
+        if !pairedDevices.contains(where: { $0.id == paired.id }) {
+            pairedDevices.append(paired)
+            savePairedDevices()
+        }
+        bluetoothConnectionStatus = .connected
+        bluetoothConnectedDeviceName = discovered.name
+    }
+
+    /// Disconnect from the active Bluetooth session.
+    func disconnectBluetooth() {
+        bluetoothService.disconnectSession()
+        bluetoothConnectionStatus = .disconnected
+        bluetoothConnectedDeviceName = nil
+    }
+
+    /// Forget a paired device (remove from saved list and disconnect if active).
+    func forgetBluetoothDevice(_ device: PairedBluetoothDevice) {
+        if bluetoothConnectedDeviceName == device.name {
+            disconnectBluetooth()
+        }
+        pairedDevices.removeAll { $0.id == device.id }
+        savePairedDevices()
+    }
+
+    /// Reconnect to a previously paired device.
+    func reconnectBluetoothDevice(_ paired: PairedBluetoothDevice) {
+        guard let device = IOBluetoothDevice(addressString: paired.address) else {
+            bluetoothConnectionStatus = .error("Could not find device: \(paired.name)")
+            return
+        }
+        bluetoothConnectionStatus = .connecting
+        bluetoothService.connect(to: device)
+    }
+
+    /// Auto-reconnect to the first paired device on launch (if in Bluetooth mode).
+    func autoReconnectBluetooth() {
+        guard transferMode == .bluetooth, !pairedDevices.isEmpty else { return }
+        guard case .disconnected = bluetoothConnectionStatus else { return }
+        reconnectBluetoothDevice(pairedDevices[0])
+    }
+
+    // MARK: - Bluetooth Persistence
+
+    private func savePairedDevices() {
+        if let data = try? JSONEncoder().encode(pairedDevices) {
+            UserDefaults.standard.set(data, forKey: pairedDevicesKey)
+        }
+    }
+
+    private func loadPairedDevices() {
+        guard let data = UserDefaults.standard.data(forKey: pairedDevicesKey),
+              let devices = try? JSONDecoder().decode([PairedBluetoothDevice].self, from: data) else { return }
+        pairedDevices = devices
+    }
+
+    private func saveTransferMode() {
+        UserDefaults.standard.set(transferMode.rawValue, forKey: transferModeKey)
+    }
+
+    private func loadTransferMode() {
+        if let raw = UserDefaults.standard.string(forKey: transferModeKey),
+           let mode = TransferMode(rawValue: raw) {
+            transferMode = mode
+        }
+    }
+
+    func setTransferMode(_ mode: TransferMode) {
+        transferMode = mode
+        saveTransferMode()
+    }
+
+    /// Helper retained during pairing flow.
+    fileprivate var currentPairHelper: BluetoothPairHelper?
 
     // MARK: - Keychain Operations
 
@@ -1604,6 +1728,91 @@ final class ConfigStore: ObservableObject {
             }
         } catch {
             receiveStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - BluetoothServiceDelegate
+
+extension ConfigStore: BluetoothServiceDelegate {
+
+    func bluetoothService(_ service: BluetoothService, didAcceptConnection channel: IOBluetoothRFCOMMChannel, from device: IOBluetoothDevice) {
+        bluetoothConnectionStatus = .connecting
+        bluetoothConnectedDeviceName = device.name
+    }
+
+    func bluetoothService(_ service: BluetoothService, didConnectTo channel: IOBluetoothRFCOMMChannel, device: IOBluetoothDevice) {
+        // Connection established, handshake in progress
+    }
+
+    func bluetoothService(_ service: BluetoothService, didFailWithError error: Error) {
+        bluetoothConnectionStatus = .error(error.localizedDescription)
+        currentPairHelper = nil
+    }
+
+    func bluetoothService(_ service: BluetoothService, sessionReady session: BluetoothSession, device: IOBluetoothDevice) {
+        bluetoothConnectionStatus = .connected
+        bluetoothConnectedDeviceName = device.name
+
+        // If this was a pairing flow, complete it
+        if let helper = currentPairHelper {
+            let discovered = helper.discoveredDevice
+            bluetoothPairingSucceeded(device: device, discovered: discovered)
+            currentPairHelper = nil
+        }
+    }
+
+    func bluetoothService(_ service: BluetoothService, sessionHandshakeFailed session: BluetoothSession, error: Error) {
+        bluetoothConnectionStatus = .error("Handshake failed: \(error.localizedDescription)")
+        currentPairHelper = nil
+    }
+}
+
+// MARK: - Bluetooth Pair Helper
+
+/// Manages the system-level Bluetooth pairing flow + RFCOMM connection for a discovered device.
+class BluetoothPairHelper: NSObject {
+    private let configStore: ConfigStore
+    private let device: IOBluetoothDevice
+    let discoveredDevice: DiscoveredBluetoothDevice
+
+    init(configStore: ConfigStore, device: IOBluetoothDevice, discoveredDevice: DiscoveredBluetoothDevice) {
+        self.configStore = configStore
+        self.device = device
+        self.discoveredDevice = discoveredDevice
+    }
+
+    func startPairing() {
+        // If the device is already paired, skip straight to RFCOMM connection
+        if device.isPaired() {
+            connectRFCOMM()
+            return
+        }
+
+        // openConnection triggers the macOS system Bluetooth pairing dialog
+        let status = device.openConnection(self)
+        if status != kIOReturnSuccess {
+            Task { @MainActor in
+                self.configStore.bluetoothConnectionStatus = .error("Failed to initiate pairing (code: \(status))")
+                self.configStore.currentPairHelper = nil
+            }
+        }
+    }
+
+    @objc func connectionComplete(_ device: IOBluetoothDevice, status: IOReturn) {
+        if status == kIOReturnSuccess {
+            connectRFCOMM()
+        } else {
+            Task { @MainActor in
+                self.configStore.bluetoothConnectionStatus = .error("Pairing failed (code: \(status))")
+                self.configStore.currentPairHelper = nil
+            }
+        }
+    }
+
+    private func connectRFCOMM() {
+        Task { @MainActor in
+            self.configStore.bluetoothService.connect(to: self.device)
         }
     }
 }

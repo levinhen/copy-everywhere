@@ -21,6 +21,8 @@
 - Bluetooth RFCOMM protocol: newline-delimited JSON headers (`0x0A`) + raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON + `\n` + content.
 - `BluetoothSession` wraps `IOBluetoothRFCOMMChannel` as its delegate. Buffer-based state machine: handshake → header → content. `BluetoothService` owns `activeSession`.
 - IOBluetooth `closeChannel()` is obsoleted in Swift 3 — use `channel.close()` instead (returns IOReturn).
+- `IOBluetoothDeviceInquiry(delegate:)` returns optional. SDP filtering of discovered devices requires per-device helper objects retained until query completes.
+- `TransferMode` enum (`.lanServer`/`.bluetooth`) persisted in UserDefaults. Paired devices persisted as JSON-encoded `[PairedBluetoothDevice]` in UserDefaults.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -253,4 +255,29 @@
   - Newline (`0x0A`) is a clean delimiter for JSON headers over RFCOMM since JSON itself doesn't contain raw newlines.
   - `writeAsync` on `IOBluetoothRFCOMMChannel` takes `UnsafeMutableRawPointer` — use `NSMutableData.mutableBytes` to bridge from Swift `Data`.
   - File sends must chunk-read via `FileHandle` (16KB per RFCOMM write) to avoid OOM on large files — same pattern as the LAN chunked uploader.
+---
+
+## 2026-04-12 - US-042
+- What was implemented:
+  - New `BluetoothDiscovery.swift` — `@MainActor` ObservableObject wrapping `IOBluetoothDeviceInquiry` for scanning nearby Bluetooth devices
+  - `DiscoveredBluetoothDevice` model + `PairedBluetoothDevice` (Codable) for persistence
+  - SDP filter: each discovered device is queried for CopyEverywhere RFCOMM UUID before appearing in scan results
+  - `BluetoothPairHelper` class manages system-level Bluetooth pairing flow via `device.openConnection()`, then triggers RFCOMM connection + app handshake
+  - `ConfigStore` extended with: `TransferMode` enum (`.lanServer`/`.bluetooth`), paired devices list (persisted to UserDefaults), `BluetoothConnectionStatus`, `BluetoothServiceDelegate` conformance
+  - `autoReconnectBluetooth()` method for reconnecting to first paired device on launch
+  - `ConfigView` rewritten with segmented `Picker` for transfer mode toggle
+  - LAN mode: existing server discovery, host URL, token, device registration UI
+  - Bluetooth mode: connection status badge, paired devices list with Connect/Disconnect/Forget actions, scan button with SDP-filtered results, tap-to-pair flow
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothDiscovery.swift — new file
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift — TransferMode, BT properties, pairing/reconnect logic, BluetoothServiceDelegate
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift — mode toggle + Bluetooth UI section
+  - CLAUDE.md — documented BluetoothDiscovery, BluetoothPairHelper, TransferMode patterns
+  - prd.json — US-042 passes: true
+- **Learnings for future iterations:**
+  - `IOBluetoothDeviceInquiry(delegate:)` returns optional — must `guard let`.
+  - `IOBluetoothDeviceInquiryDelegate` methods arrive on non-main threads — bridge with `nonisolated` + `Task { @MainActor in }`, same pattern as other IOBluetooth delegates.
+  - SDP filtering of discovered devices requires a separate helper class (NSObject subclass with `sdpQueryComplete` callback) per device, retained in an array until the query completes.
+  - `device.openConnection(self)` triggers the macOS system Bluetooth pairing dialog. If the device is already paired, skip straight to RFCOMM connection.
+  - Paired device persistence uses simple JSON-encoded `[PairedBluetoothDevice]` in UserDefaults — lightweight enough for a small list of devices.
 ---

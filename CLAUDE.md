@@ -97,6 +97,9 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **`BluetoothSession` is `IOBluetoothRFCOMMChannelDelegate`.** Data arrives via `rfcommChannelData(_:data:length:)` on a non-main thread — bridged to `@MainActor` via `Task`. Receive uses a buffer-based state machine: handshake phase → header phase → content accumulation.
 - **`BluetoothService` owns `activeSession`.** On RFCOMM connect (server accept or client connect), `createSession(channel:device:)` creates a `BluetoothSession` that auto-starts the handshake. Delegate chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSessionDelegate`) → `BluetoothServiceDelegate`.
 - **IOBluetooth `closeChannel()` is obsoleted** — use `channel.close()` (returns `IOReturn`, discard with `_ =`).
+- **`BluetoothDiscovery`** wraps `IOBluetoothDeviceInquiry` for scanning nearby devices. Found devices are filtered via SDP query for the CopyEverywhere UUID before appearing in the UI. `IOBluetoothDeviceInquiry(delegate:)` returns optional — use `guard let`.
+- **`BluetoothPairHelper`** manages the system-level pairing flow. `device.openConnection(self)` triggers the macOS pairing dialog. After pairing, it initiates RFCOMM connection via `BluetoothService.connect(to:)`. The delegate chain is: `BluetoothPairHelper` → `BluetoothService` → `ConfigStore` (as `BluetoothServiceDelegate`).
+- **`TransferMode`** enum (`.lanServer` / `.bluetooth`) persisted in UserDefaults. `ConfigView` uses a segmented `Picker` to switch modes. Paired Bluetooth devices persisted as JSON in UserDefaults (`PairedBluetoothDevice` Codable struct).
 
 **macOS Server Host App (`macos/CopyEverywhereServer/`):**
 
