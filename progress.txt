@@ -27,6 +27,8 @@
 - `BluetoothSession.sendText`/`sendFile` return `AsyncStream<Double>` for progress. Use `withCheckedContinuation` to bridge to async/await.
 - RFCOMM server must be started explicitly in Bluetooth mode (`startBluetoothServerIfNeeded`). Both `autoReconnectBluetooth()` and `setTransferMode(.bluetooth)` handle this.
 - Bluetooth event delegation chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSessionDelegate`) → `ConfigStore` (as `BluetoothServiceDelegate`). All new events need wiring through both layers.
+- Windows Bluetooth RFCOMM uses WinRT APIs. TFM must be `net8.0-windows10.0.19041.0` (not plain `net8.0-windows`) for `Windows.Devices.Bluetooth.Rfcomm` access.
+- Windows `BluetoothService` uses events (`ConnectionAccepted`, `Connected`, `ConnectionFailed`) instead of macOS delegate pattern. `StreamSocket` + `DataWriter`/`DataReader` are the I/O primitives.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -331,4 +333,28 @@
   - Receive progress is calculated as `(totalSize - bytesRemaining + min(buffered, remaining)) / totalSize` — this accounts for data already consumed from the buffer in previous calls.
   - RFCOMM server must be explicitly started for the device to accept inbound connections. Unlike LAN SSE (where the client connects to the server), Bluetooth mode requires both sides to publish SDP records and listen.
   - File dedup in ~/Downloads uses the same pattern as the LAN queue receive: `base (N).ext` incrementing counter.
+---
+
+## 2026-04-12 - US-045A
+- What was implemented:
+  - New `Services/BluetoothService.cs` — RFCOMM connection layer for Windows using WinRT APIs
+  - Defines shared UUID `CE000001-1000-1000-8000-00805F9B34FB` as `BluetoothService.CopyEverywhereServiceUuid` (matches macOS)
+  - Server mode: `RfcommServiceProvider.CreateAsync()` + `StreamSocketListener` for accepting inbound RFCOMM connections; SDP service name attribute written manually
+  - Client mode: `RfcommDeviceService.FromIdAsync()` for connecting via `DeviceInformation`; `ConnectByAddressAsync()` for reconnecting to known paired devices via Bluetooth address
+  - `FindDevicesAsync()` static helper using `RfcommDeviceService.GetDeviceSelector()` + `DeviceInformation.FindAllAsync()`
+  - Active connection management: `StreamSocket`, `DataWriter`, `DataReader` with `InputStreamOptions.Partial`
+  - Events: `ConnectionAccepted`, `Connected`, `ConnectionFailed` (mirrors macOS delegate pattern)
+  - Implements `INotifyPropertyChanged` + `IDisposable`
+  - Updated `.csproj` TFM from `net8.0-windows` to `net8.0-windows10.0.19041.0` for WinRT API access
+- Files changed:
+  - windows/CopyEverywhere/Services/BluetoothService.cs — new file
+  - windows/CopyEverywhere/CopyEverywhere.csproj — TFM updated to net8.0-windows10.0.19041.0
+  - CLAUDE.md — documented Windows Bluetooth RFCOMM patterns
+  - prd.json — US-045A passes: true
+- **Learnings for future iterations:**
+  - WinRT Bluetooth APIs require TFM `net8.0-windows10.0.19041.0` or later — no extra NuGet needed, projections are auto-included.
+  - `RfcommServiceProvider.SdpRawAttributes` requires manually writing SDP attribute bytes (type byte + length + value) — there's no high-level helper.
+  - `BluetoothDevice.FromHostNameAsync()` can resolve the remote device from a `StreamSocket` connection's `RemoteHostName`, but may fail for some connection types — handle gracefully.
+  - `ConnectByAddressAsync()` (via `BluetoothDevice.FromBluetoothAddressAsync` + `GetRfcommServicesForIdAsync`) is the pattern for reconnecting to known devices without re-scanning.
+  - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
 ---

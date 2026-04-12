@@ -128,6 +128,12 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **mDNS discovery** uses `Zeroconf` NuGet (v3.6.11). `MdnsDiscoveryService` runs a periodic scan loop for `_copyeverywhere._tcp.local.` services. `DiscoveredServer` model matches macOS `DiscoveredServer` struct. TXT records provide `auth` and `version` fields.
 - **`ConfigStore.ServerAuthRequired`** (nullable bool) controls Access Token field visibility: `null` = unknown (show as optional), `true` = shown as required, `false` = hidden. Populated from mDNS TXT `auth` field or `/health` response `auth` field.
 
+- **Bluetooth RFCOMM** uses WinRT APIs (`Windows.Devices.Bluetooth.Rfcomm`). The project TFM is `net8.0-windows10.0.19041.0` to access WinRT projections (no extra NuGet needed). `BluetoothService` (`INotifyPropertyChanged + IDisposable`) mirrors the macOS `BluetoothService` — server mode via `RfcommServiceProvider` + `StreamSocketListener`, client mode via `RfcommDeviceService` + `StreamSocket`.
+- **RFCOMM Service UUID** is `CE000001-1000-1000-8000-00805F9B34FB` — defined as `BluetoothService.CopyEverywhereServiceUuid` (System.Guid). Must match macOS `kCopyEverywhereServiceUUID` exactly.
+- **RFCOMM server SDP attributes.** `RfcommServiceProvider.SdpRawAttributes[0x0100]` writes the service name. Format: `0x25` (UTF-8 type byte) + length byte + string bytes.
+- **RFCOMM client discovery.** `RfcommDeviceService.GetDeviceSelector(RfcommServiceId)` builds a selector for `DeviceInformation.FindAllAsync()`. For reconnecting by address, use `BluetoothDevice.FromBluetoothAddressAsync()` + `GetRfcommServicesForIdAsync()`.
+- **StreamSocket I/O.** `DataWriter(socket.OutputStream)` / `DataReader(socket.InputStream)` are the WinRT equivalents of IOBluetooth's `writeAsync`/`rfcommChannelData`. Set `DataReader.InputStreamOptions = InputStreamOptions.Partial` for streaming reads.
+
 **Cross-platform:**
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.

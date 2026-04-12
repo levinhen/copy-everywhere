@@ -218,7 +218,7 @@
         "dotnet build succeeds"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-045 — connection layer only"
     },
     {
