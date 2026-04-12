@@ -236,7 +236,7 @@
         "./gradlew assembleDebug succeeds"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

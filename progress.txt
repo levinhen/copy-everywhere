@@ -14,7 +14,7 @@ US-060: Share sheet integration                             [x]
 US-061: Transfer mode switch (LAN <-> Bluetooth)            [x]
 US-062: Bluetooth RFCOMM service and session protocol       [x]
 US-063: Bluetooth device scanning and pairing               [x]
-US-064: Bluetooth auto-reconnect and RFCOMM server          [ ]
+US-064: Bluetooth auto-reconnect and RFCOMM server          [x]
 US-065: Bluetooth send — text and files                     [ ]
 US-066: Bluetooth receive — text and files                  [ ]
 US-067: Notifications and user feedback                     [ ]
@@ -57,7 +57,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - Paired Bluetooth devices persisted in DataStore as JSON via Gson (`PairedBluetoothDevice` data class in ConfigStore)
 - `BluetoothAdapter.startDiscovery()` + `BroadcastReceiver(ACTION_FOUND)` for device scanning — register with `RECEIVER_EXPORTED` on API 33+
 - `Icons.AutoMirrored.Filled.BluetoothSearching` (not `Icons.Default.BluetoothSearching` — deprecated)
-- `BluetoothService.listener` shared between ConfigViewModel and Service — null in `onCleared()` to avoid leaks
+- `BluetoothService.listener` shared between ConfigViewModel and Service — restore Service as listener in ViewModel's `onCleared()` (not null)
+- `BluetoothService.autoReconnect()` checks `isSessionReady` before each attempt — inbound RFCOMM server accept can satisfy the reconnect
 
 ---
 
@@ -329,4 +330,23 @@ US-068: Boot receiver and battery optimization              [ ]
   - `BluetoothService.listener` is shared between ViewModel and Service — restore/null it in `onCleared()` to avoid leaks
   - `neverForLocation` on `BLUETOOTH_SCAN` avoids requiring ACCESS_FINE_LOCATION for device discovery
   - `BluetoothDevice.name` can throw SecurityException without BLUETOOTH_CONNECT permission — catch and skip unnamed devices
+---
+
+## 2026-04-12 - US-064
+- Implemented Bluetooth auto-reconnect with exponential backoff (2s → 4s → 8s → 16s → 30s), max 5 attempts
+- `BluetoothService.autoReconnect(address)` runs in IO dispatcher, takes optional status callback for notification updates
+- RFCOMM server auto-starts on app launch in Bluetooth mode (already handled in `onStartCommand`)
+- `CopyEverywhereService` implements `BluetoothService.Listener` to update notification on connection status changes
+- Notification shows: "Connected to <device>", "Reconnecting (N/5)...", "Disconnected", "Handshake failed"
+- `autoReconnectBluetooth()` called in `onStartCommand` (Bluetooth mode) and `switchMode(Bluetooth)`
+- `ConfigViewModel.onCleared()` restores the service as Bluetooth listener (instead of nulling it)
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/BluetoothService.kt` — added `autoReconnect()`, `cancelReconnect()`
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt` — implements `BluetoothService.Listener`, added `autoReconnectBluetooth()`
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt` — restores service as listener in `onCleared()`
+- **Learnings for future iterations:**
+  - `BluetoothService.listener` is shared between Service and ViewModel — ViewModel should restore Service as listener in `onCleared()`, not null it
+  - `autoReconnect()` checks `isSessionReady` before each attempt to avoid reconnecting when an inbound connection already succeeded via the RFCOMM server
+  - `stopBluetoothServer()` should also call `cancelReconnect()` to stop any in-progress reconnect attempts when switching away from Bluetooth mode
+  - Status callback from `autoReconnect()` is invoked from IO thread — `updateServiceNotification()` is safe to call from any thread since it goes through `NotificationManager`
 ---
