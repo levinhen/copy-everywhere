@@ -12,6 +12,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.copyeverywhere.app.R
 import com.copyeverywhere.app.data.ApiClient
 import com.copyeverywhere.app.data.ConfigStore
+import com.copyeverywhere.app.data.TransferMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -53,18 +54,32 @@ class ClipboardTrampolineActivity : ComponentActivity() {
 
         scope.launch {
             try {
-                val hostUrl = configStore.hostUrl.first()
-                val accessToken = configStore.getAccessToken()
-                val senderDeviceId = configStore.deviceId.first()
-                val targetDeviceId = configStore.targetDeviceId.first()
+                val mode = configStore.transferMode.first()
 
-                if (hostUrl.isEmpty()) {
-                    Toast.makeText(this@ClipboardTrampolineActivity, "Not configured", Toast.LENGTH_SHORT).show()
-                    finish()
-                    return@launch
+                if (mode == TransferMode.Bluetooth) {
+                    // Bluetooth send
+                    val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
+                    if (session == null || !session.isHandshakeComplete) {
+                        Toast.makeText(this@ClipboardTrampolineActivity, "No Bluetooth device connected", Toast.LENGTH_SHORT).show()
+                        finish()
+                        return@launch
+                    }
+                    session.sendText(text).collect { /* progress not shown for clipboard send */ }
+                } else {
+                    // LAN send
+                    val hostUrl = configStore.hostUrl.first()
+                    val accessToken = configStore.getAccessToken()
+                    val senderDeviceId = configStore.deviceId.first()
+                    val targetDeviceId = configStore.targetDeviceId.first()
+
+                    if (hostUrl.isEmpty()) {
+                        Toast.makeText(this@ClipboardTrampolineActivity, "Not configured", Toast.LENGTH_SHORT).show()
+                        finish()
+                        return@launch
+                    }
+
+                    apiClient.sendTextClip(hostUrl, accessToken, text, senderDeviceId, targetDeviceId)
                 }
-
-                apiClient.sendTextClip(hostUrl, accessToken, text, senderDeviceId, targetDeviceId)
 
                 // Update service notification briefly to show success
                 updateServiceNotification("Sent!")
@@ -72,7 +87,9 @@ class ClipboardTrampolineActivity : ComponentActivity() {
 
                 // Reset notification after a delay
                 kotlinx.coroutines.delay(2000)
-                updateServiceNotification("Listening for clips...")
+                val modeText = if (configStore.transferMode.first() == TransferMode.Bluetooth)
+                    "Bluetooth — Connected" else "Listening for clips..."
+                updateServiceNotification(modeText)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send clipboard", e)
                 val msg = "Send failed: ${e.message}"
@@ -80,7 +97,9 @@ class ClipboardTrampolineActivity : ComponentActivity() {
                 updateServiceNotification(msg)
 
                 kotlinx.coroutines.delay(3000)
-                updateServiceNotification("Listening for clips...")
+                val modeText = if (configStore.transferMode.first() == TransferMode.Bluetooth)
+                    "Bluetooth — Connected" else "Listening for clips..."
+                updateServiceNotification(modeText)
             } finally {
                 finish()
             }

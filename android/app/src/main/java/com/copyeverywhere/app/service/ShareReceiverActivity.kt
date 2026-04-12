@@ -1,5 +1,6 @@
 package com.copyeverywhere.app.service
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -13,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.copyeverywhere.app.data.ApiClient
 import com.copyeverywhere.app.data.ConfigStore
+import com.copyeverywhere.app.data.TransferMode
 import com.copyeverywhere.app.ui.theme.CopyEverywhereTheme
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -57,71 +59,129 @@ private fun ShareReceiverScreen(
     LaunchedEffect(Unit) {
         scope.launch {
             try {
-                val host = configStore.hostUrl.first()
-                val token = configStore.getAccessToken()
-                val sender = configStore.deviceId.first()
-                val target = configStore.targetDeviceId.first()
+                val mode = configStore.transferMode.first()
 
-                if (host.isEmpty()) {
-                    status = ShareStatus.Error("Server not configured. Open CopyEverywhere and set up a server first.")
-                    return@launch
-                }
+                if (mode == TransferMode.Bluetooth) {
+                    // Bluetooth send path
+                    val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
+                    if (session == null || !session.isHandshakeComplete) {
+                        status = ShareStatus.Error("No Bluetooth device connected")
+                        return@launch
+                    }
 
-                when (intent.action) {
-                    Intent.ACTION_SEND -> {
-                        val textExtra = intent.getStringExtra(Intent.EXTRA_TEXT)
-                        val streamUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                    when (intent.action) {
+                        Intent.ACTION_SEND -> {
+                            val textExtra = intent.getStringExtra(Intent.EXTRA_TEXT)
+                            val streamUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
 
-                        if (streamUri != null) {
-                            sendFileUri(
-                                apiClient, contentResolver, host, token, sender, target,
-                                streamUri,
-                                onFileName = { fileName = it },
-                                onProgress = { progress = it },
-                                onSpeed = { speedMbps = it },
-                                onStatusChange = { status = it }
-                            )
-                        } else if (textExtra != null) {
+                            if (streamUri != null) {
+                                sendFileUriBluetooth(
+                                    context, session, streamUri,
+                                    onFileName = { fileName = it },
+                                    onProgress = { progress = it },
+                                    onSpeed = { speedMbps = it },
+                                    onStatusChange = { status = it }
+                                )
+                            } else if (textExtra != null) {
+                                status = ShareStatus.Uploading
+                                fileName = "clipboard.txt"
+                                session.sendText(textExtra).collect { }
+                                status = ShareStatus.Done
+                            } else {
+                                status = ShareStatus.Error("Nothing to share")
+                            }
+                        }
+                        Intent.ACTION_SEND_MULTIPLE -> {
+                            @Suppress("DEPRECATION")
+                            val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                            if (uris.isNullOrEmpty()) {
+                                status = ShareStatus.Error("No files to share")
+                                return@launch
+                            }
                             status = ShareStatus.Uploading
-                            fileName = "clipboard.txt"
-                            apiClient.sendTextClip(host, token, textExtra, sender, target)
+                            fileName = "${uris.size} files"
+                            for ((index, uri) in uris.withIndex()) {
+                                sendFileUriBluetooth(
+                                    context, session, uri,
+                                    onFileName = { fileName = "${index + 1}/${uris.size}: $it" },
+                                    onProgress = { p -> progress = (index.toDouble() + p) / uris.size },
+                                    onSpeed = { speedMbps = it },
+                                    onStatusChange = { s -> if (s is ShareStatus.Error) status = s }
+                                )
+                                if (status is ShareStatus.Error) return@launch
+                            }
                             status = ShareStatus.Done
-                        } else {
-                            status = ShareStatus.Error("Nothing to share")
                         }
+                        else -> status = ShareStatus.Error("Unsupported share action")
                     }
-                    Intent.ACTION_SEND_MULTIPLE -> {
-                        @Suppress("DEPRECATION")
-                        val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
-                        if (uris.isNullOrEmpty()) {
-                            status = ShareStatus.Error("No files to share")
-                            return@launch
-                        }
-                        status = ShareStatus.Uploading
-                        fileName = "${uris.size} files"
-                        for ((index, uri) in uris.withIndex()) {
-                            val name = ApiClient.getFileName(contentResolver, uri)
-                            fileName = "${index + 1}/${uris.size}: $name"
-                            progress = index.toDouble() / uris.size
-                            sendFileUri(
-                                apiClient, contentResolver, host, token, sender, target,
-                                uri,
-                                onFileName = { fileName = "${index + 1}/${uris.size}: $it" },
-                                onProgress = { p ->
-                                    progress = (index.toDouble() + p) / uris.size
-                                },
-                                onSpeed = { speedMbps = it },
-                                onStatusChange = { s ->
-                                    // Only propagate error, otherwise keep uploading
-                                    if (s is ShareStatus.Error) status = s
-                                }
-                            )
-                            if (status is ShareStatus.Error) return@launch
-                        }
-                        status = ShareStatus.Done
+                } else {
+                    // LAN send path
+                    val host = configStore.hostUrl.first()
+                    val token = configStore.getAccessToken()
+                    val sender = configStore.deviceId.first()
+                    val target = configStore.targetDeviceId.first()
+
+                    if (host.isEmpty()) {
+                        status = ShareStatus.Error("Server not configured. Open CopyEverywhere and set up a server first.")
+                        return@launch
                     }
-                    else -> {
-                        status = ShareStatus.Error("Unsupported share action")
+
+                    when (intent.action) {
+                        Intent.ACTION_SEND -> {
+                            val textExtra = intent.getStringExtra(Intent.EXTRA_TEXT)
+                            val streamUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+
+                            if (streamUri != null) {
+                                sendFileUri(
+                                    apiClient, contentResolver, host, token, sender, target,
+                                    streamUri,
+                                    onFileName = { fileName = it },
+                                    onProgress = { progress = it },
+                                    onSpeed = { speedMbps = it },
+                                    onStatusChange = { status = it }
+                                )
+                            } else if (textExtra != null) {
+                                status = ShareStatus.Uploading
+                                fileName = "clipboard.txt"
+                                apiClient.sendTextClip(host, token, textExtra, sender, target)
+                                status = ShareStatus.Done
+                            } else {
+                                status = ShareStatus.Error("Nothing to share")
+                            }
+                        }
+                        Intent.ACTION_SEND_MULTIPLE -> {
+                            @Suppress("DEPRECATION")
+                            val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                            if (uris.isNullOrEmpty()) {
+                                status = ShareStatus.Error("No files to share")
+                                return@launch
+                            }
+                            status = ShareStatus.Uploading
+                            fileName = "${uris.size} files"
+                            for ((index, uri) in uris.withIndex()) {
+                                val name = ApiClient.getFileName(contentResolver, uri)
+                                fileName = "${index + 1}/${uris.size}: $name"
+                                progress = index.toDouble() / uris.size
+                                sendFileUri(
+                                    apiClient, contentResolver, host, token, sender, target,
+                                    uri,
+                                    onFileName = { fileName = "${index + 1}/${uris.size}: $it" },
+                                    onProgress = { p ->
+                                        progress = (index.toDouble() + p) / uris.size
+                                    },
+                                    onSpeed = { speedMbps = it },
+                                    onStatusChange = { s ->
+                                        // Only propagate error, otherwise keep uploading
+                                        if (s is ShareStatus.Error) status = s
+                                    }
+                                )
+                                if (status is ShareStatus.Error) return@launch
+                            }
+                            status = ShareStatus.Done
+                        }
+                        else -> {
+                            status = ShareStatus.Error("Unsupported share action")
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -202,6 +262,30 @@ private fun ShareReceiverScreen(
                 }
             }
         }
+    }
+}
+
+private suspend fun sendFileUriBluetooth(
+    context: Context,
+    session: com.copyeverywhere.app.data.BluetoothSession,
+    uri: Uri,
+    onFileName: (String) -> Unit,
+    onProgress: (Double) -> Unit,
+    onSpeed: (Double) -> Unit,
+    onStatusChange: (ShareStatus) -> Unit
+) {
+    val resolver = context.contentResolver
+    val name = ApiClient.getFileName(resolver, uri)
+    val size = ApiClient.getFileSize(resolver, uri)
+    onFileName(name)
+    onStatusChange(ShareStatus.Uploading)
+
+    val startTime = System.currentTimeMillis()
+    session.sendFile(context, uri).collect { p ->
+        onProgress(p)
+        val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+        val sentBytes = p * size
+        if (elapsed > 0) onSpeed(sentBytes / elapsed / (1024 * 1024))
     }
 }
 

@@ -17,6 +17,7 @@ import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.service.CopyEverywhereService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,11 +72,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _sendStatus.value = SendStatus.Sending
             try {
-                val host = hostUrl.value
-                val token = configStore.getAccessToken()
-                val sender = deviceId.value
-                val target = targetDeviceId.value
-                apiClient.sendTextClip(host, token, text, sender, target)
+                if (transferMode.value == TransferMode.Bluetooth) {
+                    val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
+                    if (session == null || !session.isHandshakeComplete) {
+                        _sendStatus.value = SendStatus.Error("No Bluetooth device connected")
+                        delay(3000)
+                        _sendStatus.value = SendStatus.Idle
+                        return@launch
+                    }
+                    session.sendText(text).collect { /* progress not shown for text */ }
+                } else {
+                    val host = hostUrl.value
+                    val token = configStore.getAccessToken()
+                    val sender = deviceId.value
+                    val target = targetDeviceId.value
+                    apiClient.sendTextClip(host, token, text, sender, target)
+                }
                 _textInput.value = ""
                 _sendStatus.value = SendStatus.Success
                 delay(2000)
@@ -90,15 +102,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendFile(uri: Uri) {
         viewModelScope.launch {
-            val contentResolver = getApplication<Application>().contentResolver
-            val fileSize = ApiClient.getFileSize(contentResolver, uri)
-            val fileName = ApiClient.getFileName(contentResolver, uri)
-
-            if (fileSize >= CHUNKED_THRESHOLD) {
-                startChunkedUpload(uri, fileName)
+            if (transferMode.value == TransferMode.Bluetooth) {
+                sendFileBluetooth(uri)
             } else {
-                sendSmallFile(uri, fileName)
+                val contentResolver = getApplication<Application>().contentResolver
+                val fileSize = ApiClient.getFileSize(contentResolver, uri)
+                val fileName = ApiClient.getFileName(contentResolver, uri)
+
+                if (fileSize >= CHUNKED_THRESHOLD) {
+                    startChunkedUpload(uri, fileName)
+                } else {
+                    sendSmallFile(uri, fileName)
+                }
             }
+        }
+    }
+
+    private suspend fun sendFileBluetooth(uri: Uri) {
+        val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
+        if (session == null || !session.isHandshakeComplete) {
+            _sendStatus.value = SendStatus.Error("No Bluetooth device connected")
+            delay(3000)
+            _sendStatus.value = SendStatus.Idle
+            return
+        }
+
+        val contentResolver = getApplication<Application>().contentResolver
+        val fileName = ApiClient.getFileName(contentResolver, uri)
+        val fileSize = ApiClient.getFileSize(contentResolver, uri)
+
+        _uploadProgress.value = UploadProgress(
+            fileName = fileName,
+            progress = 0.0,
+            speedMbps = 0.0,
+            isPaused = false
+        )
+
+        try {
+            val startTime = System.currentTimeMillis()
+            session.sendFile(getApplication<Application>(), uri).collect { p ->
+                val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+                val sentBytes = (p * fileSize)
+                val speed = if (elapsed > 0) sentBytes / elapsed / (1024 * 1024) else 0.0
+                _uploadProgress.value = _uploadProgress.value?.copy(progress = p, speedMbps = speed)
+            }
+            _uploadProgress.value = null
+            _sendStatus.value = SendStatus.Success
+            delay(2000)
+            _sendStatus.value = SendStatus.Idle
+        } catch (e: Exception) {
+            _uploadProgress.value = null
+            _sendStatus.value = SendStatus.Error(e.message ?: "Bluetooth send failed")
+            delay(3000)
+            _sendStatus.value = SendStatus.Idle
         }
     }
 
