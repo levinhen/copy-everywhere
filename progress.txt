@@ -9,6 +9,7 @@
 - mDNS service type is `_copyeverywhere._tcp` (constant in `discovery.ServiceType`). TXT records: `version`, `auth`. Clients browse this same type for auto-discovery.
 - Server host app (`macos/CopyEverywhereServer/`) follows the same AppDelegate + NSStatusItem + NSPopover pattern as the client. `ServerProcess` is the subprocess manager (`@MainActor` ObservableObject).
 - Go binary path convention: sibling `copyeverywhere-server` next to the Swift executable. Build independently with `go build -o copyeverywhere-server .` in `server/`.
+- Server host app config persisted to `~/Library/Application Support/CopyEverywhereServer/config.json`. `ServerConfig.environment` provides the env dict for `ServerProcess`.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -83,4 +84,26 @@
   - `Pipe.fileHandleForReading.readabilityHandler` is the async-compatible way to stream subprocess output without blocking.
   - Icon tinting via `NSImage` drawing with `.sourceAtop` compositing works for SF Symbols but requires `isTemplate = false`.
   - The server host app is intentionally minimal for US-037A — config panel (US-037B) and launch-at-login (US-037C) are separate stories.
+---
+
+## 2026-04-12 - US-037B
+- What was implemented:
+  - New `ServerConfig.swift` — `@MainActor` ObservableObject persisting config to `~/Library/Application Support/CopyEverywhereServer/config.json`
+  - Config fields: port (default 8080), storage path (default ~/Library/Application Support/CopyEverywhereServer/data), TTL hours, auth enabled, access token
+  - `ServerConfig.environment` computed property provides env vars for the Go subprocess
+  - `ServerProcess.config` now points to `ServerConfig` instead of a raw `[String: String]` dict
+  - `MenuBarView` expanded with: status section (listen address, storage path, used space), config fields with Save/Save & Restart, Clear logs button, Browse button for storage path
+  - `AppDelegate` creates both `ServerConfig` and `ServerProcess`, wires them together, passes both as `@EnvironmentObject`
+  - Popover size increased to 520pt to fit new config section
+- Files changed:
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/ServerConfig.swift — new file
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/MenuBarView.swift — rewritten with config panel
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/ServerProcess.swift — config property replaces environment dict
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/CopyEverywhereServerApp.swift — wires ServerConfig
+  - CLAUDE.md — documented ServerConfig persistence pattern
+  - prd.json — US-037B passes: true
+- **Learnings for future iterations:**
+  - `@MainActor` classes can't call their own static methods from `Task.detached` — use `nonisolated static` for pure utility functions like directory size calculation.
+  - SwiftUI `frame(width:maxHeight:)` doesn't exist as a combined overload — use `frame(width:height:)` with a `ScrollView` inside for flexible content.
+  - `ServerConfig` default storage path uses Application Support, not the working directory, since the SPM executable doesn't have a stable working dir.
 ---
