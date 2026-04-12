@@ -64,6 +64,23 @@
                            FontSize="12"/>
             </Border>
 
+            <!-- Device Info (read-only, shown when registered) -->
+            <StackPanel x:Name="DeviceInfoPanel" Visibility="Collapsed" Margin="0,0,0,12">
+                <TextBlock Text="Registered Device" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Padding="8,6" Background="#F9F9F9">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock Text="Name: " FontSize="12" Foreground="Gray"/>
+                            <TextBlock x:Name="DeviceNameText" FontSize="12"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="ID: " FontSize="12" Foreground="Gray"/>
+                            <TextBlock x:Name="DeviceIdText" FontSize="12" FontFamily="Consolas"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
             <!-- Separator -->
             <Separator Margin="0,4,0,16"/>
 

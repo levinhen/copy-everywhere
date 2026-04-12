@@ -161,6 +161,20 @@ public class ApiClient : IDisposable
         }
     }
 
+    public async Task<DeviceRegisterResponse?> RegisterDeviceAsync(string name, string platform, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var body = JsonSerializer.Serialize(new { name, platform });
+        var content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/devices/register", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<DeviceRegisterResponse>(json);
+    }
+
     public async Task<ClipResponse?> SendTextClipAsync(string text, CancellationToken ct = default)
     {
         SetAuthHeader();
@@ -350,6 +364,12 @@ public class ApiClient : IDisposable
     {
         _httpClient.Dispose();
     }
+}
+
+public class DeviceRegisterResponse
+{
+    [JsonPropertyName("device_id")]
+    public string DeviceId { get; set; } = "";
 }
 
 public class UploadInitResponse

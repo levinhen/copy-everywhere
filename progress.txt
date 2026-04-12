@@ -47,6 +47,8 @@
 - Chunked upload 409 from PUT parts means chunk already uploaded — treat as success during resume
 - Windows HistoryStore uses JSON file in AppData/Local/CopyEverywhere/history.json (mirrors macOS UserDefaults approach)
 - WPF history list built programmatically with DockPanel rows, Border.MouseLeftButtonUp for click-to-copy, Button.Tag for passing ClipId
+- Windows device config (device_id, device_name) persisted as JSON in %LOCALAPPDATA%\CopyEverywhere\config.json — not in Credential Manager (not a secret)
+- Windows device registration on save: best-effort POST /devices/register in SaveButton_Click, exceptions swallowed
 - GET /api/v1/clips/:id/raw is now an atomic consume: first caller wins, second gets 410 Gone; async goroutine cleans up files/DB after response
 - GET /api/v1/clips?device_id=XXX returns the queue view; GET /api/v1/clips/latest is deprecated (sends Deprecation header)
 - Device IDs are 8-char alphanumeric (vs 6-char for clip IDs); both use `generateRandomID(length)` in `db/db.go`
@@ -467,4 +469,19 @@
   - SSE event parsing: empty line = event boundary; accumulate `event:` and `data:` lines, then dispatch on empty line.
   - `startSSE()` must be idempotent — guard against `sseTask != nil` to avoid duplicate connections.
   - Multipart sends use `appendDeviceFields` helper; chunked uploads use JSON body — two different patterns for the same device ID fields.
+---
+
+## 2026-04-12 - US-029
+- What was implemented: Windows device registration on first launch — when user saves config, the app calls POST /devices/register with Environment.MachineName and platform "windows"; device_id is persisted in %LOCALAPPDATA%\CopyEverywhere\config.json; config UI shows registered device name and ID read-only; re-registering is a no-op (server-side idempotence)
+- Files changed:
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` — Added DeviceId/DeviceName properties, SaveDeviceConfig/LoadDeviceConfig methods using JSON in %LOCALAPPDATA%\CopyEverywhere\config.json, added DeviceConfig internal class
+  - `windows/CopyEverywhere/Services/ApiClient.cs` — Added RegisterDeviceAsync(name, platform) method and DeviceRegisterResponse model
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added DeviceInfoPanel with device name and ID display (read-only)
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Made SaveButton_Click async, added RegisterDeviceAsync() and UpdateDeviceInfoDisplay() methods
+  - `prd.json` — Marked US-029 passes: true
+- **Learnings for future iterations:**
+  - Windows device config uses JSON file at %LOCALAPPDATA%\CopyEverywhere\config.json (not Credential Manager — device info is not a secret)
+  - Registration is best-effort in the save flow — catch all exceptions silently so save always succeeds
+  - Device info display panel is separate from status — shown when DeviceId is populated, hidden otherwise
+  - Environment.MachineName gives the Windows machine name (equivalent to macOS Host.current().localizedName)
 ---

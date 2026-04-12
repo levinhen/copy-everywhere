@@ -44,6 +44,7 @@ public partial class MainWindow : Window
         AccessTokenBox.Password = _configStore.AccessToken;
 
         UpdateMainPanelState();
+        UpdateDeviceInfoDisplay();
         RefreshClipboardPreview();
         RefreshHistoryList();
     }
@@ -53,7 +54,7 @@ public partial class MainWindow : Window
         _configStore.AccessToken = AccessTokenBox.Password;
     }
 
-    private void SaveButton_Click(object sender, RoutedEventArgs e)
+    private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_configStore.HostUrl))
         {
@@ -70,6 +71,41 @@ public partial class MainWindow : Window
         _configStore.Save();
         ShowStatus("Configuration saved", isError: false);
         UpdateMainPanelState();
+
+        // Register device with the server (best-effort)
+        await RegisterDeviceAsync();
+    }
+
+    private async System.Threading.Tasks.Task RegisterDeviceAsync()
+    {
+        try
+        {
+            var name = Environment.MachineName;
+            var result = await _apiClient.RegisterDeviceAsync(name, "windows");
+            if (result != null && !string.IsNullOrEmpty(result.DeviceId))
+            {
+                _configStore.SaveDeviceConfig(result.DeviceId, name);
+                UpdateDeviceInfoDisplay();
+            }
+        }
+        catch
+        {
+            // Registration is best-effort — don't block the save flow
+        }
+    }
+
+    private void UpdateDeviceInfoDisplay()
+    {
+        if (!string.IsNullOrEmpty(_configStore.DeviceId))
+        {
+            DeviceInfoPanel.Visibility = Visibility.Visible;
+            DeviceNameText.Text = _configStore.DeviceName;
+            DeviceIdText.Text = _configStore.DeviceId;
+        }
+        else
+        {
+            DeviceInfoPanel.Visibility = Visibility.Collapsed;
+        }
     }
 
     private async void TestConnectionButton_Click(object sender, RoutedEventArgs e)
