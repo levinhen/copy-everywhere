@@ -4,7 +4,7 @@ Android Client — Progress Tracker
 US-051: Android project scaffold and build pipeline         [x]
 US-052: Configuration screen and persistence                [x]
 US-053: mDNS server discovery                               [x]
-US-054: API client — small clip send (text + file < 50 MB)  [ ]
+US-054: API client — small clip send (text + file < 50 MB)  [x]
 US-055: API client — chunked upload (file >= 50 MB)         [ ]
 US-056: API client — receive clip (metadata + download)     [ ]
 US-057: SSE client and auto-receive                         [ ]
@@ -91,4 +91,23 @@ US-068: Boot receiver and battery optimization              [ ]
   - `DisposableEffect(Unit)` is the right pattern for start/stop lifecycle tied to composable visibility
   - NsdManager discovery doesn't need extra permissions beyond INTERNET
   - Must track pending resolves to avoid duplicate resolve calls for the same service
+---
+
+## 2026-04-12 - US-054
+- Added sendTextClip() and sendFileClip() methods to ApiClient
+- Text clips: multipart POST with type=text, filename=clipboard.txt, content-type=text/plain
+- File clips: stream from content URI via custom RequestBody (okio source), no full ByteArray in memory
+- Added ClipResponse data class for server response parsing
+- Added companion object helpers: getFileName(), getFileSize(), guessMimeType() for URI resolution
+- Multipart fields: type, content (file part), sender_device_id, target_device_id
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`
+- **Learnings for future iterations:**
+  - OkHttp `MultipartBody.Builder` handles boundary generation automatically — no hand-rolling needed like macOS Swift
+  - Use okio `source()` on InputStream + `sink.writeAll()` for streaming file uploads without loading into memory
+  - Custom `RequestBody` subclass with `writeTo(BufferedSink)` is the pattern for streaming uploads from content URIs
+  - `ContentResolver.query()` with `OpenableColumns.DISPLAY_NAME` and `OpenableColumns.SIZE` to get file metadata from URIs
+  - `MimeTypeMap.getSingleton().getMimeTypeFromExtension()` for MIME type guessing from filename extension
+  - Image clips use type="image", regular files use type="file" — matches server expectations
+  - `getFileName()`, `getFileSize()`, `guessMimeType()` placed in companion object for reuse in chunked upload (US-055)
 ---
