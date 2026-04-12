@@ -133,6 +133,9 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **RFCOMM server SDP attributes.** `RfcommServiceProvider.SdpRawAttributes[0x0100]` writes the service name. Format: `0x25` (UTF-8 type byte) + length byte + string bytes.
 - **RFCOMM client discovery.** `RfcommDeviceService.GetDeviceSelector(RfcommServiceId)` builds a selector for `DeviceInformation.FindAllAsync()`. For reconnecting by address, use `BluetoothDevice.FromBluetoothAddressAsync()` + `GetRfcommServicesForIdAsync()`.
 - **StreamSocket I/O.** `DataWriter(socket.OutputStream)` / `DataReader(socket.InputStream)` are the WinRT equivalents of IOBluetooth's `writeAsync`/`rfcommChannelData`. Set `DataReader.InputStreamOptions = InputStreamOptions.Partial` for streaming reads.
+- **Bluetooth RFCOMM protocol (Windows).** `BluetoothSession` mirrors macOS `BluetoothProtocol.swift`. Same wire format: newline-delimited JSON headers (`0x0A`) + raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON + `\n` + content bytes. Cross-platform interop with macOS.
+- **`BluetoothSession` lifecycle.** Created by `BluetoothService.CreateSession()` on RFCOMM connect. `StartAsync()` sends handshake and starts the receive loop. Events: `HandshakeCompleted`, `HandshakeFailed`, `TransferReceived`, `ReceiveProgress`, `ReceiveFailed`. `BluetoothService` exposes `ActiveSession`, `SessionReady`, `SessionHandshakeFailed`.
+- **`BluetoothTransferHeader.Type` serialization.** Uses a string-backed `TypeString` property for JSON (`"text"`/`"file"` lowercase) with a `[JsonIgnore]` convenience `Type` property mapping to `BluetoothContentType` enum.
 
 **Cross-platform:**
 

@@ -32,6 +32,7 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
     private DataWriter? _activeWriter;
     private DataReader? _activeReader;
     private BluetoothDevice? _connectedDevice;
+    private BluetoothSession? _activeSession;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -41,6 +42,10 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
     public event Action<StreamSocket, BluetoothDevice?>? Connected;
     /// Fired when a connection attempt (server publish or client connect) fails.
     public event Action<Exception>? ConnectionFailed;
+    /// Fired when the session handshake completes and the session is ready for transfers.
+    public event Action<BluetoothSession>? SessionReady;
+    /// Fired when the session handshake fails.
+    public event Action<Exception>? SessionHandshakeFailed;
 
     public bool IsServerRunning
     {
@@ -58,6 +63,7 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
     public DataWriter? ActiveWriter => _activeWriter;
     public DataReader? ActiveReader => _activeReader;
     public BluetoothDevice? ConnectedDevice => _connectedDevice;
+    public BluetoothSession? ActiveSession => _activeSession;
     public bool IsConnected => _activeSocket != null;
 
     // ── Server mode ──────────────────────────────────────────────────
@@ -235,11 +241,34 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(IsConnected));
         OnPropertyChanged(nameof(ActiveSocket));
         OnPropertyChanged(nameof(ConnectedDevice));
+
+        // Create session and start handshake
+        CreateSession(socket, device);
+    }
+
+    private async void CreateSession(StreamSocket socket, BluetoothDevice? device)
+    {
+        var session = new BluetoothSession(socket, device);
+        session.HandshakeCompleted += s => SessionReady?.Invoke(s);
+        session.HandshakeFailed += (s, ex) => SessionHandshakeFailed?.Invoke(ex);
+        _activeSession = session;
+        OnPropertyChanged(nameof(ActiveSession));
+
+        try
+        {
+            await session.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            SessionHandshakeFailed?.Invoke(ex);
+        }
     }
 
     /// Disconnect the active RFCOMM connection.
     public void Disconnect()
     {
+        _activeSession?.Dispose();
+        _activeSession = null;
         _activeWriter?.Dispose();
         _activeWriter = null;
         _activeReader?.Dispose();
@@ -250,6 +279,7 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
         _connectedDevice = null;
         OnPropertyChanged(nameof(IsConnected));
         OnPropertyChanged(nameof(ActiveSocket));
+        OnPropertyChanged(nameof(ActiveSession));
         OnPropertyChanged(nameof(ConnectedDevice));
     }
 

@@ -232,7 +232,7 @@
         "dotnet build succeeds"
       ],
       "priority": 15,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-045 — protocol layer on top of US-045A"
     },
     {

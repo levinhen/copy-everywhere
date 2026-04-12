@@ -29,6 +29,8 @@
 - Bluetooth event delegation chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSessionDelegate`) → `ConfigStore` (as `BluetoothServiceDelegate`). All new events need wiring through both layers.
 - Windows Bluetooth RFCOMM uses WinRT APIs. TFM must be `net8.0-windows10.0.19041.0` (not plain `net8.0-windows`) for `Windows.Devices.Bluetooth.Rfcomm` access.
 - Windows `BluetoothService` uses events (`ConnectionAccepted`, `Connected`, `ConnectionFailed`) instead of macOS delegate pattern. `StreamSocket` + `DataWriter`/`DataReader` are the I/O primitives.
+- Windows `BluetoothSession` mirrors macOS `BluetoothSession` — same wire format, handshake, transfer protocol. Uses events instead of delegate pattern. `BluetoothService.CreateSession()` auto-creates on connect.
+- For cross-platform JSON enum interop (macOS sends lowercase), use string-backed properties in C# instead of `JsonStringEnumConverter`.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -356,5 +358,29 @@
   - `RfcommServiceProvider.SdpRawAttributes` requires manually writing SDP attribute bytes (type byte + length + value) — there's no high-level helper.
   - `BluetoothDevice.FromHostNameAsync()` can resolve the remote device from a `StreamSocket` connection's `RemoteHostName`, but may fail for some connection types — handle gracefully.
   - `ConnectByAddressAsync()` (via `BluetoothDevice.FromBluetoothAddressAsync` + `GetRfcommServicesForIdAsync`) is the pattern for reconnecting to known devices without re-scanning.
+  - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
+---
+
+## 2026-04-12 - US-045B
+- What was implemented:
+  - New `Services/BluetoothSession.cs` — app-layer protocol on top of RFCOMM StreamSocket, mirroring macOS `BluetoothProtocol.swift`
+  - Handshake: both sides exchange `{"app":"CopyEverywhere","version":"3.0"}\n` with 5s timeout
+  - Transfer protocol: `BluetoothTransferHeader` JSON (`type`, `filename`, `size`) + newline delimiter + raw content bytes
+  - `SendTextAsync(text, progress)` for text payloads, `SendFileAsync(filePath, progress)` with chunked file streaming (16KB chunks)
+  - Receive loop using `DataReader.LoadAsync()` with buffer-based state machine: handshake → header → content accumulation
+  - Size verification: received byte count checked against header-declared size on completion
+  - Events: `HandshakeCompleted`, `HandshakeFailed`, `TransferReceived`, `ReceiveProgress`, `ReceiveFailed`
+  - Progress reporting via `IProgress<double>` for send, events for receive
+  - `BluetoothService.cs` updated: `ActiveSession` property, `CreateSession()` auto-creates session on connect, `SessionReady`/`SessionHandshakeFailed` events, session disposed on disconnect
+  - Cross-platform interop: identical wire format to macOS (JSON headers + newline delimiter + content bytes)
+- Files changed:
+  - windows/CopyEverywhere/Services/BluetoothSession.cs — new file
+  - windows/CopyEverywhere/Services/BluetoothService.cs — session management, events
+  - CLAUDE.md — documented Windows Bluetooth protocol patterns
+  - prd.json — US-045B passes: true
+- **Learnings for future iterations:**
+  - `JsonStringEnumConverter` in .NET 8 uses PascalCase by default. For cross-platform interop with macOS (which sends lowercase `"text"`/`"file"`), use a string-backed property with a `[JsonIgnore]` convenience enum property.
+  - `DataReader.LoadAsync()` with `InputStreamOptions.Partial` returns available bytes without blocking for a full buffer — essential for streaming protocols.
+  - `BluetoothSession` creates its own `DataWriter`/`DataReader` from the socket — independent of `BluetoothService`'s writer/reader which remain for backward compatibility.
   - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
 ---
