@@ -5,6 +5,7 @@ import ServiceManagement
 @MainActor
 final class ServerConfig: ObservableObject {
     @Published var port: String = "8080"
+    @Published var bindAddress: String = "0.0.0.0"
     @Published var storagePath: String = ""
     @Published var ttlHours: Int = 1
     @Published var authEnabled: Bool = false
@@ -64,6 +65,7 @@ final class ServerConfig: ObservableObject {
     var environment: [String: String] {
         var env: [String: String] = [
             "PORT": port,
+            "BIND_ADDRESS": bindAddress,
             "STORAGE_PATH": storagePath,
             "TTL_HOURS": String(ttlHours),
             "AUTH_ENABLED": authEnabled ? "true" : "false",
@@ -79,6 +81,7 @@ final class ServerConfig: ObservableObject {
     func save() {
         let data = ConfigData(
             port: port,
+            bindAddress: bindAddress,
             storagePath: storagePath,
             ttlHours: ttlHours,
             authEnabled: authEnabled,
@@ -97,6 +100,7 @@ final class ServerConfig: ObservableObject {
         guard let json = try? Data(contentsOf: configURL),
               let data = try? JSONDecoder().decode(ConfigData.self, from: json) else { return }
         port = data.port
+        bindAddress = data.bindAddress ?? "0.0.0.0"
         storagePath = data.storagePath
         ttlHours = data.ttlHours
         authEnabled = data.authEnabled
@@ -133,6 +137,7 @@ final class ServerConfig: ObservableObject {
 
 private struct ConfigData: Codable {
     var port: String
+    var bindAddress: String?
     var storagePath: String
     var ttlHours: Int
     var authEnabled: Bool

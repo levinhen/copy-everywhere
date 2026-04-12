@@ -41,7 +41,7 @@ Server (run from [server/](server/)):
 go build ./...                          # build
 go test ./...                           # all tests
 go test ./handlers -run TestUploadPart  # single test
-go run .                                # local run, no auth (also reads PORT, STORAGE_PATH, MAX_CLIP_SIZE_MB, TTL_HOURS)
+go run .                                # local run, no auth (also reads PORT, BIND_ADDRESS, STORAGE_PATH, MAX_CLIP_SIZE_MB, TTL_HOURS)
 AUTH_ENABLED=true ACCESS_TOKEN=dev go run .  # local run with auth enabled
 docker compose up --build               # containerized
 ```
@@ -66,6 +66,7 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 
 **Server (Go):**
 
+- **`BIND_ADDRESS` env var (default `0.0.0.0`)** controls which interface the server listens on. The listen address is `BIND_ADDRESS:PORT`. MenuBarExtra config panel exposes this as the "Bind address" field; value forwarded to the Go subprocess via `ServerConfig.environment`.
 - **Auth is opt-in via `AUTH_ENABLED` env var (default `false`).** When false, the auth middleware is not applied and clients should not send `Authorization` headers. The `/health` endpoint exposes `"auth": true|false` so clients can discover whether auth is required. Both macOS `ConfigStore.setAuthHeader()` and Windows `ApiClient.SetAuthHeader()` skip the header when `accessToken` is empty.
 - **SSE broker is a shared singleton.** `sse.NewBroker()` is created once in `main.go` and injected into `ClipHandler`, `UploadHandler`, and `DeviceHandler`. Targeted clip notifications flow through `Broker.Notify(targetDeviceID, event)` — call it after a clip with `TargetDeviceID != nil` becomes `ready` (single-shot upload or chunked complete). SSE tests need `httptest.NewServer` (not `NewRecorder`) because streaming requires a real HTTP connection.
 - **mDNS service broadcast.** `discovery/` package wraps `github.com/hashicorp/mdns` (pure-Go, no CGO). Service type is `_copyeverywhere._tcp`. TXT records carry `version` and `auth` fields. `main.go` starts mDNS after config load and deregisters on SIGINT/SIGTERM.

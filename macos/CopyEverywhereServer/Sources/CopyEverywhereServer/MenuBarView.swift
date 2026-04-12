@@ -53,7 +53,7 @@ struct MenuBarView: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
-            LabeledRow(label: "Listen address", value: "0.0.0.0:\(serverConfig.port)")
+            LabeledRow(label: "Listen address", value: "\(serverConfig.bindAddress):\(serverConfig.port)")
             LabeledRow(label: "Storage path", value: serverConfig.storagePath)
             LabeledRow(label: "Used space", value: formattedSize(serverConfig.usedSpaceBytes))
         }
@@ -66,6 +66,14 @@ struct MenuBarView: View {
             Text("Configuration")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
+
+            HStack {
+                Text("Bind address")
+                    .frame(width: 90, alignment: .leading)
+                TextField("0.0.0.0", text: $serverConfig.bindAddress)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 120)
+            }
 
             HStack {
                 Text("Port")

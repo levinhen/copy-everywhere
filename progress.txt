@@ -11,6 +11,7 @@
 - Go binary path convention: sibling `copyeverywhere-server` next to the Swift executable. Build independently with `go build -o copyeverywhere-server .` in `server/`.
 - Server host app config persisted to `~/Library/Application Support/CopyEverywhereServer/config.json`. `ServerConfig.environment` provides the env dict for `ServerProcess`.
 - Launch at Login uses `SMAppService.mainApp` (ServiceManagement, macOS 13+). Sync actual status on init via `.status == .enabled` since users can toggle login items in System Settings independently.
+- Adding a new server env var requires updates in 5 places: config.Config + Load(), main.go usage, docker-compose.yml, ServerConfig.swift (env dict + persistence + ConfigData), MenuBarView.swift (config UI).
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -125,4 +126,25 @@
   - `SMAppService.mainApp` requires a proper app bundle with a bundle identifier to work at runtime. SPM executables lack this by default — the feature will build but won't function until the app is packaged as a .app bundle.
   - Use `SMAppService.mainApp.status == .enabled` to read current state on launch rather than relying solely on persisted config, since the user can change login items in System Settings independently.
   - Making `ConfigData.launchAtLogin` optional (`Bool?`) avoids breaking deserialization of existing config files that don't have the field.
+---
+
+## 2026-04-12 - US-038
+- What was implemented:
+  - Added `BIND_ADDRESS` env var (default `0.0.0.0`) to server `config.Config`
+  - `main.go` listen address changed from `:<port>` to `<bind_address>:<port>`; startup log prints actual listen address
+  - MenuBarExtra `ServerConfig.swift`: added `bindAddress` property, persisted in config.json, forwarded via `environment` dict
+  - MenuBarExtra `MenuBarView.swift`: added "Bind address" config field; status section shows dynamic bind address instead of hardcoded `0.0.0.0`
+  - `docker-compose.yml` updated with `BIND_ADDRESS` env var
+  - CLAUDE.md updated with BIND_ADDRESS convention
+- Files changed:
+  - server/config/config.go — added BindAddress field
+  - server/main.go — use BindAddress in listen addr format
+  - server/docker-compose.yml — BIND_ADDRESS env var
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/ServerConfig.swift — bindAddress property + persistence
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/MenuBarView.swift — bind address config field + dynamic status
+  - CLAUDE.md — documented BIND_ADDRESS convention
+  - prd.json — US-038 passes: true
+- **Learnings for future iterations:**
+  - When adding new env vars to the Go server, remember to also update: (1) `config.Config` struct + `Load()`, (2) `main.go` usage, (3) `docker-compose.yml`, (4) `ServerConfig.swift` environment dict + persistence, (5) `MenuBarView.swift` config UI.
+  - `ConfigData` fields for new optional settings should be `Optional` (`String?`, `Bool?`) to maintain backward compatibility with existing config.json files.
 ---

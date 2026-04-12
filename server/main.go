@@ -101,7 +101,7 @@ func main() {
 		api.GET("/devices/:id/stream", deviceHandler.Stream)
 	}
 
-	addr := fmt.Sprintf(":%s", cfg.Port)
+	addr := fmt.Sprintf("%s:%s", cfg.BindAddress, cfg.Port)
 	log.Printf("CopyEverywhere server starting on %s (storage: %s, max_clip: %dMB, ttl: %dh)",
 		addr, cfg.StoragePath, cfg.MaxClipSizeMB, cfg.TTLHours)
 
