@@ -18,6 +18,7 @@ public class HealthResponse
 {
     public string Version { get; set; } = "";
     public string Uptime { get; set; } = "";
+    public bool? Auth { get; set; }
 }
 
 public class TestConnectionResult
@@ -119,6 +120,12 @@ public class ApiClient : IDisposable
             {
                 PropertyNameCaseInsensitive = true,
             });
+
+            // Update ServerAuthRequired from /health response
+            if (health?.Auth != null)
+            {
+                _config.ServerAuthRequired = health.Auth;
+            }
 
             // Verify auth works by calling an authed endpoint
             SetAuthHeader();

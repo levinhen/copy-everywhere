@@ -13,6 +13,8 @@
 - Launch at Login uses `SMAppService.mainApp` (ServiceManagement, macOS 13+). Sync actual status on init via `.status == .enabled` since users can toggle login items in System Settings independently.
 - Adding a new server env var requires updates in 5 places: config.Config + Load(), main.go usage, docker-compose.yml, ServerConfig.swift (env dict + persistence + ConfigData), MenuBarView.swift (config UI).
 - macOS client uses `NWBrowser` (Network.framework) for Bonjour discovery of `_copyeverywhere._tcp` services. Resolve endpoints via temporary `NWConnection` to get IP:port.
+- Windows client uses `Zeroconf` NuGet for mDNS browsing. Service type is `_copyeverywhere._tcp.local.` (note trailing `.local.`). Periodic scan via `ZeroconfResolver.ResolveAsync`.
+- `ServerAuthRequired` property (nullable bool) on ConfigStore is populated from mDNS TXT `auth` field or `/health` response `auth` field. Controls Access Token field visibility.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -175,4 +177,29 @@
   - `NWTXTRecord.Entry` cases are `.string`, `.data`, `.empty`, `.none` — no `.rawBytes` case exists.
   - To resolve a Bonjour service endpoint to an actual IP:port, create a temporary `NWConnection` and read `currentPath?.remoteEndpoint` when `.ready`.
   - `NWBrowser.browseResultsChangedHandler` fires with the full current set of results, not deltas — diff against existing state manually.
+---
+
+## 2026-04-12 - US-040
+- What was implemented:
+  - Added `Zeroconf` NuGet package (v3.6.11) for .NET mDNS/DNS-SD browsing
+  - New `Services/MdnsDiscoveryService.cs` — periodic mDNS scan for `_copyeverywhere._tcp` services using `ZeroconfResolver.ResolveAsync`
+  - `DiscoveredServer` model with Id, Name, Host, Port, AuthRequired, Version fields (mirrors macOS `DiscoveredServer` struct)
+  - `ConfigStore.cs` — added `ServerAuthRequired` property (nullable bool: null=unknown, true/false from mDNS TXT or /health)
+  - `ApiClient.cs` — `HealthResponse` now parses `auth` field from `/health`; `TestConnectionAsync` updates `ConfigStore.ServerAuthRequired`
+  - `MainWindow.xaml` — added "Discovered Servers" section with scrollable list above manual Host URL input; Access Token wrapped in conditional `AccessTokenPanel`
+  - `MainWindow.xaml.cs` — `MdnsDiscoveryService` instantiated and started in constructor; `OnDiscoveredServersChanged` dynamically builds server list with click-to-select; `SelectDiscoveredServer` sets HostUrl and auth from mDNS; `UpdateAccessTokenVisibility` hides token field when auth=false
+- Files changed:
+  - windows/CopyEverywhere/CopyEverywhere.csproj — added Zeroconf NuGet
+  - windows/CopyEverywhere/Services/MdnsDiscoveryService.cs — new file
+  - windows/CopyEverywhere/Services/ConfigStore.cs — ServerAuthRequired property
+  - windows/CopyEverywhere/Services/ApiClient.cs — HealthResponse.Auth, TestConnectionAsync updates auth
+  - windows/CopyEverywhere/MainWindow.xaml — Discovered Servers UI, conditional Access Token panel
+  - windows/CopyEverywhere/MainWindow.xaml.cs — discovery wiring, server selection, auth visibility
+  - prd.json — US-040 passes: true
+- **Learnings for future iterations:**
+  - `Zeroconf` NuGet is the simplest .NET mDNS browsing library. `ZeroconfResolver.ResolveAsync(serviceType, scanTime)` does a one-shot scan; wrap in a loop for continuous discovery.
+  - Zeroconf service type must end with `.local.` (e.g., `_copyeverywhere._tcp.local.`).
+  - TXT record properties in Zeroconf are `IReadOnlyList<IReadOnlyDictionary<string, string>>` — iterate the outer list and check each dict.
+  - WPF dynamically generated UI (clearing StackPanel children) works well for discovered server lists; avoid `x:Name` on children that will be removed.
+  - `dotnet build` cannot be verified on macOS dev machine — note this in progress when Windows-only changes are made.
 ---

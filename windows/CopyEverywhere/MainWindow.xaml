@@ -73,17 +73,34 @@
             <!-- Server Configuration -->
             <TextBlock Text="Server Configuration" Style="{StaticResource SectionHeader}"/>
 
-            <TextBlock Text="Host URL" Style="{StaticResource FieldLabel}"/>
+            <!-- Discovered Servers -->
+            <TextBlock Text="Discovered Servers" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
+            <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
+                    MinHeight="40" MaxHeight="160">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="DiscoveredServersPanel">
+                        <TextBlock Text="Scanning for servers on LAN..."
+                                   Foreground="Gray"
+                                   FontSize="11"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,10,0,10"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <TextBlock Text="Host URL (manual)" Style="{StaticResource FieldLabel}"/>
             <TextBox x:Name="HostUrlTextBox"
                      Margin="0,0,0,12"
                      Padding="6,4"
                      Text="{Binding HostUrl, UpdateSourceTrigger=PropertyChanged}"/>
 
-            <TextBlock Text="Access Token" Style="{StaticResource FieldLabel}"/>
-            <PasswordBox x:Name="AccessTokenBox"
-                         Margin="0,0,0,16"
-                         Padding="6,4"
-                         PasswordChanged="AccessTokenBox_PasswordChanged"/>
+            <StackPanel x:Name="AccessTokenPanel">
+                <TextBlock x:Name="AccessTokenLabel" Text="Access Token" Style="{StaticResource FieldLabel}"/>
+                <PasswordBox x:Name="AccessTokenBox"
+                             Margin="0,0,0,16"
+                             Padding="6,4"
+                             PasswordChanged="AccessTokenBox_PasswordChanged"/>
+            </StackPanel>
 
             <!-- Buttons -->
             <StackPanel Orientation="Horizontal" Margin="0,0,0,12">

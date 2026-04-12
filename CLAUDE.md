@@ -114,6 +114,8 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **`SendService`** is the shared send helper used by `FloatingBallWindow`, `MainWindow` (drop + Ctrl+V), and any future send paths. It reads `ConfigStore.DeviceId` / `ConfigStore.TargetDeviceId` and passes them to all API calls.
 - **SSE client** uses `HttpClient` with `HttpCompletionOption.ResponseHeadersRead` + `StreamReader.ReadLineAsync()` loop. `Timeout` set to `Timeout.InfiniteTimeSpan` for the long-lived connection. Reconnect with exponential backoff (1s → 2s → 4s → capped at 30s). `StartSSE()` is idempotent (checks `_sseTask != null`).
 - **FloatingBallWindow** is a 64x64 borderless, transparent, always-on-top WPF window that accepts file and text drops. Position persisted in `config.json`. Toggle in MainWindow config section.
+- **mDNS discovery** uses `Zeroconf` NuGet (v3.6.11). `MdnsDiscoveryService` runs a periodic scan loop for `_copyeverywhere._tcp.local.` services. `DiscoveredServer` model matches macOS `DiscoveredServer` struct. TXT records provide `auth` and `version` fields.
+- **`ConfigStore.ServerAuthRequired`** (nullable bool) controls Access Token field visibility: `null` = unknown (show as optional), `true` = shown as required, `false` = hidden. Populated from mDNS TXT `auth` field or `/health` response `auth` field.
 
 **Cross-platform:**
 

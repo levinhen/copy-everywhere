@@ -16,6 +16,7 @@ public partial class MainWindow : Window
 {
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
+    private readonly MdnsDiscoveryService _mdnsService;
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
@@ -48,6 +49,7 @@ public partial class MainWindow : Window
 
         _configStore = new ConfigStore();
         _apiClient = new ApiClient(_configStore);
+        _mdnsService = new MdnsDiscoveryService();
 
         DataContext = _configStore;
 
@@ -56,8 +58,13 @@ public partial class MainWindow : Window
 
         UpdateMainPanelState();
         UpdateDeviceInfoDisplay();
+        UpdateAccessTokenVisibility();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
+
+        // Start mDNS discovery
+        _mdnsService.ServersChanged += OnDiscoveredServersChanged;
+        _mdnsService.StartBrowsing();
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -308,6 +315,7 @@ public partial class MainWindow : Window
         {
             var result = await _apiClient.TestConnectionAsync();
             ShowStatus(result.Message, isError: !result.Success);
+            UpdateAccessTokenVisibility();
         }
         finally
         {
@@ -1350,6 +1358,123 @@ public partial class MainWindow : Window
         {
             ReceiveStatusBorder.Background = new SolidColorBrush(Color.FromRgb(220, 252, 231));
             ReceiveStatusText.Foreground = new SolidColorBrush(Color.FromRgb(21, 128, 61));
+        }
+    }
+
+    // --- mDNS Discovery ---
+
+    private void OnDiscoveredServersChanged()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(OnDiscoveredServersChanged);
+            return;
+        }
+
+        DiscoveredServersPanel.Children.Clear();
+
+        var servers = _mdnsService.DiscoveredServers;
+        if (servers.Count == 0)
+        {
+            DiscoveredServersPanel.Children.Add(new TextBlock
+            {
+                Text = "Scanning for servers on LAN...",
+                Foreground = Brushes.Gray,
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 10, 0, 10),
+            });
+            return;
+        }
+
+        foreach (var server in servers)
+        {
+            var isSelected = _configStore.HostUrl.TrimEnd('/') == $"http://{server.Host}:{server.Port}";
+
+            var nameText = new TextBlock
+            {
+                Text = server.Name,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+            };
+
+            var detailParts = new System.Collections.Generic.List<string> { $"{server.Host}:{server.Port}" };
+            if (!string.IsNullOrEmpty(server.Version))
+                detailParts.Add($"v{server.Version}");
+            if (server.AuthRequired)
+                detailParts.Add("auth required");
+
+            var detailText = new TextBlock
+            {
+                Text = string.Join(" \u2022 ", detailParts),
+                FontSize = 11,
+                Foreground = Brushes.Gray,
+            };
+
+            var stack = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
+            stack.Children.Add(nameText);
+            stack.Children.Add(detailText);
+
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            if (isSelected)
+            {
+                row.Children.Add(new TextBlock
+                {
+                    Text = "\u2713",
+                    FontSize = 14,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 0, 0),
+                });
+            }
+
+            row.Children.Add(stack);
+
+            var border = new Border
+            {
+                Padding = new Thickness(8, 6, 8, 6),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Background = isSelected
+                    ? new SolidColorBrush(Color.FromRgb(219, 234, 254))
+                    : Brushes.Transparent,
+            };
+            border.Child = row;
+
+            // Click to select
+            var capturedServer = server;
+            border.MouseLeftButtonUp += (_, _) => SelectDiscoveredServer(capturedServer);
+
+            DiscoveredServersPanel.Children.Add(border);
+        }
+    }
+
+    private void SelectDiscoveredServer(DiscoveredServer server)
+    {
+        _configStore.HostUrl = $"http://{server.Host}:{server.Port}";
+        _configStore.ServerAuthRequired = server.AuthRequired;
+        HostUrlTextBox.Text = _configStore.HostUrl;
+        UpdateAccessTokenVisibility();
+        OnDiscoveredServersChanged(); // Refresh selection highlight
+    }
+
+    private void UpdateAccessTokenVisibility()
+    {
+        if (_configStore.ServerAuthRequired == false)
+        {
+            AccessTokenPanel.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            AccessTokenPanel.Visibility = Visibility.Visible;
+            AccessTokenLabel.Text = _configStore.ServerAuthRequired == true
+                ? "Access Token (required)"
+                : "Access Token (optional)";
         }
     }
 

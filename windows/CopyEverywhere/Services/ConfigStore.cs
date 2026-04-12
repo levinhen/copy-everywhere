@@ -26,6 +26,7 @@ public class ConfigStore : INotifyPropertyChanged
     private bool _showFloatingBall = true;
     private double _floatingBallX = double.NaN;
     private double _floatingBallY = double.NaN;
+    private bool? _serverAuthRequired; // null = unknown, populated from mDNS TXT or /health
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -75,6 +76,12 @@ public class ConfigStore : INotifyPropertyChanged
     {
         get => _floatingBallY;
         set { _floatingBallY = value; OnPropertyChanged(); }
+    }
+
+    public bool? ServerAuthRequired
+    {
+        get => _serverAuthRequired;
+        set { _serverAuthRequired = value; OnPropertyChanged(); }
     }
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl);

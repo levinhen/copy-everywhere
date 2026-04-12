@@ -122,7 +122,7 @@
         "dotnet build succeeds"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
