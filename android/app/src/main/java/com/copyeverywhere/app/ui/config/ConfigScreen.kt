@@ -1,5 +1,6 @@
 package com.copyeverywhere.app.ui.config
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,7 +15,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,6 +33,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -39,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.copyeverywhere.app.data.DiscoveredServer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,6 +60,13 @@ fun ConfigScreen(
     val serverAuthRequired by viewModel.serverAuthRequired.collectAsState()
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val devices by viewModel.devices.collectAsState()
+    val discoveredServers by viewModel.discoveredServers.collectAsState()
+
+    // Start/stop mDNS discovery with screen lifecycle
+    DisposableEffect(Unit) {
+        viewModel.startDiscovery()
+        onDispose { viewModel.stopDiscovery() }
+    }
 
     Scaffold(
         topBar = {
@@ -83,6 +96,12 @@ fun ConfigScreen(
                 placeholder = { Text("http://192.168.1.100:8080") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
+            )
+
+            // Discovered Servers
+            DiscoveredServersList(
+                servers = discoveredServers,
+                onSelect = { viewModel.selectDiscoveredServer(it) }
             )
 
             // Access Token — hidden when server reports auth: false
@@ -176,6 +195,75 @@ fun ConfigScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun DiscoveredServersList(
+    servers: List<DiscoveredServer>,
+    onSelect: (DiscoveredServer) -> Unit
+) {
+    if (servers.isEmpty()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(vertical = 4.dp)
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Scanning for servers...",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    } else {
+        Text(
+            text = "Discovered Servers",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        servers.forEach { server ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onSelect(server) },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Wifi,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = server.name,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = buildString {
+                                append("${server.host}:${server.port}")
+                                server.version?.let { append(" \u00B7 v$it") }
+                                server.authRequired?.let { auth ->
+                                    append(if (auth) " \u00B7 auth required" else " \u00B7 no auth")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
     }
 }

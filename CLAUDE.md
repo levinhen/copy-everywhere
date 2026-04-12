@@ -158,6 +158,7 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **API client.** `ApiClient` (`data/ApiClient.kt`) uses OkHttp + Gson. Bearer auth header skipped when token is empty. All network calls are `suspend` functions dispatched to `Dispatchers.IO`.
 - **Navigation.** `NavHost` in `MainActivity` with string routes (`"main"`, `"config"`). `ConfigScreen` gets its own `ConfigViewModel` (`AndroidViewModel` for app context access).
 - **Server platform value.** Device registration sends `platform = "android"` — the Go server's `/api/v1/devices/register` handler needs to accept `"android"` in its platform whitelist.
+- **mDNS discovery.** `MdnsDiscoveryService` (`data/MdnsDiscoveryService.kt`) wraps `NsdManager` to browse for `_copyeverywhere._tcp.` services. `DiscoveredServer` data class holds name, host, port, authRequired, version. TXT record attributes parsed from `NsdServiceInfo.attributes`. Discovery lifecycle tied to ConfigScreen via `DisposableEffect`. No extra permissions needed beyond `INTERNET`.
 
 **Cross-platform:**
 

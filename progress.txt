@@ -3,7 +3,7 @@ Android Client — Progress Tracker
 
 US-051: Android project scaffold and build pipeline         [x]
 US-052: Configuration screen and persistence                [x]
-US-053: mDNS server discovery                               [ ]
+US-053: mDNS server discovery                               [x]
 US-054: API client — small clip send (text + file < 50 MB)  [ ]
 US-055: API client — chunked upload (file >= 50 MB)         [ ]
 US-056: API client — receive clip (metadata + download)     [ ]
@@ -31,6 +31,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - Navigation Compose for screen navigation (`NavHost` + `composable()` routes)
 - `ExposedDropdownMenuBox` with `MenuAnchorType.PrimaryNotEditable` for read-only dropdowns in Material 3
 - Server `/api/v1/devices/register` currently only accepts macos/windows/linux — Android client sends "android", server needs update
+- mDNS discovery via `NsdManager` in `MdnsDiscoveryService` — use `DisposableEffect` for start/stop lifecycle in Compose
+- `NsdServiceInfo.attributes` returns TXT record fields as `Map<String, ByteArray>` — decode with `String(bytes)`
 
 ---
 
@@ -70,4 +72,23 @@ US-068: Boot receiver and battery optimization              [ ]
   - Server device registration endpoint needs "android" added to allowed platforms
   - `EncryptedSharedPreferences` uses synchronous API — access token stored/retrieved synchronously, wrapped in MutableStateFlow for Compose
   - ConfigViewModel uses `AndroidViewModel` to access application context for ConfigStore
+---
+
+## 2026-04-12 - US-053
+- Implemented mDNS server discovery using Android NsdManager
+- Discovered servers shown in a "Discovered Servers" list on config screen with tap-to-select
+- Tapping auto-fills Host URL and sets auth requirement from TXT record attributes
+- Discovery starts when config screen is visible (DisposableEffect), stops on navigate away
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/MdnsDiscoveryService.kt`
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt` — added discovery state + lifecycle
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt` — added DiscoveredServersList UI
+- **Learnings for future iterations:**
+  - `NsdManager.resolveService()` is deprecated on API 34+ but still works for minSdk 29; newer `registerServiceInfoCallback` API requires API 34
+  - `NsdServiceInfo.host` deprecated on API 34+ — same situation, use it for backward compatibility
+  - `NsdServiceInfo.attributes` returns `Map<String, ByteArray>` for TXT record fields — decode with `String(byteArray)`
+  - `DisposableEffect(Unit)` is the right pattern for start/stop lifecycle tied to composable visibility
+  - NsdManager discovery doesn't need extra permissions beyond INTERNET
+  - Must track pending resolves to avoid duplicate resolve calls for the same service
 ---

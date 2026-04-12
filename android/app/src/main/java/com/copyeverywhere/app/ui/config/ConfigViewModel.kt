@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.copyeverywhere.app.data.ApiClient
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.Device
+import com.copyeverywhere.app.data.DiscoveredServer
+import com.copyeverywhere.app.data.MdnsDiscoveryService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +20,7 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     val configStore = ConfigStore(application)
     private val apiClient = ApiClient()
+    private val mdnsDiscovery = MdnsDiscoveryService(application)
 
     val hostUrl: StateFlow<String> = configStore.hostUrl
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -39,6 +42,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _devices = MutableStateFlow<List<Device>>(emptyList())
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
+
+    val discoveredServers: StateFlow<List<DiscoveredServer>> = mdnsDiscovery.servers
 
     fun updateHostUrl(url: String) {
         viewModelScope.launch { configStore.setHostUrl(url) }
@@ -103,6 +108,25 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
                 // silently fail — device list is non-critical
             }
         }
+    }
+
+    fun startDiscovery() {
+        mdnsDiscovery.startDiscovery()
+    }
+
+    fun stopDiscovery() {
+        mdnsDiscovery.stopDiscovery()
+    }
+
+    fun selectDiscoveredServer(server: DiscoveredServer) {
+        val url = "http://${server.host}:${server.port}"
+        viewModelScope.launch { configStore.setHostUrl(url) }
+        _serverAuthRequired.value = server.authRequired
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        mdnsDiscovery.stopDiscovery()
     }
 }
 
