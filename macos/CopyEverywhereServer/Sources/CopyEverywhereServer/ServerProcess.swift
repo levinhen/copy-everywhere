@@ -20,8 +20,13 @@ final class ServerProcess: ObservableObject {
         return execURL.deletingLastPathComponent().appendingPathComponent("copyeverywhere-server").path
     }()
 
+    /// Server configuration — environment variables are derived from this.
+    var config: ServerConfig?
+
     /// Environment variables forwarded to the Go server subprocess.
-    var environment: [String: String] = [:]
+    var environment: [String: String] {
+        config?.environment ?? [:]
+    }
 
     // MARK: - Lifecycle
 

@@ -63,7 +63,7 @@
         "swift build succeeds"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-037 — config panel and status display"
     },
     {

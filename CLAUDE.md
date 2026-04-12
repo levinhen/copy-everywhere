@@ -97,7 +97,8 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 
 - **Go subprocess management.** `ServerProcess` (`@MainActor` ObservableObject) wraps `Foundation.Process` to launch/stop/restart the Go binary. Stdout and stderr are captured via `Pipe` with `readabilityHandler` and surfaced as `@Published logLines: [String]`.
 - **Binary path convention.** `ServerProcess.binaryPath` defaults to a sibling `copyeverywhere-server` next to the Swift executable. The Go binary is compiled independently (`go build -o copyeverywhere-server .` in `server/`).
-- **Environment forwarding.** `ServerProcess.environment` dict is merged with the current process env before launching the Go binary. This is how `PORT`, `STORAGE_PATH`, `BIND_ADDRESS`, `AUTH_ENABLED`, etc. are passed to the server.
+- **Environment forwarding.** `ServerProcess.config` (`ServerConfig`) provides the environment dict, which is merged with the current process env before launching the Go binary. This is how `PORT`, `STORAGE_PATH`, `BIND_ADDRESS`, `AUTH_ENABLED`, etc. are passed to the server.
+- **ServerConfig persistence.** `ServerConfig` (`@MainActor` ObservableObject) persists port, storage path, TTL, auth settings to `~/Library/Application Support/CopyEverywhereServer/config.json`. Default storage path is `~/Library/Application Support/CopyEverywhereServer/data`. Config changes require a server restart to take effect.
 - **Graceful shutdown.** `process.terminate()` sends SIGTERM (Go server already handles SIGTERM for mDNS deregistration). `applicationWillTerminate` calls `stop()` to clean up on app quit.
 - **Same popover pattern as the client app.** `AppDelegate` owns `NSStatusItem` + `NSPopover` with `.applicationDefined` behavior + global event monitor for dismiss-on-click-outside.
 

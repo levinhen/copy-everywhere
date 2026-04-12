@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var eventMonitor: Any?
+    private let serverConfig = ServerConfig()
     private let serverProcess = ServerProcess()
 
     // SF Symbols for menu bar icon
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        serverProcess.config = serverConfig
         setupPopover()
         setupStatusItem()
         updateIcon()
@@ -47,10 +49,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupPopover() {
         popover = NSPopover()
         popover.behavior = .applicationDefined
-        popover.contentSize = NSSize(width: 400, height: 420)
+        popover.contentSize = NSSize(width: 400, height: 520)
 
         let contentView = MenuBarView()
             .environmentObject(serverProcess)
+            .environmentObject(serverConfig)
         popover.contentViewController = NSHostingController(rootView: contentView)
     }
 
