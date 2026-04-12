@@ -1,0 +1,324 @@
+package com.copyeverywhere.app.ui.main
+
+import android.app.Application
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ContentValues
+import android.content.Context
+import android.net.Uri
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.copyeverywhere.app.data.ApiClient
+import com.copyeverywhere.app.data.ChunkedUploadState
+import com.copyeverywhere.app.data.ClipAlreadyConsumedException
+import com.copyeverywhere.app.data.ClipResponse
+import com.copyeverywhere.app.data.ConfigStore
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val configStore = ConfigStore(application)
+    private val apiClient = ApiClient()
+
+    val hostUrl: StateFlow<String> = configStore.hostUrl
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val deviceId: StateFlow<String> = configStore.deviceId
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val targetDeviceId: StateFlow<String> = configStore.targetDeviceId
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+
+    private val _textInput = MutableStateFlow("")
+    val textInput: StateFlow<String> = _textInput.asStateFlow()
+
+    private val _sendStatus = MutableStateFlow<SendStatus>(SendStatus.Idle)
+    val sendStatus: StateFlow<SendStatus> = _sendStatus.asStateFlow()
+
+    private val _queue = MutableStateFlow<List<ClipResponse>>(emptyList())
+    val queue: StateFlow<List<ClipResponse>> = _queue.asStateFlow()
+
+    private val _uploadProgress = MutableStateFlow<UploadProgress?>(null)
+    val uploadProgress: StateFlow<UploadProgress?> = _uploadProgress.asStateFlow()
+
+    private val _receiveStatus = MutableStateFlow<ReceiveStatus>(ReceiveStatus.Idle)
+    val receiveStatus: StateFlow<ReceiveStatus> = _receiveStatus.asStateFlow()
+
+    private var queuePollingJob: Job? = null
+    private var chunkedUploadState: ChunkedUploadState? = null
+    private var chunkedUploadUri: Uri? = null
+
+    fun updateTextInput(text: String) {
+        _textInput.value = text
+    }
+
+    fun sendText() {
+        val text = _textInput.value.trim()
+        if (text.isEmpty()) return
+
+        viewModelScope.launch {
+            _sendStatus.value = SendStatus.Sending
+            try {
+                val host = hostUrl.value
+                val token = configStore.getAccessToken()
+                val sender = deviceId.value
+                val target = targetDeviceId.value
+                apiClient.sendTextClip(host, token, text, sender, target)
+                _textInput.value = ""
+                _sendStatus.value = SendStatus.Success
+                delay(2000)
+                _sendStatus.value = SendStatus.Idle
+            } catch (e: Exception) {
+                _sendStatus.value = SendStatus.Error(e.message ?: "Send failed")
+                delay(3000)
+                _sendStatus.value = SendStatus.Idle
+            }
+        }
+    }
+
+    fun sendFile(uri: Uri) {
+        viewModelScope.launch {
+            val contentResolver = getApplication<Application>().contentResolver
+            val fileSize = ApiClient.getFileSize(contentResolver, uri)
+            val fileName = ApiClient.getFileName(contentResolver, uri)
+
+            if (fileSize >= CHUNKED_THRESHOLD) {
+                startChunkedUpload(uri, fileName)
+            } else {
+                sendSmallFile(uri, fileName)
+            }
+        }
+    }
+
+    private suspend fun sendSmallFile(uri: Uri, fileName: String) {
+        _sendStatus.value = SendStatus.Sending
+        try {
+            val contentResolver = getApplication<Application>().contentResolver
+            val host = hostUrl.value
+            val token = configStore.getAccessToken()
+            val sender = deviceId.value
+            val target = targetDeviceId.value
+            apiClient.sendFileClip(host, token, contentResolver, uri, sender, target)
+            _sendStatus.value = SendStatus.Success
+            delay(2000)
+            _sendStatus.value = SendStatus.Idle
+        } catch (e: Exception) {
+            _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
+            delay(3000)
+            _sendStatus.value = SendStatus.Idle
+        }
+    }
+
+    private suspend fun startChunkedUpload(uri: Uri, fileName: String) {
+        _uploadProgress.value = UploadProgress(fileName = fileName, progress = 0.0, speedMbps = 0.0, isPaused = false)
+        try {
+            val contentResolver = getApplication<Application>().contentResolver
+            val host = hostUrl.value
+            val token = configStore.getAccessToken()
+            val sender = deviceId.value
+            val target = targetDeviceId.value
+
+            val state = apiClient.initChunkedUpload(host, token, contentResolver, uri, sender, target)
+            chunkedUploadState = state
+            chunkedUploadUri = uri
+
+            // Collect progress in background
+            val progressJob = viewModelScope.launch {
+                state.progress.collect { p ->
+                    _uploadProgress.value = _uploadProgress.value?.copy(progress = p)
+                }
+            }
+            val speedJob = viewModelScope.launch {
+                state.speedMbps.collect { s ->
+                    _uploadProgress.value = _uploadProgress.value?.copy(speedMbps = s)
+                }
+            }
+
+            state.job = viewModelScope.launch {
+                try {
+                    apiClient.uploadChunks(host, token, contentResolver, uri, state)
+                    apiClient.completeChunkedUpload(host, token, state.uploadId)
+                    _uploadProgress.value = null
+                    chunkedUploadState = null
+                    chunkedUploadUri = null
+                    _sendStatus.value = SendStatus.Success
+                    delay(2000)
+                    _sendStatus.value = SendStatus.Idle
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // Paused — don't clear state
+                    throw e
+                } catch (e: Exception) {
+                    _uploadProgress.value = null
+                    chunkedUploadState = null
+                    chunkedUploadUri = null
+                    _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
+                    delay(3000)
+                    _sendStatus.value = SendStatus.Idle
+                }
+            }
+        } catch (e: Exception) {
+            _uploadProgress.value = null
+            _sendStatus.value = SendStatus.Error(e.message ?: "Upload init failed")
+            delay(3000)
+            _sendStatus.value = SendStatus.Idle
+        }
+    }
+
+    fun pauseUpload() {
+        val state = chunkedUploadState ?: return
+        state.job?.cancel()
+        state.job = null
+        _uploadProgress.value = _uploadProgress.value?.copy(isPaused = true)
+    }
+
+    fun resumeUpload() {
+        val state = chunkedUploadState ?: return
+        val uri = chunkedUploadUri ?: return
+
+        _uploadProgress.value = _uploadProgress.value?.copy(isPaused = false)
+
+        viewModelScope.launch {
+            try {
+                val host = hostUrl.value
+                val token = configStore.getAccessToken()
+                val contentResolver = getApplication<Application>().contentResolver
+
+                apiClient.resumeChunkedUpload(host, token, state)
+
+                state.job = viewModelScope.launch {
+                    try {
+                        apiClient.uploadChunks(host, token, contentResolver, uri, state)
+                        apiClient.completeChunkedUpload(host, token, state.uploadId)
+                        _uploadProgress.value = null
+                        chunkedUploadState = null
+                        chunkedUploadUri = null
+                        _sendStatus.value = SendStatus.Success
+                        delay(2000)
+                        _sendStatus.value = SendStatus.Idle
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        _uploadProgress.value = null
+                        chunkedUploadState = null
+                        chunkedUploadUri = null
+                        _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
+                        delay(3000)
+                        _sendStatus.value = SendStatus.Idle
+                    }
+                }
+            } catch (e: Exception) {
+                _sendStatus.value = SendStatus.Error(e.message ?: "Resume failed")
+            }
+        }
+    }
+
+    fun startQueuePolling() {
+        queuePollingJob?.cancel()
+        queuePollingJob = viewModelScope.launch {
+            while (true) {
+                refreshQueue()
+                delay(5000)
+            }
+        }
+    }
+
+    fun stopQueuePolling() {
+        queuePollingJob?.cancel()
+        queuePollingJob = null
+    }
+
+    private suspend fun refreshQueue() {
+        try {
+            val host = configStore.hostUrl.first()
+            val token = configStore.getAccessToken()
+            val device = configStore.deviceId.first()
+            if (host.isNotEmpty() && device.isNotEmpty()) {
+                _queue.value = apiClient.fetchQueue(host, token, device)
+            }
+        } catch (_: Exception) {
+            // Silently fail — queue refresh is non-critical
+        }
+    }
+
+    fun receiveQueueItem(clip: ClipResponse) {
+        viewModelScope.launch {
+            _receiveStatus.value = ReceiveStatus.Receiving(clip.id)
+            try {
+                val host = configStore.hostUrl.first()
+                val token = configStore.getAccessToken()
+                val downloaded = apiClient.downloadClipRaw(host, token, clip.id)
+
+                when (downloaded.metadata.type) {
+                    "text" -> {
+                        val text = String(downloaded.bytes, Charsets.UTF_8)
+                        val clipboard = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("CopyEverywhere", text))
+                        Toast.makeText(getApplication(), "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                    }
+                    else -> {
+                        saveToDownloads(downloaded.metadata.filename, downloaded.contentType, downloaded.bytes)
+                        Toast.makeText(getApplication(), "Saved to Downloads: ${downloaded.metadata.filename}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                // Remove from queue
+                _queue.value = _queue.value.filter { it.id != clip.id }
+                _receiveStatus.value = ReceiveStatus.Idle
+            } catch (e: ClipAlreadyConsumedException) {
+                _queue.value = _queue.value.filter { it.id != clip.id }
+                _receiveStatus.value = ReceiveStatus.Idle
+                Toast.makeText(getApplication(), "Already consumed", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                _receiveStatus.value = ReceiveStatus.Error(e.message ?: "Receive failed")
+                delay(3000)
+                _receiveStatus.value = ReceiveStatus.Idle
+            }
+        }
+    }
+
+    private fun saveToDownloads(filename: String, mimeType: String, bytes: ByteArray) {
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(MediaStore.Downloads.MIME_TYPE, mimeType)
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        }
+        val resolver = getApplication<Application>().contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+        if (uri != null) {
+            resolver.openOutputStream(uri)?.use { it.write(bytes) }
+        }
+    }
+
+    companion object {
+        private const val CHUNKED_THRESHOLD = 50L * 1024 * 1024 // 50 MB
+    }
+}
+
+sealed class SendStatus {
+    data object Idle : SendStatus()
+    data object Sending : SendStatus()
+    data object Success : SendStatus()
+    data class Error(val message: String) : SendStatus()
+}
+
+sealed class ReceiveStatus {
+    data object Idle : ReceiveStatus()
+    data class Receiving(val clipId: String) : ReceiveStatus()
+    data class Error(val message: String) : ReceiveStatus()
+}
+
+data class UploadProgress(
+    val fileName: String,
+    val progress: Double,
+    val speedMbps: Double,
+    val isPaused: Boolean
+)

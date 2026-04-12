@@ -9,7 +9,7 @@ US-055: API client — chunked upload (file >= 50 MB)         [x]
 US-056: API client — receive clip (metadata + download)     [x]
 US-057: SSE client and auto-receive                         [x]
 US-058: Foreground service and persistent notification      [x]
-US-059: Main Activity — text input and file upload          [ ]
+US-059: Main Activity — text input and file upload          [x]
 US-060: Share sheet integration                             [ ]
 US-061: Transfer mode switch (LAN <-> Bluetooth)            [ ]
 US-062: Bluetooth RFCOMM service and session protocol       [ ]
@@ -40,6 +40,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - Notification channels: `CHANNEL_SERVICE` (low importance, ongoing) and `CHANNEL_TRANSFERS` (high importance, auto-cancel)
 - Android 13+ requires `POST_NOTIFICATIONS` runtime permission — request via `ActivityResultContracts.RequestPermission()`
 - `CopyEverywhereService.start(context)` / `.stop(context)` static helpers for service lifecycle
+- `ActivityResultContracts.OpenDocument()` for system file picker; pass `arrayOf("*/*")` for all types
+- `Icons.AutoMirrored.Filled.Send` (not `Icons.Default.Send` — deprecated)
 - File save to Downloads: use `MediaStore.Downloads` (no storage permissions needed on API 29+)
 - Android 10+ clipboard restriction: use transparent `ClipboardTrampolineActivity` to read clipboard from notification actions (background services can't read clipboard)
 - `buildServiceNotificationStatic()` on `CopyEverywhereService.Companion` for updating the service notification from outside the service
@@ -202,4 +204,24 @@ US-068: Boot receiver and battery optimization              [ ]
   - `PendingIntent.getActivity()` with unique request codes (0 for open, 1 for send) to avoid intent collision
   - `buildServiceNotificationStatic()` exposed on companion object so trampoline can update the notification without a service reference
   - Transparent theme needs `windowIsTranslucent=true`, `windowBackground=@android:color/transparent`, `backgroundDimEnabled=false`
+---
+
+## 2026-04-12 - US-059
+- Implemented MainScreen with text input + Send button, Upload File button, and queue list
+- MainViewModel handles: text sending, file upload (small + chunked with pause/resume), queue polling (5s), queue item receive
+- File picker uses `ActivityResultContracts.OpenDocument` with `*/*` MIME type
+- Upload routing: files >= 50 MB go through chunked upload with progress card (progress bar + speed + pause/resume)
+- Queue items: text -> clipboard + toast, file -> Downloads via MediaStore + toast
+- Replaced placeholder main screen in MainActivity with MainScreen composable
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt`
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/MainActivity.kt` — replaced placeholder with MainScreen
+- **Learnings for future iterations:**
+  - `ActivityResultContracts.OpenDocument()` is the modern replacement for `ACTION_OPEN_DOCUMENT` — pass MIME type array to `launch()`
+  - `Icons.Default.Send` is deprecated — use `Icons.AutoMirrored.Filled.Send` for RTL support
+  - `DisposableEffect(Unit)` for starting/stopping queue polling when screen is visible
+  - `LazyColumn` with `items(key = { it.id })` for efficient queue list rendering
+  - `ChunkedUploadState.job` can be cancelled for pause, then re-launch for resume after querying server status
 ---
