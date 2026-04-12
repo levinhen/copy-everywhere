@@ -17,7 +17,7 @@ US-063: Bluetooth device scanning and pairing               [x]
 US-064: Bluetooth auto-reconnect and RFCOMM server          [x]
 US-065: Bluetooth send — text and files                     [x]
 US-066: Bluetooth receive — text and files                  [x]
-US-067: Notifications and user feedback                     [ ]
+US-067: Notifications and user feedback                     [x]
 US-068: Boot receiver and battery optimization              [ ]
 
 ## Codebase Patterns
@@ -62,6 +62,7 @@ US-068: Boot receiver and battery optimization              [ ]
 - All BT send entry points: check transferMode → `CopyEverywhereService.instance?.bluetoothService?.activeSession` → verify `isHandshakeComplete` → send
 - `BluetoothSession.sendText()`/`sendFile()` return cold `Flow<Double>` — must `collect` to execute the send
 - BT receive progress: `CopyEverywhereService.btReceiveProgress`/`btReceiveFilename` StateFlows — observe from ViewModel via `startBtReceiveObserving()`
+- `CopyEverywhereService.showTransferNotificationStatic(context, title, text)` — post transfer notifications from any context (Activity, ViewModel, Service)
 
 ---
 
@@ -391,4 +392,20 @@ US-068: Boot receiver and battery optimization              [ ]
   - Reuse existing `handleTextClip()`/`handleFileClip()` for BT receive — same clipboard + notification + Downloads logic as SSE/LAN receive
   - `ApiClient.guessMimeType(filename)` works with just a filename string (no URI needed) — useful for BT receives where there's no ContentResolver
   - BT receive progress observation should start/stop with MainScreen visibility (via `DisposableEffect`), not with ViewModel init
+---
+
+## 2026-04-12 - US-067
+- Added "Open" action to file received notifications (tapping notification or Open button opens the file with ACTION_VIEW)
+- Added "Send success" Toast ("Sent!") to all send paths in MainViewModel (text, small file, chunked upload, Bluetooth file)
+- Added send/receive error notifications via `showTransferNotificationStatic()` — system notification posted on all error paths
+- Exposed `showTransferNotificationStatic()` as static method on CopyEverywhereService companion for use from activities and ViewModels
+- ClipboardTrampolineActivity now posts error notification on send failure (in addition to existing Toast)
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt` — Open action on file notifications, static `showTransferNotificationStatic()`
+  - `android/app/src/main/java/com/copyeverywhere/app/service/ClipboardTrampolineActivity.kt` — error notification on send failure
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt` — send success toasts, error notifications via helper
+- **Learnings for future iterations:**
+  - `PendingIntent` request codes must be unique per notification — Share and Open actions on the same file notification need different request codes (e.g., `filename.hashCode()` vs `filename.hashCode() + 1`)
+  - `showTransferNotificationStatic()` on companion object allows posting transfer notifications from any context (Activity, ViewModel, Service)
+  - `Intent.ACTION_VIEW` with `setDataAndType(uri, mimeType)` + `FLAG_GRANT_READ_URI_PERMISSION` opens files with appropriate system handler
 ---
