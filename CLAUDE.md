@@ -4,8 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-- [prd.json](prd.json) — the canonical feature list. Read this first to understand what the project does and what is in/out of scope. The MVP (US-001 … US-017) is complete; the current iteration covers US-018 … US-034 (queue semantics + frictionless send/receive UX). The full PRD doc for the current iteration lives at [tasks/prd-queue-and-frictionless-ux.md](tasks/prd-queue-and-frictionless-ux.md).
-- The MVP's prd.json, progress log, and original PRD doc are archived under [archive/mvp/](archive/mvp/) — historical context only, no longer the source of truth.
+- Two iterations have shipped and are now archived — there is no active `prd.json` in the repo root right now. Historical context only:
+  - **MVP (US-001 … US-017)** under [archive/mvp/](archive/mvp/) — initial clipboard-relay feature set.
+  - **Queue + frictionless UX (US-018 … US-034)** under [archive/queue-and-frictionless-ux/](archive/queue-and-frictionless-ux/) — device registration, targeted queue, SSE push, drag-and-drop, auto-receive.
+- When a new iteration starts, drop its fresh `prd.json` + `progress.txt` at the repo root and its PRD doc at `tasks/prd-*.md`, then update this section to point at them.
 - This repo is driven by the Ralph autonomous agent loop ([scripts/ralph/ralph.sh](scripts/ralph/ralph.sh) + [scripts/ralph/CLAUDE.md](scripts/ralph/CLAUDE.md)). One commit ≈ one user story; commit messages follow `feat: [US-XXX] - [Title]`. The hard-won "do this / don't do that" list lives in the **Conventions and gotchas** section below — add to it (don't replace) when you discover a new reusable pattern.
 
 ## Architecture
