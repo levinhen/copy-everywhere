@@ -23,9 +23,15 @@ let kCopyEverywhereServiceUUIDString = "CE000001-1000-1000-8000-00805F9B34FB"
 
 @MainActor
 protocol BluetoothServiceDelegate: AnyObject {
+    /// Raw connection accepted (server mode) — a BluetoothSession is created and handshake begins automatically.
     func bluetoothService(_ service: BluetoothService, didAcceptConnection channel: IOBluetoothRFCOMMChannel, from device: IOBluetoothDevice)
+    /// Raw connection established (client mode) — a BluetoothSession is created and handshake begins automatically.
     func bluetoothService(_ service: BluetoothService, didConnectTo channel: IOBluetoothRFCOMMChannel, device: IOBluetoothDevice)
     func bluetoothService(_ service: BluetoothService, didFailWithError error: Error)
+    /// A BluetoothSession completed its handshake and is ready for transfers.
+    func bluetoothService(_ service: BluetoothService, sessionReady session: BluetoothSession, device: IOBluetoothDevice)
+    /// A BluetoothSession handshake failed.
+    func bluetoothService(_ service: BluetoothService, sessionHandshakeFailed session: BluetoothSession, error: Error)
 }
 
 // MARK: - Errors
@@ -60,9 +66,15 @@ final class BluetoothService: NSObject, ObservableObject {
 
     weak var delegate: BluetoothServiceDelegate?
 
+    /// Active session (one at a time for now).
+    @Published var activeSession: BluetoothSession?
+
     private var sdpServiceRecord: IOBluetoothSDPServiceRecord?
     private var serverChannelID: BluetoothRFCOMMChannelID = 0
     private var serverNotification: IOBluetoothUserNotification?
+
+    /// Tracks the device for the pending session (used during handshake).
+    private var pendingDevice: IOBluetoothDevice?
 
     // MARK: - Server mode
 
@@ -140,6 +152,7 @@ final class BluetoothService: NSObject, ObservableObject {
         guard let device = channel.getDevice() else { return }
         Task { @MainActor in
             self.delegate?.bluetoothService(self, didAcceptConnection: channel, from: device)
+            self.createSession(channel: channel, device: device)
         }
     }
 
@@ -147,7 +160,27 @@ final class BluetoothService: NSObject, ObservableObject {
         Task { @MainActor in
             self.isConnecting = false
             self.delegate?.bluetoothService(self, didConnectTo: channel, device: device)
+            self.createSession(channel: channel, device: device)
         }
+    }
+
+    // MARK: - Session management
+
+    /// Create a BluetoothSession for the given channel. The session starts the handshake automatically.
+    func createSession(channel: IOBluetoothRFCOMMChannel, device: IOBluetoothDevice) {
+        // Close any existing session
+        activeSession?.close()
+        pendingDevice = device
+        let session = BluetoothSession(channel: channel)
+        session.delegate = self
+        activeSession = session
+    }
+
+    /// Disconnect the active session.
+    func disconnectSession() {
+        activeSession?.close()
+        activeSession = nil
+        pendingDevice = nil
     }
 
     nonisolated func notifyClientError(_ error: Error) {
@@ -160,6 +193,32 @@ final class BluetoothService: NSObject, ObservableObject {
     deinit {
         serverNotification?.unregister()
         sdpServiceRecord?.remove()
+    }
+}
+
+// MARK: - BluetoothSessionDelegate
+
+extension BluetoothService: BluetoothSessionDelegate {
+
+    func sessionDidComplete(handshake session: BluetoothSession) {
+        guard let device = pendingDevice else { return }
+        delegate?.bluetoothService(self, sessionReady: session, device: device)
+    }
+
+    func session(_ session: BluetoothSession, handshakeFailedWithError error: Error) {
+        delegate?.bluetoothService(self, sessionHandshakeFailed: session, error: error)
+        if activeSession === session {
+            activeSession = nil
+            pendingDevice = nil
+        }
+    }
+
+    func session(_ session: BluetoothSession, didReceive payload: BluetoothTransferPayload) {
+        // Forward to higher-level handler — will be wired in US-044 (receive content)
+    }
+
+    func session(_ session: BluetoothSession, didFailReceivingWithError error: Error) {
+        // Forward to higher-level handler — will be wired in US-044
     }
 }
 

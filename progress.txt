@@ -18,6 +18,9 @@
 - CopyEverywhere Bluetooth RFCOMM UUID: `CE000001-1000-1000-8000-00805F9B34FB`. Defined as `kCopyEverywhereServiceUUID` (macOS IOBluetoothSDPUUID). Same UUID must be used on Windows.
 - `BluetoothService` (`@MainActor`) is the RFCOMM connection layer. Server mode: SDP publish + channel notification. Client mode: SDP query + RFCOMM open. IOBluetooth callbacks arrive on non-main threads — use `nonisolated` bridge methods + `Task { @MainActor in }`.
 - IOBluetooth API: use `hasService(from:)` not the obsoleted `hasServiceFromArray(_:)`. `IOBluetoothSDPUUID(bytes:length:)` returns non-optional.
+- Bluetooth RFCOMM protocol: newline-delimited JSON headers (`0x0A`) + raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON + `\n` + content.
+- `BluetoothSession` wraps `IOBluetoothRFCOMMChannel` as its delegate. Buffer-based state machine: handshake → header → content. `BluetoothService` owns `activeSession`.
+- IOBluetooth `closeChannel()` is obsoleted in Swift 3 — use `channel.close()` instead (returns IOReturn).
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -225,4 +228,29 @@
   - Use `hasService(from:)` not `hasServiceFromArray(_:)` — the latter is obsoleted in Swift 3.
   - SDP service record dict keys use the format `"0001 - ServiceClassIDList"`, `"0004 - ProtocolDescriptorList"`, `"0100 - ServiceName*"`.
   - `publishedServiceRecord(with:)` takes `[AnyHashable: Any]` — cast array values explicitly with `as [Any]` to satisfy the type checker.
+---
+
+## 2026-04-12 - US-041B
+- What was implemented:
+  - New `BluetoothProtocol.swift` — app-layer protocol on top of RFCOMM connections
+  - `BluetoothSession` class wrapping `IOBluetoothRFCOMMChannel` as its delegate
+  - Handshake: both sides exchange `{"app":"CopyEverywhere","version":"3.0"}\n` with 5s timeout
+  - Transfer protocol: `BluetoothTransferHeader` JSON (`type`, `filename`, `size`) + newline delimiter + raw content bytes
+  - `sendText(_:)` for text payloads, `sendFile(url:)` with FileHandle chunk-reads for file payloads (16KB RFCOMM chunks)
+  - Receiver uses buffer-based state machine: handshake phase → header parse → content accumulation
+  - `BluetoothSessionDelegate` protocol for handshake/transfer callbacks
+  - `BluetoothService` extended: `activeSession` property, `createSession(channel:device:)` auto-starts handshake on connect
+  - `BluetoothService` conforms to `BluetoothSessionDelegate` and forwards events to `BluetoothServiceDelegate`
+  - `BluetoothServiceDelegate` extended with `sessionReady` and `sessionHandshakeFailed` callbacks
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothProtocol.swift — new file
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothService.swift — session management + delegate conformance
+  - CLAUDE.md — documented Bluetooth protocol conventions
+  - prd.json — US-041B passes: true
+- **Learnings for future iterations:**
+  - IOBluetooth `closeChannel()` is obsoleted in Swift 3 — use `channel.close()` instead (returns IOReturn, discard with `_ =`).
+  - RFCOMM data arrives in `rfcommChannelData` on a non-main thread. Buffer in `Data` and process on `@MainActor` via `Task`.
+  - Newline (`0x0A`) is a clean delimiter for JSON headers over RFCOMM since JSON itself doesn't contain raw newlines.
+  - `writeAsync` on `IOBluetoothRFCOMMChannel` takes `UnsafeMutableRawPointer` — use `NSMutableData.mutableBytes` to bridge from Swift `Data`.
+  - File sends must chunk-read via `FileHandle` (16KB per RFCOMM write) to avoid OOM on large files — same pattern as the LAN chunked uploader.
 ---

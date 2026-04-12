@@ -93,6 +93,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **SSE client uses `URLSession.shared.bytes(for:)` + `bytes.lines`** for async line-by-line streaming. Set `request.timeoutInterval = .infinity` for long-lived SSE. Parse events by empty-line boundaries, `event:` prefix, and `data:` prefix.
 - **`appendDeviceFields(to:boundary:)`** is a shared helper that appends `sender_device_id` and `target_device_id` multipart fields to any outgoing clip POST body. Chunked uploads add device IDs directly to the JSON init body instead.
 - **SSE reconnect loop** lives in `ConfigStore.sseLoop()` with exponential backoff (1s → 2s → 4s → capped at 30s). `startSSE()` is idempotent (checks `sseTask != nil`). Call `stopSSE()` before `startSSE()` when credentials change.
+- **Bluetooth RFCOMM protocol.** `BluetoothProtocol.swift` defines the app-layer protocol on top of RFCOMM connections. `BluetoothSession` wraps an `IOBluetoothRFCOMMChannel` and manages the handshake + transfer lifecycle. Wire format: newline-delimited JSON headers (`\n` = `0x0A`) followed by raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON (`type`, `filename`, `size`) + `\n` + content bytes.
+- **`BluetoothSession` is `IOBluetoothRFCOMMChannelDelegate`.** Data arrives via `rfcommChannelData(_:data:length:)` on a non-main thread — bridged to `@MainActor` via `Task`. Receive uses a buffer-based state machine: handshake phase → header phase → content accumulation.
+- **`BluetoothService` owns `activeSession`.** On RFCOMM connect (server accept or client connect), `createSession(channel:device:)` creates a `BluetoothSession` that auto-starts the handshake. Delegate chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSessionDelegate`) → `BluetoothServiceDelegate`.
+- **IOBluetooth `closeChannel()` is obsoleted** — use `channel.close()` (returns `IOReturn`, discard with `_ =`).
 
 **macOS Server Host App (`macos/CopyEverywhereServer/`):**
 

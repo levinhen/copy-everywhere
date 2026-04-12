@@ -152,7 +152,7 @@
         "swift build succeeds"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-041 — protocol layer on top of US-041A connection"
     },
     {
