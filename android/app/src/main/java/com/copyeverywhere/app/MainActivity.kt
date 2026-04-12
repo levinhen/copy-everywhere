@@ -1,9 +1,14 @@
 package com.copyeverywhere.app
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -30,6 +35,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestNotificationPermissionAndStartService()
+        requestBatteryOptimizationExemption()
         setContent {
             CopyEverywhereTheme {
                 val navController = rememberNavController()
@@ -57,5 +63,21 @@ class MainActivity : ComponentActivity() {
             }
         }
         CopyEverywhereService.start(this)
+    }
+
+    /**
+     * Request exemption from battery optimization so the foreground service
+     * and SSE connection are not killed by Doze mode. Shows the system dialog
+     * only if the app is not already exempted.
+     */
+    @Suppress("BatteryLife") // Justified — the app needs a persistent SSE/Bluetooth connection
+    private fun requestBatteryOptimizationExemption() {
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+        }
     }
 }

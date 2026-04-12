@@ -13,6 +13,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.Environment
 import android.os.IBinder
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -51,6 +52,10 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     /** Bluetooth RFCOMM service — manages server and client connections. */
     var bluetoothService: BluetoothService? = null
         private set
+
+    /** WakeLock held during active transfers to prevent CPU sleep. */
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wakeLockHolders = 0
 
     /** Bluetooth receive progress (0.0–1.0), observed by MainViewModel for UI. */
     private val _btReceiveProgress = MutableStateFlow<Double?>(null)
@@ -97,8 +102,54 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         sseJob?.cancel()
         bluetoothService?.listener = null
         bluetoothService?.destroy()
+        releaseWakeLockFully()
         scope.cancel()
         super.onDestroy()
+    }
+
+    /**
+     * Acquire a partial WakeLock to keep the CPU alive during an active transfer.
+     * Supports nested calls — each [acquireWakeLock] must be matched by [releaseWakeLock].
+     * The WakeLock auto-releases after 10 minutes as a safety net.
+     */
+    fun acquireWakeLock() {
+        synchronized(this) {
+            if (wakeLock == null) {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "CopyEverywhere::TransferWakeLock"
+                )
+            }
+            wakeLockHolders++
+            if (wakeLockHolders == 1) {
+                wakeLock?.acquire(10 * 60 * 1000L) // 10 min timeout safety net
+                Log.d(TAG, "WakeLock acquired")
+            }
+        }
+    }
+
+    /** Release one hold on the WakeLock. When all holders release, the lock is freed. */
+    fun releaseWakeLock() {
+        synchronized(this) {
+            if (wakeLockHolders > 0) {
+                wakeLockHolders--
+                if (wakeLockHolders == 0 && wakeLock?.isHeld == true) {
+                    wakeLock?.release()
+                    Log.d(TAG, "WakeLock released")
+                }
+            }
+        }
+    }
+
+    private fun releaseWakeLockFully() {
+        synchronized(this) {
+            wakeLockHolders = 0
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+            wakeLock = null
+        }
     }
 
     private fun createNotificationChannels() {
@@ -227,6 +278,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         // Clear receive progress
         _btReceiveProgress.value = null
         _btReceiveFilename.value = null
+        releaseWakeLock() // Release the lock acquired in onReceiveProgress
 
         // Verify size matches header
         if (payload.data.size.toLong() != payload.header.size) {
@@ -245,6 +297,10 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     }
 
     override fun onReceiveProgress(session: BluetoothSession, progress: Double, header: BluetoothTransferHeader) {
+        // Acquire WakeLock on first progress report (start of transfer)
+        if (_btReceiveProgress.value == null) {
+            acquireWakeLock()
+        }
         _btReceiveProgress.value = progress
         _btReceiveFilename.value = header.filename
     }
@@ -253,6 +309,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         Log.w(TAG, "Bluetooth receive failed: ${error.message}")
         _btReceiveProgress.value = null
         _btReceiveFilename.value = null
+        releaseWakeLock()
         showTransferNotification("Receive failed", error.message ?: "Unknown error")
     }
 
@@ -267,6 +324,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         val clip = sseClient.parseClipEvent(event.data) ?: return
         Log.d(TAG, "SSE clip received: id=${clip.id}, type=${clip.type}")
 
+        acquireWakeLock()
         try {
             val hostUrl = configStore.hostUrl.first()
             val accessToken = configStore.getAccessToken()
@@ -281,6 +339,8 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to process clip ${clip.id}", e)
             showTransferNotification("Receive failed", "Could not download clip: ${e.message}")
+        } finally {
+            releaseWakeLock()
         }
     }
 
