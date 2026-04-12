@@ -10,6 +10,8 @@ final class ServerConfig: ObservableObject {
     @Published var authEnabled: Bool = false
     @Published var accessToken: String = ""
     @Published var maxClipSizeMB: Int = 50
+    @Published var serverEnabled: Bool = false
+    @Published var autoStartServer: Bool = false
 
     /// Computed status fields (updated by refreshUsedSpace())
     @Published var usedSpaceBytes: Int64 = 0
@@ -58,7 +60,9 @@ final class ServerConfig: ObservableObject {
             ttlHours: ttlHours,
             authEnabled: authEnabled,
             accessToken: accessToken,
-            maxClipSizeMB: maxClipSizeMB
+            maxClipSizeMB: maxClipSizeMB,
+            serverEnabled: serverEnabled,
+            autoStartServer: autoStartServer
         )
         do {
             let json = try JSONEncoder().encode(data)
@@ -78,6 +82,8 @@ final class ServerConfig: ObservableObject {
         authEnabled = data.authEnabled
         accessToken = data.accessToken
         maxClipSizeMB = data.maxClipSizeMB ?? 50
+        serverEnabled = data.serverEnabled ?? false
+        autoStartServer = data.autoStartServer ?? false
     }
 
     // MARK: - Storage usage
@@ -115,4 +121,6 @@ private struct ConfigData: Codable {
     var authEnabled: Bool
     var accessToken: String
     var maxClipSizeMB: Int?
+    var serverEnabled: Bool?
+    var autoStartServer: Bool?
 }

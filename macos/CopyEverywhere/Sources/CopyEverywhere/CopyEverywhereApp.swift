@@ -15,6 +15,7 @@ struct CopyEverywhereApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let configStore = ConfigStore()
+    let serverConfig = ServerConfig()
     let serverProcess = ServerProcess()
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
@@ -32,11 +33,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+
+        // Wire server config into the process manager
+        serverProcess.config = serverConfig
+
         setupPopover()
         setupStatusItem()
         setupKeyMonitor()
         // Start SSE connection if already configured
         configStore.startSSE()
+
+        // Auto-start embedded server if configured
+        if serverConfig.serverEnabled && serverConfig.autoStartServer {
+            serverProcess.start()
+            autoConnectToLocalServer()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -53,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let contentView = MenuBarView()
             .environmentObject(configStore)
+            .environmentObject(serverConfig)
+            .environmentObject(serverProcess)
         popover.contentViewController = NSHostingController(rootView: contentView)
     }
 
@@ -226,6 +239,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Self.sendNotification(body: "Failed to send: \(result.message)")
             }
         }
+    }
+
+    // MARK: - Embedded Server Toggle
+
+    /// Called when the user toggles the embedded server on/off.
+    func setServerEnabled(_ enabled: Bool) {
+        serverConfig.serverEnabled = enabled
+        serverConfig.save()
+        if enabled {
+            serverProcess.start()
+            autoConnectToLocalServer()
+        } else {
+            serverProcess.stop()
+            // Keep hostURL as-is so user can still point at a remote server
+        }
+    }
+
+    /// Sets the client's hostURL to the local embedded server.
+    func autoConnectToLocalServer() {
+        let port = serverConfig.port.isEmpty ? "8080" : serverConfig.port
+        configStore.hostURL = "http://localhost:\(port)"
+        if serverConfig.authEnabled && !serverConfig.accessToken.isEmpty {
+            configStore.accessToken = serverConfig.accessToken
+        }
+        configStore.save()
     }
 
     // MARK: - Notifications
