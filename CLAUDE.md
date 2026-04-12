@@ -183,6 +183,8 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Bluetooth auto-reconnect.** `BluetoothService.autoReconnect(address, onStatusChange)` uses exponential backoff (2s → 4s → 8s → 16s → capped 30s), max 5 attempts. Called by `CopyEverywhereService.autoReconnectBluetooth()` on launch in BT mode and on mode switch to BT. Checks `isSessionReady` before each attempt to bail out if an inbound RFCOMM connection was accepted.
 - **`stopBluetoothServer()` calls `cancelReconnect()`.** Switching from BT to LAN must cancel in-progress reconnect attempts.
 - **Bluetooth runtime permissions (Android 12+).** `BLUETOOTH_CONNECT` + `BLUETOOTH_SCAN` requested via `ActivityResultContracts.RequestMultiplePermissions` in ConfigScreen before scanning. `BLUETOOTH_SCAN` has `neverForLocation` flag to avoid location permission requirement.
+- **Send routing via `transferMode` (Android).** All send entry points (`ClipboardTrampolineActivity`, `MainViewModel.sendText()`/`sendFile()`, `ShareReceiverActivity`) check `transferMode` at the top and dispatch to `BluetoothSession` or `ApiClient`. Pattern: `CopyEverywhereService.instance?.bluetoothService?.activeSession` → verify `isHandshakeComplete` → send. Error: "No Bluetooth device connected" if no ready session.
+- **Bluetooth send progress (Android).** `MainViewModel.sendFileBluetooth()` reuses `_uploadProgress` (same `UploadProgress` data class as LAN chunked uploads). Speed calculated from elapsed time + progress fraction × file size. `BluetoothSession.sendText()` / `sendFile()` return `Flow<Double>` — must `collect` even if progress isn't displayed (Flow is cold).
 
 **Cross-platform:**
 

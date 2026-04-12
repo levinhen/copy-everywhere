@@ -15,7 +15,7 @@ US-061: Transfer mode switch (LAN <-> Bluetooth)            [x]
 US-062: Bluetooth RFCOMM service and session protocol       [x]
 US-063: Bluetooth device scanning and pairing               [x]
 US-064: Bluetooth auto-reconnect and RFCOMM server          [x]
-US-065: Bluetooth send — text and files                     [ ]
+US-065: Bluetooth send — text and files                     [x]
 US-066: Bluetooth receive — text and files                  [ ]
 US-067: Notifications and user feedback                     [ ]
 US-068: Boot receiver and battery optimization              [ ]
@@ -59,6 +59,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - `Icons.AutoMirrored.Filled.BluetoothSearching` (not `Icons.Default.BluetoothSearching` — deprecated)
 - `BluetoothService.listener` shared between ConfigViewModel and Service — restore Service as listener in ViewModel's `onCleared()` (not null)
 - `BluetoothService.autoReconnect()` checks `isSessionReady` before each attempt — inbound RFCOMM server accept can satisfy the reconnect
+- All BT send entry points: check transferMode → `CopyEverywhereService.instance?.bluetoothService?.activeSession` → verify `isHandshakeComplete` → send
+- `BluetoothSession.sendText()`/`sendFile()` return cold `Flow<Double>` — must `collect` to execute the send
 
 ---
 
@@ -349,4 +351,22 @@ US-068: Boot receiver and battery optimization              [ ]
   - `autoReconnect()` checks `isSessionReady` before each attempt to avoid reconnecting when an inbound connection already succeeded via the RFCOMM server
   - `stopBluetoothServer()` should also call `cancelReconnect()` to stop any in-progress reconnect attempts when switching away from Bluetooth mode
   - Status callback from `autoReconnect()` is invoked from IO thread — `updateServiceNotification()` is safe to call from any thread since it goes through `NotificationManager`
+---
+
+## 2026-04-12 - US-065
+- Routed all three send entry points through BluetoothSession when in Bluetooth transfer mode:
+  - ClipboardTrampolineActivity: checks transferMode, sends via session.sendText() in BT mode
+  - MainViewModel: sendText() and sendFile() check transferMode; new sendFileBluetooth() method with progress/speed tracking
+  - ShareReceiverActivity: new sendFileUriBluetooth() helper; text and file sends routed through BT session
+- Error handling: "No Bluetooth device connected" shown when no active session with completed handshake
+- Bluetooth file sends reuse the same UploadProgress UI (progress bar + speed) as LAN uploads
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/service/ClipboardTrampolineActivity.kt` — BT send path + mode-aware notification text
+  - `android/app/src/main/java/com/copyeverywhere/app/service/ShareReceiverActivity.kt` — BT send path for single/multi-file and text
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt` — BT routing in sendText(), sendFile(), new sendFileBluetooth()
+- **Learnings for future iterations:**
+  - All send entry points follow the same pattern: check `transferMode` → get `CopyEverywhereService.instance?.bluetoothService?.activeSession` → verify `isHandshakeComplete` → send
+  - Bluetooth send progress uses `System.currentTimeMillis()` for speed calculation since BluetoothSession.sendFile() only emits progress (not speed)
+  - `session.sendText(text).collect { }` — must collect the Flow even if progress isn't displayed, otherwise the send won't execute (Flow is cold)
+  - Notification text after send should be mode-aware: "Bluetooth — Connected" vs "Listening for clips..."
 ---
