@@ -113,3 +113,20 @@
   - The standalone server host app was never counted as a separate "codebase" in the architecture section (it was a sub-bullet under macOS), so the "Four independent codebases" count remains correct
 ---
 
+## 2026-04-13 - US-076
+- Created `Services/ServerProcess.cs` — manages Go server binary as a child `System.Diagnostics.Process`
+- `IsRunning` property with `INotifyPropertyChanged`, `LogLines` as `ObservableCollection<string>` capped at 500
+- `Start()`, `Stop()`, `Restart()` (async polling for exit up to 5s, matching macOS pattern)
+- Stdout/stderr captured via `OutputDataReceived`/`ErrorDataReceived` events, dispatched to UI thread
+- `BinaryPath` defaults to `copyeverywhere-server.exe` next to the client executable
+- Environment variables forwarded from `ServerConfig.GetEnvironment()` (US-077)
+- Process killed on app exit via `Application.Current.Exit` handler in constructor
+- Files changed:
+  - windows/CopyEverywhere/Services/ServerProcess.cs (new)
+- **Learnings for future iterations:**
+  - dotnet build cannot be verified on this macOS dev machine — requires Windows host
+  - Windows `Process.Kill()` is the shutdown mechanism (no SIGTERM equivalent); Go server should handle abrupt termination gracefully
+  - `ObservableCollection<string>` auto-notifies WPF UI bindings — no manual PropertyChanged needed for collection changes
+  - `ServerProcess` depends on `ServerConfig.GetEnvironment()` — needs at least a stub for compilation (same pattern as macOS US-069/070)
+---
+
