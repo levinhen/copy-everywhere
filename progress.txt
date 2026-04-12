@@ -518,3 +518,15 @@
   - WPF drop overlay uses Panel.ZIndex=100 on a semi-transparent Border that appears on DragEnter and hides on DragLeave/Drop
   - Outer Grid wraps ScrollViewer to intercept drops window-wide; inner controls still get their own drop zones (e.g., file upload DropZone)
 ---
+
+## 2026-04-12 - US-032
+- What was implemented: Ctrl+V sends clipboard contents while MainWindow is focused — intercepts ApplicationCommands.Paste via Window.InputBindings/CommandBindings, sends text/image/file in priority order using SendService, shows in-window toast banner that auto-hides after 3s
+- Files changed:
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added Window.InputBindings (Ctrl+V → Paste) and CommandBindings (Paste → PasteCommand_Executed), ToastBanner border with ZIndex 200
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added PasteCommand_Executed handler (text → image → file priority), ShowInWindowToast with 3s auto-dismiss timer
+  - `prd.json` — Marked US-032 passes: true
+- **Learnings for future iterations:**
+  - Binding ApplicationCommands.Paste at the Window level via CommandBindings intercepts Ctrl+V globally, preventing it from reaching child TextBox/PasswordBox controls
+  - Clipboard image send: save BitmapSource to temp PNG via PngBitmapEncoder, send as file, then delete temp file
+  - DispatcherTimer with 3s interval provides a clean auto-dismiss toast that runs on the UI thread
+---

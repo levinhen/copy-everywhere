@@ -123,6 +123,93 @@ public partial class MainWindow : Window
         FloatingBallVisibilityChanged?.Invoke(isChecked);
     }
 
+    // --- Ctrl+V paste-to-send ---
+
+    private async void PasteCommand_Executed(object sender, System.Windows.Input.ExecutedRoutedEventArgs e)
+    {
+        if (!_configStore.IsConfigured || SendService == null) return;
+
+        e.Handled = true; // Prevent default paste into text inputs
+
+        try
+        {
+            // Priority order: text → image → file URL
+            if (Clipboard.ContainsText())
+            {
+                var text = Clipboard.GetText();
+                if (string.IsNullOrEmpty(text))
+                {
+                    ShowInWindowToast("Clipboard is empty");
+                    return;
+                }
+                await SendService.SendTextAsync(text);
+                var preview = text.Length > 40 ? text[..40] + "..." : text;
+                ShowInWindowToast($"Sent: {preview}");
+                return;
+            }
+
+            if (Clipboard.ContainsImage())
+            {
+                // Save image to temp file and send as file
+                var image = Clipboard.GetImage();
+                if (image != null)
+                {
+                    var tempPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clipboard_image.png");
+                    using (var fileStream = new FileStream(tempPath, FileMode.Create))
+                    {
+                        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+                        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(image));
+                        encoder.Save(fileStream);
+                    }
+                    await SendService.SendFileAsync(tempPath);
+                    ShowInWindowToast("Sent: clipboard image");
+                    try { File.Delete(tempPath); } catch { }
+                    return;
+                }
+            }
+
+            if (Clipboard.ContainsFileDropList())
+            {
+                var files = Clipboard.GetFileDropList();
+                foreach (string? filePath in files)
+                {
+                    if (filePath != null && File.Exists(filePath))
+                    {
+                        await SendService.SendFileAsync(filePath);
+                        ShowInWindowToast($"Sent: {System.IO.Path.GetFileName(filePath)}");
+                    }
+                }
+                return;
+            }
+
+            ShowInWindowToast("Clipboard is empty");
+        }
+        catch (Exception ex)
+        {
+            ShowInWindowToast($"Send failed: {ex.Message}");
+        }
+    }
+
+    private System.Windows.Threading.DispatcherTimer? _toastTimer;
+
+    private void ShowInWindowToast(string message)
+    {
+        ToastBannerText.Text = message;
+        ToastBanner.Visibility = Visibility.Visible;
+
+        _toastTimer?.Stop();
+        _toastTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3),
+        };
+        _toastTimer.Tick += (_, _) =>
+        {
+            ToastBanner.Visibility = Visibility.Collapsed;
+            _toastTimer.Stop();
+        };
+        _toastTimer.Start();
+    }
+
     // --- Window-level drag-and-drop ---
 
     private void Window_DragEnter(object sender, DragEventArgs e)

@@ -6,6 +6,14 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize">
 
+    <Window.InputBindings>
+        <KeyBinding Key="V" Modifiers="Ctrl" Command="{x:Static ApplicationCommands.Paste}"/>
+    </Window.InputBindings>
+
+    <Window.CommandBindings>
+        <CommandBinding Command="{x:Static ApplicationCommands.Paste}" Executed="PasteCommand_Executed"/>
+    </Window.CommandBindings>
+
     <Window.Resources>
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="FontSize" Value="14"/>
@@ -23,6 +31,22 @@
           DragOver="Window_DragOver"
           DragLeave="Window_DragLeave"
           Drop="Window_Drop">
+
+        <!-- In-window toast banner -->
+        <Border x:Name="ToastBanner"
+                Visibility="Collapsed"
+                Panel.ZIndex="200"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Stretch"
+                Background="#DCFCE7"
+                Padding="12,8"
+                Margin="0">
+            <TextBlock x:Name="ToastBannerText"
+                       FontSize="13"
+                       Foreground="#15803D"
+                       TextWrapping="Wrap"
+                       HorizontalAlignment="Center"/>
+        </Border>
 
         <!-- Drop overlay -->
         <Border x:Name="DropOverlay"
