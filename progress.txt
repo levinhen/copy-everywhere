@@ -178,3 +178,21 @@
   - Server config fields are shown/hidden via `Visibility.Visible`/`Collapsed`, matching the pattern used for Bluetooth section
 ---
 
+## 2026-04-13 - US-080
+- Added Server Management section to MainWindow.xaml, visible only when `ServerEnabled` is true
+- Status indicator: green dot = running, red dot = stopped, section hidden = disabled
+- Contextual Start/Stop/Restart buttons based on `ServerProcess.IsRunning`
+- Storage stats: used space (MB) from `RefreshUsedSpace()` + storage path text
+- Connected devices list fetched via `GET /api/v1/devices` from local server (with auth)
+- Log viewer: `ScrollViewer` + `TextBlock` showing `ServerProcess.LogLines`, auto-scrolls to bottom
+- Added `ServerDevice` model class in ApiClient.cs with `device_id` JSON mapping (Go server returns `device_id`, not `id`)
+- `UpdateServerManagementPanel()` refreshes all panel state — called from `SetServerEnabled`, `InitializeServerConfigUI`, and button handlers
+- Files changed:
+  - windows/CopyEverywhere/MainWindow.xaml (added Server Management section)
+  - windows/CopyEverywhere/MainWindow.xaml.cs (added management panel handlers and UpdateServerManagementPanel)
+  - windows/CopyEverywhere/Services/ApiClient.cs (added ServerDevice model)
+- **Learnings for future iterations:**
+  - Go server `/api/v1/devices` returns `device_id` field — same gotcha as macOS (documented in progress for US-073)
+  - `ScrollViewer.ScrollToEnd()` is the WPF equivalent of SwiftUI's `ScrollViewReader` for auto-scrolling logs
+---
+

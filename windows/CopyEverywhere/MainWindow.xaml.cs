@@ -2148,6 +2148,8 @@ public partial class MainWindow : Window
         {
             _serverProcess.Stop();
         }
+
+        UpdateServerManagementPanel();
     }
 
     private void AutoConnectToLocalServer()
@@ -2178,6 +2180,7 @@ public partial class MainWindow : Window
 
         ServerConfigSection.Visibility = _serverConfig.ServerEnabled ? Visibility.Visible : Visibility.Collapsed;
         ServerTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
+        UpdateServerManagementPanel();
     }
 
     private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -2237,6 +2240,122 @@ public partial class MainWindow : Window
         }
 
         ShowStatus("Server configuration saved", isError: false);
+    }
+
+    // ── Server management panel ─────────────────────────────────────────
+
+    private void ServerStartButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetServerEnabled(true);
+        ServerEnabledCheckBox.IsChecked = true;
+        UpdateServerManagementPanel();
+    }
+
+    private void ServerStopButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.Stop();
+        UpdateServerManagementPanel();
+    }
+
+    private async void ServerRestartButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _serverProcess.RestartAsync();
+        await System.Threading.Tasks.Task.Delay(1000);
+        AutoConnectToLocalServer();
+        UpdateServerManagementPanel();
+    }
+
+    private void UpdateServerManagementPanel()
+    {
+        if (!_serverConfig.ServerEnabled)
+        {
+            ServerManagementSection.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        ServerManagementSection.Visibility = Visibility.Visible;
+
+        if (_serverProcess.IsRunning)
+        {
+            ServerStatusDot.Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // green
+            ServerStatusText.Text = "Running";
+            ServerStartButton.Visibility = Visibility.Collapsed;
+            ServerStopButton.Visibility = Visibility.Visible;
+            ServerRestartButton.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ServerStatusDot.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)); // red
+            ServerStatusText.Text = "Stopped";
+            ServerStartButton.Visibility = Visibility.Visible;
+            ServerStopButton.Visibility = Visibility.Collapsed;
+            ServerRestartButton.Visibility = Visibility.Collapsed;
+        }
+
+        // Storage stats
+        _serverConfig.RefreshUsedSpace();
+        var usedMB = _serverConfig.UsedSpaceBytes / (1024.0 * 1024.0);
+        ServerStorageUsedText.Text = $"Used: {usedMB:F1} MB";
+        ServerStoragePathText.Text = _serverConfig.StoragePath;
+
+        // Log viewer
+        ServerLogText.Text = string.Join("\n", _serverProcess.LogLines);
+        ServerLogScrollViewer.ScrollToEnd();
+
+        // Fetch connected devices
+        _ = LoadServerDevicesAsync();
+    }
+
+    private async System.Threading.Tasks.Task LoadServerDevicesAsync()
+    {
+        if (!_serverProcess.IsRunning) return;
+
+        try
+        {
+            var baseUrl = $"http://localhost:{_serverConfig.Port}";
+            using var client = new System.Net.Http.HttpClient();
+            if (_serverConfig.AuthEnabled && !string.IsNullOrEmpty(_serverConfig.AccessToken))
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _serverConfig.AccessToken);
+            }
+
+            var response = await client.GetAsync($"{baseUrl}/api/v1/devices");
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                var devices = System.Text.Json.JsonSerializer.Deserialize<List<ServerDevice>>(json);
+                ServerDevicesPanel.Children.Clear();
+                if (devices != null && devices.Count > 0)
+                {
+                    foreach (var device in devices)
+                    {
+                        var tb = new TextBlock
+                        {
+                            Text = $"{device.Name} ({device.Platform}) — {device.DeviceId}",
+                            FontSize = 11,
+                            Margin = new Thickness(6, 3, 6, 3),
+                        };
+                        ServerDevicesPanel.Children.Add(tb);
+                    }
+                }
+                else
+                {
+                    ServerDevicesPanel.Children.Add(new TextBlock
+                    {
+                        Text = "No devices connected",
+                        Foreground = Brushes.Gray,
+                        FontSize = 11,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 6, 0, 6),
+                    });
+                }
+            }
+        }
+        catch
+        {
+            // Server might not be ready yet
+        }
     }
 
     private void UpdateMainPanelState()
