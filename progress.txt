@@ -31,6 +31,8 @@
 - Windows `BluetoothService` uses events (`ConnectionAccepted`, `Connected`, `ConnectionFailed`) instead of macOS delegate pattern. `StreamSocket` + `DataWriter`/`DataReader` are the I/O primitives.
 - Windows `BluetoothSession` mirrors macOS `BluetoothSession` — same wire format, handshake, transfer protocol. Uses events instead of delegate pattern. `BluetoothService.CreateSession()` auto-creates on connect.
 - For cross-platform JSON enum interop (macOS sends lowercase), use string-backed properties in C# instead of `JsonStringEnumConverter`.
+- Windows `ConfigStore` persists Bluetooth config (`TransferMode`, `PairedDevices`) in the same `config.json` as device config. Use `AddPairedDevice()`/`RemovePairedDevice()` helpers — they auto-persist.
+- Windows Bluetooth UI is dynamically generated (clearing/rebuilding StackPanel children) same as discovered servers list. `RenderPairedDevices()`/`RenderDiscoveredBtDevices()` are the refresh methods.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -382,5 +384,27 @@
   - `JsonStringEnumConverter` in .NET 8 uses PascalCase by default. For cross-platform interop with macOS (which sends lowercase `"text"`/`"file"`), use a string-backed property with a `[JsonIgnore]` convenience enum property.
   - `DataReader.LoadAsync()` with `InputStreamOptions.Partial` returns available bytes without blocking for a full buffer — essential for streaming protocols.
   - `BluetoothSession` creates its own `DataWriter`/`DataReader` from the socket — independent of `BluetoothService`'s writer/reader which remain for backward compatibility.
+  - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
+---
+
+## 2026-04-12 - US-046
+- What was implemented:
+  - `ConfigStore.cs` extended with `TransferMode` enum (`LanServer`/`Bluetooth`), `PairedBluetoothDevice` model, `BluetoothConnectionStatus` enum
+  - New properties: `TransferMode`, `PairedDevices`, `BluetoothConnectionStatus`, `BluetoothConnectedDeviceName`, `BluetoothErrorMessage`
+  - `AddPairedDevice()`/`RemovePairedDevice()` helpers with auto-persistence to `config.json`
+  - `DeviceConfig` extended with `transfer_mode` and `paired_devices` JSON fields
+  - `MainWindow.xaml` — Transfer Mode ComboBox (LAN Server / Bluetooth Direct), Bluetooth section with connection status badge, paired devices list, scan button, discovered devices list, scan progress/error display
+  - `MainWindow.xaml.cs` — full Bluetooth UI wiring: `BluetoothService` instantiation + event subscription, `TransferModeComboBox_SelectionChanged`, `BtScanButton_Click` (uses `BluetoothService.FindDevicesAsync()`), `PairBluetoothDevice()` (triggers system pairing via `ConnectAsync`), `ConnectToPairedDevice()` (via `ConnectByAddressAsync`), `DisconnectBluetooth()`, `ForgetBluetoothDevice()`, `RenderPairedDevices()` / `RenderDiscoveredBtDevices()` dynamic UI, Bluetooth event handlers updating connection status
+  - On `SessionReady`, device auto-added to paired devices list with Bluetooth address persistence
+- Files changed:
+  - windows/CopyEverywhere/Services/ConfigStore.cs — TransferMode, PairedBluetoothDevice, BluetoothConnectionStatus, paired device management
+  - windows/CopyEverywhere/MainWindow.xaml — Bluetooth UI section
+  - windows/CopyEverywhere/MainWindow.xaml.cs — Bluetooth event wiring, scan/pair/connect/disconnect/forget logic
+  - CLAUDE.md — documented Windows Bluetooth UI patterns
+  - prd.json — US-046 passes: true
+- **Learnings for future iterations:**
+  - `DeviceInformationCollection` implements `IEnumerable<DeviceInformation>` — use `.ToList()` with `System.Linq` for mutable lists.
+  - `BluetoothDevice.BluetoothAddress` is a `ulong` — format to MAC address string via `BitConverter.GetBytes()` (6 bytes, little-endian order means bytes[5] is the MSB).
+  - WPF `ComboBox` `Tag` property is a convenient way to associate enum values with items without a full converter.
   - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
 ---

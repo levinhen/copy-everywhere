@@ -136,6 +136,9 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Bluetooth RFCOMM protocol (Windows).** `BluetoothSession` mirrors macOS `BluetoothProtocol.swift`. Same wire format: newline-delimited JSON headers (`0x0A`) + raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON + `\n` + content bytes. Cross-platform interop with macOS.
 - **`BluetoothSession` lifecycle.** Created by `BluetoothService.CreateSession()` on RFCOMM connect. `StartAsync()` sends handshake and starts the receive loop. Events: `HandshakeCompleted`, `HandshakeFailed`, `TransferReceived`, `ReceiveProgress`, `ReceiveFailed`. `BluetoothService` exposes `ActiveSession`, `SessionReady`, `SessionHandshakeFailed`.
 - **`BluetoothTransferHeader.Type` serialization.** Uses a string-backed `TypeString` property for JSON (`"text"`/`"file"` lowercase) with a `[JsonIgnore]` convenience `Type` property mapping to `BluetoothContentType` enum.
+- **`TransferMode` enum** (`LanServer`/`Bluetooth`) in `ConfigStore.cs`. `PairedBluetoothDevice` model persisted in `config.json` alongside device config. `BluetoothConnectionStatus` enum mirrors macOS pattern. `AddPairedDevice()`/`RemovePairedDevice()` helpers manage the list and auto-persist.
+- **Bluetooth pairing flow (Windows).** `BluetoothService.ConnectAsync(DeviceInformation)` triggers the Windows system pairing dialog if needed. On `SessionReady`, the device is added to `PairedDevices`. Reconnection uses `ConnectByAddressAsync(ulong)`.
+- **Bluetooth UI in MainWindow.** Transfer mode ComboBox controls `BluetoothSection` visibility. Scan uses `BluetoothService.FindDevicesAsync()` (static). Paired device list rendered programmatically with Connect/Disconnect/Forget buttons. Status badge shows connection state via colored dot.
 
 **Cross-platform:**
 
