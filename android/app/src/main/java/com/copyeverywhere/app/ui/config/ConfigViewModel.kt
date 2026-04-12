@@ -321,10 +321,11 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         mdnsDiscovery.stopDiscovery()
         stopBluetoothScan()
-        // Restore service's own listener if needed
-        val btService = CopyEverywhereService.instance?.bluetoothService
+        // Restore service as the Bluetooth listener when ViewModel goes away
+        val service = CopyEverywhereService.instance
+        val btService = service?.bluetoothService
         if (btService?.listener === bluetoothServiceListener) {
-            btService.listener = null
+            btService.listener = service
         }
     }
 

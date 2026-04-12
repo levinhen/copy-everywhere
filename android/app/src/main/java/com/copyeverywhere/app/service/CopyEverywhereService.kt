@@ -20,7 +20,10 @@ import androidx.core.app.NotificationManagerCompat
 import com.copyeverywhere.app.MainActivity
 import com.copyeverywhere.app.R
 import com.copyeverywhere.app.data.ApiClient
+import com.copyeverywhere.app.data.BluetoothPayload
 import com.copyeverywhere.app.data.BluetoothService
+import com.copyeverywhere.app.data.BluetoothSession
+import com.copyeverywhere.app.data.BluetoothTransferHeader
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.SseClient
@@ -33,7 +36,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-class CopyEverywhereService : Service() {
+class CopyEverywhereService : Service(), BluetoothService.Listener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var sseJob: Job? = null
@@ -49,7 +52,9 @@ class CopyEverywhereService : Service() {
         super.onCreate()
         instance = this
         configStore = ConfigStore(applicationContext)
-        bluetoothService = BluetoothService(applicationContext)
+        bluetoothService = BluetoothService(applicationContext).also {
+            it.listener = this
+        }
         createNotificationChannels()
     }
 
@@ -64,6 +69,7 @@ class CopyEverywhereService : Service() {
                 TransferMode.Bluetooth -> {
                     startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("Bluetooth — Waiting for connection..."))
                     startBluetoothServer()
+                    autoReconnectBluetooth()
                 }
             }
         }
@@ -77,6 +83,7 @@ class CopyEverywhereService : Service() {
     override fun onDestroy() {
         instance = null
         sseJob?.cancel()
+        bluetoothService?.listener = null
         bluetoothService?.destroy()
         scope.cancel()
         super.onDestroy()
@@ -145,7 +152,7 @@ class CopyEverywhereService : Service() {
     /**
      * Switch between LAN and Bluetooth modes.
      * LAN: stops RFCOMM server, starts SSE + queue polling.
-     * Bluetooth: stops SSE, starts RFCOMM server.
+     * Bluetooth: stops SSE, starts RFCOMM server + auto-reconnect.
      */
     fun switchMode(mode: TransferMode) {
         when (mode) {
@@ -158,6 +165,7 @@ class CopyEverywhereService : Service() {
                 stopSse()
                 startBluetoothServer()
                 updateServiceNotification("Bluetooth — Waiting for connection...")
+                scope.launch { autoReconnectBluetooth() }
             }
         }
     }
@@ -167,8 +175,56 @@ class CopyEverywhereService : Service() {
     }
 
     fun stopBluetoothServer() {
+        bluetoothService?.cancelReconnect()
         bluetoothService?.disconnectSession()
         bluetoothService?.stopServer()
+    }
+
+    /**
+     * Attempt to auto-reconnect to the last-connected Bluetooth device.
+     * Uses exponential backoff (2s → 4s → 8s → capped 30s), max 5 attempts.
+     */
+    private suspend fun autoReconnectBluetooth() {
+        val bt = bluetoothService ?: return
+        val lastAddress = configStore.lastConnectedBtAddress.first()
+        if (lastAddress.isEmpty()) {
+            Log.d(TAG, "No last-connected Bluetooth device to reconnect to")
+            return
+        }
+
+        Log.d(TAG, "Auto-reconnecting to last Bluetooth device: $lastAddress")
+        bt.autoReconnect(lastAddress) { status ->
+            updateServiceNotification("Bluetooth — $status")
+        }
+    }
+
+    // --- BluetoothService.Listener --- update notification on BT connection status changes
+
+    override fun onSessionReady(session: BluetoothSession) {
+        Log.d(TAG, "Bluetooth session ready with ${session.deviceName}")
+        updateServiceNotification("Bluetooth — Connected to ${session.deviceName}")
+    }
+
+    override fun onSessionHandshakeFailed(session: BluetoothSession, error: Exception) {
+        Log.w(TAG, "Bluetooth handshake failed: ${error.message}")
+        updateServiceNotification("Bluetooth — Handshake failed")
+    }
+
+    override fun onTransferReceived(session: BluetoothSession, payload: BluetoothPayload) {
+        // Will be handled by US-066
+    }
+
+    override fun onReceiveProgress(session: BluetoothSession, progress: Double, header: BluetoothTransferHeader) {
+        // Will be handled by US-066
+    }
+
+    override fun onReceiveFailed(session: BluetoothSession, error: Exception) {
+        Log.w(TAG, "Bluetooth receive failed: ${error.message}")
+    }
+
+    override fun onSessionDisconnected(session: BluetoothSession) {
+        Log.d(TAG, "Bluetooth session disconnected from ${session.deviceName}")
+        updateServiceNotification("Bluetooth — Disconnected")
     }
 
     private suspend fun handleSseEvent(event: com.copyeverywhere.app.data.SseEvent) {

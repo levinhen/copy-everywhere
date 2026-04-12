@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -42,6 +43,7 @@ class BluetoothService(private val context: Context) : BluetoothSession.Listener
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var serverJob: Job? = null
     private var serverSocket: BluetoothServerSocket? = null
+    private var reconnectJob: Job? = null
 
     private val bluetoothAdapter: BluetoothAdapter?
         get() {
@@ -143,6 +145,71 @@ class BluetoothService(private val context: Context) : BluetoothSession.Listener
         connect(device)
     }
 
+    /**
+     * Auto-reconnect to a paired device by address with exponential backoff.
+     * Backoff: 2s → 4s → 8s → 16s → 30s, max 5 attempts.
+     * Cancels any ongoing reconnect if called again.
+     */
+    @SuppressLint("MissingPermission")
+    fun autoReconnect(address: String, onStatusChange: ((String) -> Unit)? = null) {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            val adapter = bluetoothAdapter
+            if (adapter == null || !adapter.isEnabled) {
+                Log.w(TAG, "Cannot auto-reconnect: Bluetooth not available or disabled")
+                return@launch
+            }
+
+            val device = try {
+                adapter.getRemoteDevice(address)
+            } catch (e: Exception) {
+                Log.w(TAG, "Invalid Bluetooth address for reconnect: $address", e)
+                return@launch
+            }
+            if (device == null) return@launch
+
+            var backoffMs = 2000L
+            val maxAttempts = 5
+            val maxBackoffMs = 30_000L
+
+            for (attempt in 1..maxAttempts) {
+                // If we already have an active ready session, stop
+                if (isSessionReady) {
+                    Log.d(TAG, "Auto-reconnect: already connected, stopping")
+                    return@launch
+                }
+
+                Log.d(TAG, "Auto-reconnect attempt $attempt/$maxAttempts to $address")
+                onStatusChange?.invoke("Reconnecting ($attempt/$maxAttempts)...")
+
+                try {
+                    val socket = device.createRfcommSocketToServiceRecord(BluetoothProtocol.SERVICE_UUID)
+                    adapter.cancelDiscovery()
+                    socket.connect()
+                    Log.d(TAG, "Auto-reconnect succeeded to $address")
+                    createSession(socket, device)
+                    return@launch
+                } catch (e: Exception) {
+                    Log.d(TAG, "Auto-reconnect attempt $attempt failed: ${e.message}")
+                }
+
+                if (attempt < maxAttempts) {
+                    delay(backoffMs)
+                    backoffMs = (backoffMs * 2).coerceAtMost(maxBackoffMs)
+                }
+            }
+
+            Log.d(TAG, "Auto-reconnect to $address failed after $maxAttempts attempts")
+            onStatusChange?.invoke("Reconnect failed")
+        }
+    }
+
+    /** Cancel any ongoing auto-reconnect. */
+    fun cancelReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
     /** Disconnect the active session. */
     fun disconnectSession() {
         activeSession?.close()
@@ -151,6 +218,7 @@ class BluetoothService(private val context: Context) : BluetoothSession.Listener
 
     /** Release all resources. */
     fun destroy() {
+        cancelReconnect()
         disconnectSession()
         stopServer()
         scope.cancel()
