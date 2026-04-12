@@ -12,7 +12,7 @@ US-058: Foreground service and persistent notification      [x]
 US-059: Main Activity — text input and file upload          [x]
 US-060: Share sheet integration                             [x]
 US-061: Transfer mode switch (LAN <-> Bluetooth)            [x]
-US-062: Bluetooth RFCOMM service and session protocol       [ ]
+US-062: Bluetooth RFCOMM service and session protocol       [x]
 US-063: Bluetooth device scanning and pairing               [ ]
 US-064: Bluetooth auto-reconnect and RFCOMM server          [ ]
 US-065: Bluetooth send — text and files                     [ ]
@@ -48,6 +48,12 @@ US-068: Boot receiver and battery optimization              [ ]
 - `buildServiceNotificationStatic()` on `CopyEverywhereService.Companion` for updating the service notification from outside the service
 - `CopyEverywhereService.instance` static reference for ViewModel→Service communication (e.g., `switchMode()`)
 - `TransferMode` enum in `ConfigStore` — check `transferMode.value` before starting LAN-only operations (queue polling, SSE)
+- Bluetooth RFCOMM: `BluetoothProtocol.SERVICE_UUID` = `CE000001-1000-1000-8000-00805F9B34FB` — must match all platforms
+- `BluetoothSession` wraps `BluetoothSocket` — handshake + receive loop on `Dispatchers.IO`, progress via `Flow<Double>`
+- `BluetoothService` manages RFCOMM server (`listenUsingRfcommWithServiceRecord`) + client (`createRfcommSocketToServiceRecord`)
+- `@SuppressLint("MissingPermission")` on BluetoothService — runtime permission checks done in UI layer
+- `CopyEverywhereService.bluetoothService` is the live instance; `startBluetoothServer()`/`stopBluetoothServer()` in `switchMode()`
+- Bluetooth permissions: `BLUETOOTH`+`BLUETOOTH_ADMIN` (maxSdkVersion 30), `BLUETOOTH_CONNECT`+`BLUETOOTH_SCAN` (API 31+)
 
 ---
 
@@ -270,4 +276,29 @@ US-068: Boot receiver and battery optimization              [ ]
   - `DisposableEffect(transferMode)` re-runs when mode changes, so mDNS discovery auto-starts/stops with mode switches
   - Bluetooth section is a placeholder — US-062 will implement actual RFCOMM server/client
   - Queue polling guard: check `transferMode.value` at start of `startQueuePolling()`, not inside the loop, to avoid race conditions
+---
+
+## 2026-04-12 - US-062
+- Implemented Bluetooth RFCOMM service and session protocol for cross-platform RFCOMM transfers
+- BluetoothProtocol.kt: wire protocol constants, handshake/transfer header builders and parsers, data classes
+- BluetoothSession.kt: wraps BluetoothSocket, handshake with 5s timeout, receive state machine (header → content), sendText/sendFile with Flow<Double> progress
+- BluetoothService.kt: RFCOMM server (accept loop), client connect, session lifecycle, delegate chain to listener
+- Added Bluetooth permissions to AndroidManifest.xml (BLUETOOTH, BLUETOOTH_ADMIN maxSdkVersion 30, BLUETOOTH_CONNECT, BLUETOOTH_SCAN)
+- Wired BluetoothService into CopyEverywhereService: created in onCreate(), startBluetoothServer()/stopBluetoothServer() in switchMode(), destroy() in onDestroy()
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/BluetoothProtocol.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/data/BluetoothSession.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/data/BluetoothService.kt`
+- Files modified:
+  - `android/app/src/main/AndroidManifest.xml` — added Bluetooth permissions
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt` — BluetoothService lifecycle
+  - `CLAUDE.md` — added Android Bluetooth conventions
+- **Learnings for future iterations:**
+  - `BluetoothAdapter.listenUsingRfcommWithServiceRecord()` blocks on `accept()` — must run in `Dispatchers.IO` coroutine
+  - `BluetoothAdapter.cancelDiscovery()` should be called before `socket.connect()` to speed up RFCOMM connection
+  - `ApiClient.getFileName()` and `getFileSize()` take `ContentResolver`, not `Context` — pass `context.contentResolver`
+  - Gson can leave Kotlin non-null fields null via reflection — defensive null checks needed with `@Suppress("SENSELESS_COMPARISON")`
+  - `@SuppressLint("MissingPermission")` on BluetoothService methods — actual permission checks belong in the UI layer (US-063)
+  - RFCOMM server socket must be closed to break the `accept()` loop on shutdown
+  - `BluetoothSocket.inputStream` is blocking — wrap in `BufferedInputStream` for efficient `readLine()` implementation
 ---

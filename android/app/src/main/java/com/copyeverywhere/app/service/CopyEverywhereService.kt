@@ -20,6 +20,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.copyeverywhere.app.MainActivity
 import com.copyeverywhere.app.R
 import com.copyeverywhere.app.data.ApiClient
+import com.copyeverywhere.app.data.BluetoothService
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.SseClient
@@ -40,10 +41,15 @@ class CopyEverywhereService : Service() {
     private val apiClient = ApiClient()
     private val sseClient = SseClient()
 
+    /** Bluetooth RFCOMM service — manages server and client connections. */
+    var bluetoothService: BluetoothService? = null
+        private set
+
     override fun onCreate() {
         super.onCreate()
         instance = this
         configStore = ConfigStore(applicationContext)
+        bluetoothService = BluetoothService(applicationContext)
         createNotificationChannels()
     }
 
@@ -57,7 +63,7 @@ class CopyEverywhereService : Service() {
                 }
                 TransferMode.Bluetooth -> {
                     startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("Bluetooth — Waiting for connection..."))
-                    // RFCOMM server will be started by US-062
+                    startBluetoothServer()
                 }
             }
         }
@@ -71,6 +77,7 @@ class CopyEverywhereService : Service() {
     override fun onDestroy() {
         instance = null
         sseJob?.cancel()
+        bluetoothService?.destroy()
         scope.cancel()
         super.onDestroy()
     }
@@ -137,22 +144,31 @@ class CopyEverywhereService : Service() {
 
     /**
      * Switch between LAN and Bluetooth modes.
-     * LAN: starts SSE + queue polling.
-     * Bluetooth: stops SSE (RFCOMM server started by US-062).
+     * LAN: stops RFCOMM server, starts SSE + queue polling.
+     * Bluetooth: stops SSE, starts RFCOMM server.
      */
     fun switchMode(mode: TransferMode) {
         when (mode) {
             TransferMode.LanServer -> {
-                // Stop Bluetooth (RFCOMM server stop — US-062)
+                stopBluetoothServer()
                 startSse()
                 updateServiceNotification("LAN — Listening for clips...")
             }
             TransferMode.Bluetooth -> {
                 stopSse()
-                // Start RFCOMM server — US-062
+                startBluetoothServer()
                 updateServiceNotification("Bluetooth — Waiting for connection...")
             }
         }
+    }
+
+    fun startBluetoothServer() {
+        bluetoothService?.startServer()
+    }
+
+    fun stopBluetoothServer() {
+        bluetoothService?.disconnectSession()
+        bluetoothService?.stopServer()
     }
 
     private suspend fun handleSseEvent(event: com.copyeverywhere.app.data.SseEvent) {
