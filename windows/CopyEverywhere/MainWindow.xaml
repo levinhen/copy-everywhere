@@ -18,6 +18,27 @@
         </Style>
     </Window.Resources>
 
+    <Grid AllowDrop="True"
+          DragEnter="Window_DragEnter"
+          DragOver="Window_DragOver"
+          DragLeave="Window_DragLeave"
+          Drop="Window_Drop">
+
+        <!-- Drop overlay -->
+        <Border x:Name="DropOverlay"
+                Visibility="Collapsed"
+                Background="#C0FFFFFF"
+                Panel.ZIndex="100">
+            <Border BorderBrush="#3B82F6" BorderThickness="3"
+                    CornerRadius="8" Margin="16">
+                <TextBlock Text="Drop to send"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontSize="20" FontWeight="SemiBold"
+                           Foreground="#3B82F6"/>
+            </Border>
+        </Border>
+
     <ScrollViewer VerticalScrollBarVisibility="Auto">
     <Grid Margin="16">
         <StackPanel>
@@ -283,4 +304,5 @@
         </StackPanel>
     </Grid>
     </ScrollViewer>
+    </Grid>
 </Window>

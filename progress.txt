@@ -503,3 +503,18 @@
   - Position is saved on every DragMove end to config.json alongside device config
   - DataFormats.UnicodeText with fallback to DataFormats.Text covers both Unicode and ASCII text drops
 ---
+
+## 2026-04-12 - US-031
+- What was implemented: Windows MainWindow drag-and-drop for files and text, with shared SendService extracted from FloatingBallWindow, full-window "Drop to send" overlay on hover
+- Files changed:
+  - `windows/CopyEverywhere/Services/SendService.cs` (new) — Shared send logic for text clips and files (simple + chunked), with toast notifications
+  - `windows/CopyEverywhere/FloatingBallWindow.xaml.cs` — Refactored to use SendService instead of inline send logic
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added outer Grid with AllowDrop and drop event handlers, DropOverlay border with "Drop to send" text
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added SendService property, Window_DragEnter/DragOver/DragLeave/Drop handlers using shared SendService
+  - `windows/CopyEverywhere/App.xaml.cs` — Creates SendService and passes to both FloatingBallWindow and MainWindow
+  - `prd.json` — Marked US-031 passes: true
+- **Learnings for future iterations:**
+  - SendService in Services/ is the single shared entry point for drag-drop sends on Windows (both FloatingBallWindow and MainWindow use it)
+  - WPF drop overlay uses Panel.ZIndex=100 on a semi-transparent Border that appears on DragEnter and hides on DragLeave/Drop
+  - Outer Grid wraps ScrollViewer to intercept drops window-wide; inner controls still get their own drop zones (e.g., file upload DropZone)
+---

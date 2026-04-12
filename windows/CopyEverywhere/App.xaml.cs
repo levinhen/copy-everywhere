@@ -29,8 +29,10 @@ public partial class App : Application
 
         _mainWindow = new MainWindow();
 
-        // Create floating ball window, sharing ConfigStore and ApiClient
-        _floatingBall = new FloatingBallWindow(_mainWindow.ConfigStore, _mainWindow.ApiClient);
+        // Create floating ball window, sharing ConfigStore and SendService
+        var sendService = new Services.SendService(_mainWindow.ApiClient);
+        _mainWindow.SendService = sendService;
+        _floatingBall = new FloatingBallWindow(_mainWindow.ConfigStore, sendService);
         if (_mainWindow.ConfigStore.ShowFloatingBall)
         {
             _floatingBall.Show();

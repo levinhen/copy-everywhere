@@ -20,6 +20,7 @@ public partial class MainWindow : Window
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
+    public SendService? SendService { get; set; }
 
     public event Action<bool>? FloatingBallVisibilityChanged;
 
@@ -120,6 +121,86 @@ public partial class MainWindow : Window
         _configStore.ShowFloatingBall = isChecked;
         _configStore.PersistConfig();
         FloatingBallVisibilityChanged?.Invoke(isChecked);
+    }
+
+    // --- Window-level drag-and-drop ---
+
+    private void Window_DragEnter(object sender, DragEventArgs e)
+    {
+        if (!_configStore.IsConfigured) return;
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.UnicodeText) || e.Data.GetDataPresent(DataFormats.Text))
+        {
+            DropOverlay.Visibility = Visibility.Visible;
+            e.Effects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.Effects = DragDropEffects.None;
+        }
+        e.Handled = true;
+    }
+
+    private void Window_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.UnicodeText) || e.Data.GetDataPresent(DataFormats.Text))
+        {
+            e.Effects = DragDropEffects.Copy;
+        }
+        else
+        {
+            e.Effects = DragDropEffects.None;
+        }
+        e.Handled = true;
+    }
+
+    private void Window_DragLeave(object sender, DragEventArgs e)
+    {
+        DropOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private async void Window_Drop(object sender, DragEventArgs e)
+    {
+        DropOverlay.Visibility = Visibility.Collapsed;
+
+        if (!_configStore.IsConfigured || SendService == null) return;
+
+        // Handle file drops
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+            foreach (var filePath in files)
+            {
+                if (File.Exists(filePath))
+                {
+                    try
+                    {
+                        await SendService.SendFileAsync(filePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        Services.SendService.ShowToast("Send failed", $"Failed to send: {ex.Message}");
+                    }
+                }
+            }
+            return;
+        }
+
+        // Handle text drops
+        var text = e.Data.GetDataPresent(DataFormats.UnicodeText)
+            ? (string?)e.Data.GetData(DataFormats.UnicodeText)
+            : (string?)e.Data.GetData(DataFormats.Text);
+
+        if (!string.IsNullOrEmpty(text))
+        {
+            try
+            {
+                await SendService.SendTextAsync(text);
+            }
+            catch (Exception ex)
+            {
+                Services.SendService.ShowToast("Send failed", $"Failed to send: {ex.Message}");
+            }
+        }
     }
 
     private async void TestConnectionButton_Click(object sender, RoutedEventArgs e)
