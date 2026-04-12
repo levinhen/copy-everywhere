@@ -78,6 +78,9 @@ public partial class MainWindow : Window
         _bluetoothService.ConnectionFailed += OnBluetoothConnectionFailed;
         _bluetoothService.Connected += OnBluetoothConnected;
         _bluetoothService.ConnectionAccepted += OnBluetoothConnectionAccepted;
+        _bluetoothService.TransferReceived += OnBluetoothTransferReceived;
+        _bluetoothService.ReceiveProgress += OnBluetoothReceiveProgress;
+        _bluetoothService.ReceiveFailed += OnBluetoothReceiveFailed;
 
         DataContext = _configStore;
 
@@ -1242,6 +1245,12 @@ public partial class MainWindow : Window
         TransferModeComboBox.SelectedIndex = _configStore.TransferMode == TransferMode.Bluetooth ? 1 : 0;
         UpdateBluetoothSectionVisibility();
         RenderPairedDevices();
+
+        // Start RFCOMM server if already in Bluetooth mode (for receiving inbound connections)
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            StartBluetoothServerIfNeeded();
+        }
     }
 
     private void TransferModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1255,6 +1264,16 @@ public partial class MainWindow : Window
         _configStore.TransferMode = newMode;
         _configStore.PersistConfig();
         UpdateBluetoothSectionVisibility();
+
+        // Start/stop RFCOMM server based on mode
+        if (newMode == TransferMode.Bluetooth)
+        {
+            StartBluetoothServerIfNeeded();
+        }
+        else
+        {
+            _bluetoothService.StopServer();
+        }
     }
 
     private void UpdateBluetoothSectionVisibility()
@@ -1661,6 +1680,99 @@ public partial class MainWindow : Window
                 UploadProgressPanel.Visibility = Visibility.Collapsed;
             }
         });
+    }
+
+    private void OnBluetoothReceiveProgress(double progress, BluetoothTransferHeader header)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (progress < 1.0)
+            {
+                BtReceiveProgressPanel.Visibility = Visibility.Visible;
+                BtReceiveProgressBar.Value = progress * 100;
+                var label = header.Type == BluetoothContentType.File
+                    ? $"Receiving {header.Filename} — {progress * 100:F0}%"
+                    : $"Receiving text — {progress * 100:F0}%";
+                BtReceiveProgressText.Text = label;
+            }
+            else
+            {
+                BtReceiveProgressPanel.Visibility = Visibility.Collapsed;
+            }
+        });
+    }
+
+    private void OnBluetoothTransferReceived(BluetoothSession session, BluetoothTransferPayload payload)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            BtReceiveProgressPanel.Visibility = Visibility.Collapsed;
+
+            if (payload.Header.Type == BluetoothContentType.Text)
+            {
+                var text = System.Text.Encoding.UTF8.GetString(payload.Data);
+                Clipboard.SetText(text);
+                RefreshClipboardPreview();
+                ShowToastNotification("Received text", $"Received text ({payload.Data.Length} chars) — copied to clipboard");
+            }
+            else
+            {
+                // Save file to Downloads folder
+                var downloadsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                var savePath = Path.Combine(downloadsPath, payload.Header.Filename);
+
+                // Avoid overwriting — append (1), (2), etc. if file exists
+                if (File.Exists(savePath))
+                {
+                    var ext = Path.GetExtension(savePath);
+                    var nameWithoutExt = Path.GetFileNameWithoutExtension(savePath);
+                    var counter = 1;
+                    do
+                    {
+                        savePath = Path.Combine(downloadsPath, $"{nameWithoutExt} ({counter}){ext}");
+                        counter++;
+                    } while (File.Exists(savePath));
+                }
+
+                File.WriteAllBytes(savePath, payload.Data);
+
+                // Verify byte count matches header
+                var written = new FileInfo(savePath).Length;
+                if (written != payload.Header.Size)
+                {
+                    ShowToastNotification("Receive warning",
+                        $"Size mismatch for {payload.Header.Filename}: expected {payload.Header.Size} bytes, got {written}");
+                }
+                else
+                {
+                    ShowToastNotification("Received file",
+                        $"Saved {Path.GetFileName(savePath)} to Downloads");
+                }
+            }
+        });
+    }
+
+    private void OnBluetoothReceiveFailed(Exception ex)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            BtReceiveProgressPanel.Visibility = Visibility.Collapsed;
+            ShowToastNotification("Bluetooth receive failed", ex.Message);
+        });
+    }
+
+    private async void StartBluetoothServerIfNeeded()
+    {
+        if (_bluetoothService.IsServerRunning) return;
+        try
+        {
+            await _bluetoothService.StartServerAsync();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to start Bluetooth RFCOMM server: {ex.Message}");
+        }
     }
 
     private static string FormatBluetoothAddress(ulong address)

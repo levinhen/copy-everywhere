@@ -46,6 +46,12 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
     public event Action<BluetoothSession>? SessionReady;
     /// Fired when the session handshake fails.
     public event Action<Exception>? SessionHandshakeFailed;
+    /// Fired when the session receives a complete transfer (text or file).
+    public event Action<BluetoothSession, BluetoothTransferPayload>? TransferReceived;
+    /// Fired during an incoming transfer with progress 0.0–1.0 and header info.
+    public event Action<double, BluetoothTransferHeader>? ReceiveProgress;
+    /// Fired when an incoming transfer fails.
+    public event Action<Exception>? ReceiveFailed;
 
     public bool IsServerRunning
     {
@@ -251,6 +257,9 @@ public class BluetoothService : INotifyPropertyChanged, IDisposable
         var session = new BluetoothSession(socket, device);
         session.HandshakeCompleted += s => SessionReady?.Invoke(s);
         session.HandshakeFailed += (s, ex) => SessionHandshakeFailed?.Invoke(ex);
+        session.TransferReceived += (s, payload) => TransferReceived?.Invoke(s, payload);
+        session.ReceiveProgress += (s, progress, header) => ReceiveProgress?.Invoke(progress, header);
+        session.ReceiveFailed += (s, ex) => ReceiveFailed?.Invoke(ex);
         _activeSession = session;
         OnPropertyChanged(nameof(ActiveSession));
 

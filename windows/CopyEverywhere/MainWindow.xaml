@@ -224,6 +224,12 @@
                         <StackPanel x:Name="BtDiscoveredPanel"/>
                     </ScrollViewer>
                 </Border>
+
+                <!-- Bluetooth Receive Progress -->
+                <StackPanel x:Name="BtReceiveProgressPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                    <ProgressBar x:Name="BtReceiveProgressBar" Height="20" Minimum="0" Maximum="100" Value="0"/>
+                    <TextBlock x:Name="BtReceiveProgressText" FontSize="11" Foreground="Gray" Margin="0,4,0,0"/>
+                </StackPanel>
             </StackPanel>
 
             <!-- Separator before main content -->

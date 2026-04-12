@@ -35,6 +35,8 @@
 - Windows Bluetooth UI is dynamically generated (clearing/rebuilding StackPanel children) same as discovered servers list. `RenderPairedDevices()`/`RenderDiscoveredBtDevices()` are the refresh methods.
 - Windows `SendService` is the single send dispatcher for all UI entry points. It checks `ConfigStore.TransferMode` and routes to `BluetoothSession` or `ApiClient`. Never bypass it for sends.
 - Windows `ConfigStore.IsSendReady` is the universal readiness check for send guards — true when LAN configured or Bluetooth connected. Use instead of `IsConfigured` in send paths.
+- Windows RFCOMM server must be explicitly started via `StartBluetoothServerIfNeeded()` for the device to accept inbound Bluetooth connections. Call from init and mode switch.
+- Windows `BluetoothService.CreateSession()` is the single place to wire all session events (handshake, transfer, progress, failure). Add new events there.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -433,5 +435,28 @@
   - `SendService` is the single send dispatcher for all UI entry points — both LAN and Bluetooth. Never bypass it for sends.
   - `IsSendReady` on `ConfigStore` is the universal readiness check — use it instead of `IsConfigured` in send guards.
   - `BluetoothSendProgress` event uses `Action<double>` (not `IProgress<double>`) since it fires from `Progress<T>` callbacks that may arrive on the thread pool — the MainWindow handler marshals to the dispatcher.
+  - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
+---
+
+## 2026-04-12 - US-048
+- What was implemented:
+  - BluetoothService.cs: Added `TransferReceived`, `ReceiveProgress`, `ReceiveFailed` events, wired from session in `CreateSession()`
+  - MainWindow.xaml: Added `BtReceiveProgressPanel` (ProgressBar + TextBlock) in Bluetooth section
+  - MainWindow.xaml.cs: Subscribed to new BluetoothService events in constructor
+  - `OnBluetoothTransferReceived`: Text → `Clipboard.SetText()` + toast. File → save to ~/Downloads with duplicate-name avoidance + byte count verification + toast
+  - `OnBluetoothReceiveProgress`: Drives BtReceiveProgressPanel with filename and percentage
+  - `OnBluetoothReceiveFailed`: Hides progress panel + error toast
+  - `StartBluetoothServerIfNeeded()`: Starts RFCOMM server in Bluetooth mode (mirrors macOS `startBluetoothServerIfNeeded`)
+  - Called from `InitializeTransferModeUI()` (launch) and `TransferModeComboBox_SelectionChanged` (mode switch)
+- Files changed:
+  - windows/CopyEverywhere/Services/BluetoothService.cs — 3 new events + session event forwarding
+  - windows/CopyEverywhere/MainWindow.xaml — BtReceiveProgressPanel
+  - windows/CopyEverywhere/MainWindow.xaml.cs — event handlers, RFCOMM server auto-start
+  - CLAUDE.md — documented Bluetooth receive and RFCOMM server auto-start patterns
+- **Learnings for future iterations:**
+  - `BluetoothSession` already had the complete receive loop and events — only service-level forwarding and UI wiring were missing.
+  - `BluetoothService.CreateSession()` is the single place to wire all session events — don't wire them elsewhere.
+  - RFCOMM server must be explicitly started for the device to accept inbound Bluetooth connections — it's not automatic.
+  - File save to Downloads needs duplicate-name avoidance (append counter) since Bluetooth receive doesn't have clip IDs.
   - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
 ---
