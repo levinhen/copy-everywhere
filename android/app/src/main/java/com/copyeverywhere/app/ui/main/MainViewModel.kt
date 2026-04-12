@@ -16,6 +16,7 @@ import com.copyeverywhere.app.data.ChunkedUploadState
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
+import com.copyeverywhere.app.data.TransferMode
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,6 +38,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val targetDeviceId: StateFlow<String> = configStore.targetDeviceId
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val transferMode: StateFlow<TransferMode> = configStore.transferMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TransferMode.LanServer)
 
     private val _textInput = MutableStateFlow("")
     val textInput: StateFlow<String> = _textInput.asStateFlow()
@@ -223,6 +226,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startQueuePolling() {
         queuePollingJob?.cancel()
+        // Only poll queue in LAN mode
+        if (transferMode.value != TransferMode.LanServer) return
         queuePollingJob = viewModelScope.launch {
             while (true) {
                 refreshQueue()

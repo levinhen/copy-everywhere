@@ -11,7 +11,7 @@ US-057: SSE client and auto-receive                         [x]
 US-058: Foreground service and persistent notification      [x]
 US-059: Main Activity — text input and file upload          [x]
 US-060: Share sheet integration                             [x]
-US-061: Transfer mode switch (LAN <-> Bluetooth)            [ ]
+US-061: Transfer mode switch (LAN <-> Bluetooth)            [x]
 US-062: Bluetooth RFCOMM service and session protocol       [ ]
 US-063: Bluetooth device scanning and pairing               [ ]
 US-064: Bluetooth auto-reconnect and RFCOMM server          [ ]
@@ -46,6 +46,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - File save to Downloads: use `MediaStore.Downloads` (no storage permissions needed on API 29+)
 - Android 10+ clipboard restriction: use transparent `ClipboardTrampolineActivity` to read clipboard from notification actions (background services can't read clipboard)
 - `buildServiceNotificationStatic()` on `CopyEverywhereService.Companion` for updating the service notification from outside the service
+- `CopyEverywhereService.instance` static reference for ViewModel→Service communication (e.g., `switchMode()`)
+- `TransferMode` enum in `ConfigStore` — check `transferMode.value` before starting LAN-only operations (queue polling, SSE)
 
 ---
 
@@ -244,4 +246,28 @@ US-068: Boot receiver and battery optimization              [ ]
   - `Intent.getParcelableArrayListExtra<Uri>(EXTRA_STREAM)` for ACTION_SEND_MULTIPLE
   - ShareReceiverActivity uses full theme (not transparent) since it shows upload progress UI
   - Auto-finish with delay after success gives user visual confirmation before closing
+---
+
+## 2026-04-12 - US-061
+- Implemented TransferMode enum (LanServer, Bluetooth) persisted in DataStore
+- Added segmented control (FilterChip pair) on config screen to switch modes
+- Config screen conditionally shows LAN fields (Host URL, discovered servers, access token, target device, test connection) or Bluetooth section
+- CopyEverywhereService.switchMode() stops SSE when switching to BT, restarts SSE when switching to LAN
+- Service notification text reflects active mode ("LAN — Listening..." vs "Bluetooth — Waiting...")
+- MainScreen conditionally shows queue (LAN) or Bluetooth status section
+- MainViewModel skips queue polling in Bluetooth mode
+- CopyEverywhereService exposes static `instance` reference for direct mode switching from ViewModel
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ConfigStore.kt` — TransferMode enum, transferMode flow, setTransferMode()
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt` — switchMode(), instance, mode-aware onStartCommand
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt` — transferMode state, updateTransferMode()
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt` — FilterChip segmented control, conditional LAN/BT sections
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt` — transferMode state, conditional queue polling
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt` — conditional queue/BT status sections
+- **Learnings for future iterations:**
+  - `FilterChip` with `FilterChipDefaults.filterChipColors()` works well as a segmented control in Material 3
+  - `CopyEverywhereService.instance` static reference is the simplest pattern for ViewModel→Service communication without binding
+  - `DisposableEffect(transferMode)` re-runs when mode changes, so mDNS discovery auto-starts/stops with mode switches
+  - Bluetooth section is a placeholder — US-062 will implement actual RFCOMM server/client
+  - Queue polling guard: check `transferMode.value` at start of `startQueuePolling()`, not inside the loop, to avoid race conditions
 ---

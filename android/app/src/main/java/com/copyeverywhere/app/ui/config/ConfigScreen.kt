@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -24,6 +25,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +48,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.copyeverywhere.app.data.DiscoveredServer
+import com.copyeverywhere.app.data.TransferMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -61,10 +65,13 @@ fun ConfigScreen(
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val devices by viewModel.devices.collectAsState()
     val discoveredServers by viewModel.discoveredServers.collectAsState()
+    val transferMode by viewModel.transferMode.collectAsState()
 
-    // Start/stop mDNS discovery with screen lifecycle
-    DisposableEffect(Unit) {
-        viewModel.startDiscovery()
+    // Start/stop mDNS discovery with screen lifecycle (only in LAN mode)
+    DisposableEffect(transferMode) {
+        if (transferMode == TransferMode.LanServer) {
+            viewModel.startDiscovery()
+        }
         onDispose { viewModel.stopDiscovery() }
     }
 
@@ -88,40 +95,47 @@ fun ConfigScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Host URL
-            OutlinedTextField(
-                value = hostUrl,
-                onValueChange = { viewModel.updateHostUrl(it) },
-                label = { Text("Host URL") },
-                placeholder = { Text("http://192.168.1.100:8080") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+            // Transfer Mode selector
+            Text(
+                text = "Transfer Mode",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-
-            // Discovered Servers
-            DiscoveredServersList(
-                servers = discoveredServers,
-                onSelect = { viewModel.selectDiscoveredServer(it) }
-            )
-
-            // Access Token — hidden when server reports auth: false
-            if (serverAuthRequired != false) {
-                OutlinedTextField(
-                    value = accessToken,
-                    onValueChange = { viewModel.updateAccessToken(it) },
-                    label = {
-                        Text(
-                            if (serverAuthRequired == true) "Access Token (required)"
-                            else "Access Token"
-                        )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = transferMode == TransferMode.LanServer,
+                    onClick = { viewModel.updateTransferMode(TransferMode.LanServer) },
+                    label = { Text("LAN Server") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(18.dp))
                     },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = transferMode == TransferMode.Bluetooth,
+                    onClick = { viewModel.updateTransferMode(TransferMode.Bluetooth) },
+                    label = { Text("Bluetooth") },
+                    leadingIcon = {
+                        Icon(Icons.Default.Bluetooth, contentDescription = null, modifier = Modifier.size(18.dp))
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    modifier = Modifier.weight(1f)
                 )
             }
 
-            // Device Name
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Device Name (shared across modes)
             OutlinedTextField(
                 value = deviceName,
                 onValueChange = { viewModel.updateDeviceName(it) },
@@ -130,7 +144,7 @@ fun ConfigScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            // Device ID (read-only)
+            // Device ID (read-only, shared)
             if (deviceId.isNotBlank()) {
                 OutlinedTextField(
                     value = deviceId,
@@ -142,56 +156,125 @@ fun ConfigScreen(
                 )
             }
 
-            // Target Device dropdown
-            TargetDeviceDropdown(
-                selectedDeviceId = targetDeviceId,
-                devices = devices.filter { it.deviceId != deviceId },
-                onSelect = { viewModel.updateTargetDeviceId(it) }
-            )
+            // === LAN Server section ===
+            if (transferMode == TransferMode.LanServer) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "LAN Server",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
 
-            Spacer(modifier = Modifier.height(4.dp))
+                // Host URL
+                OutlinedTextField(
+                    value = hostUrl,
+                    onValueChange = { viewModel.updateHostUrl(it) },
+                    label = { Text("Host URL") },
+                    placeholder = { Text("http://192.168.1.100:8080") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
-            // Test Connection button
-            Button(
-                onClick = { viewModel.testConnection() },
-                enabled = connectionStatus !is ConnectionStatus.Testing,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                if (connectionStatus is ConnectionStatus.Testing) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary
+                // Discovered Servers
+                DiscoveredServersList(
+                    servers = discoveredServers,
+                    onSelect = { viewModel.selectDiscoveredServer(it) }
+                )
+
+                // Access Token — hidden when server reports auth: false
+                if (serverAuthRequired != false) {
+                    OutlinedTextField(
+                        value = accessToken,
+                        onValueChange = { viewModel.updateAccessToken(it) },
+                        label = {
+                            Text(
+                                if (serverAuthRequired == true) "Access Token (required)"
+                                else "Access Token"
+                            )
+                        },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
                 }
-                Text("Test Connection")
-            }
 
-            // Connection status
-            when (val status = connectionStatus) {
-                is ConnectionStatus.Success -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                // Target Device dropdown
+                TargetDeviceDropdown(
+                    selectedDeviceId = targetDeviceId,
+                    devices = devices.filter { it.deviceId != deviceId },
+                    onSelect = { viewModel.updateTargetDeviceId(it) }
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // Test Connection button
+                Button(
+                    onClick = { viewModel.testConnection() },
+                    enabled = connectionStatus !is ConnectionStatus.Testing,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (connectionStatus is ConnectionStatus.Testing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text("Test Connection")
+                }
+
+                // Connection status
+                when (val status = connectionStatus) {
+                    is ConnectionStatus.Success -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Connected — ${status.latencyMs}ms",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                         Text(
-                            text = "Connected — ${status.latencyMs}ms",
-                            color = MaterialTheme.colorScheme.primary,
+                            text = if (status.authRequired) "Authentication: required" else "Authentication: not required",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    is ConnectionStatus.Error -> {
+                        Text(
+                            text = "Error: ${status.message}",
+                            color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
-                    Text(
-                        text = if (status.authRequired) "Authentication: required" else "Authentication: not required",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    else -> {}
                 }
-                is ConnectionStatus.Error -> {
-                    Text(
-                        text = "Error: ${status.message}",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
+            }
+
+            // === Bluetooth section ===
+            if (transferMode == TransferMode.Bluetooth) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Bluetooth",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                // Placeholder for Bluetooth device scanning and pairing (US-063)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
                     )
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Bluetooth device pairing will be available in a future update.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-                else -> {}
             }
 
             Spacer(modifier = Modifier.height(16.dp))

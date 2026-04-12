@@ -23,6 +23,7 @@ import com.copyeverywhere.app.data.ApiClient
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.SseClient
+import com.copyeverywhere.app.data.TransferMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,19 +42,34 @@ class CopyEverywhereService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         configStore = ConfigStore(applicationContext)
         createNotificationChannels()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("Listening for clips..."))
-        startSse()
+        scope.launch {
+            val mode = configStore.transferMode.first()
+            when (mode) {
+                TransferMode.LanServer -> {
+                    startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("LAN — Listening for clips..."))
+                    startSse()
+                }
+                TransferMode.Bluetooth -> {
+                    startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("Bluetooth — Waiting for connection..."))
+                    // RFCOMM server will be started by US-062
+                }
+            }
+        }
+        // Start immediately with a generic notification (coroutine updates it)
+        startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("Starting..."))
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        instance = null
         sseJob?.cancel()
         scope.cancel()
         super.onDestroy()
@@ -117,6 +133,26 @@ class CopyEverywhereService : Service() {
         sseJob?.cancel()
         sseJob = null
         updateServiceNotification("Disconnected")
+    }
+
+    /**
+     * Switch between LAN and Bluetooth modes.
+     * LAN: starts SSE + queue polling.
+     * Bluetooth: stops SSE (RFCOMM server started by US-062).
+     */
+    fun switchMode(mode: TransferMode) {
+        when (mode) {
+            TransferMode.LanServer -> {
+                // Stop Bluetooth (RFCOMM server stop — US-062)
+                startSse()
+                updateServiceNotification("LAN — Listening for clips...")
+            }
+            TransferMode.Bluetooth -> {
+                stopSse()
+                // Start RFCOMM server — US-062
+                updateServiceNotification("Bluetooth — Waiting for connection...")
+            }
+        }
     }
 
     private suspend fun handleSseEvent(event: com.copyeverywhere.app.data.SseEvent) {
@@ -228,6 +264,10 @@ class CopyEverywhereService : Service() {
         const val CHANNEL_SERVICE = "copyeverywhere_service"
         const val CHANNEL_TRANSFERS = "copyeverywhere_transfers"
         const val NOTIFICATION_ID_SERVICE = 1
+
+        /** Live reference to the running service instance, or null if not running. */
+        var instance: CopyEverywhereService? = null
+            private set
 
         fun start(context: Context) {
             val intent = Intent(context, CopyEverywhereService::class.java)

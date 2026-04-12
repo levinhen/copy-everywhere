@@ -166,6 +166,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **File save to Downloads.** Uses `MediaStore.Downloads.EXTERNAL_CONTENT_URI` — no storage permissions needed on API 29+.
 - **POST_NOTIFICATIONS permission.** Android 13+ requires runtime permission. Requested in `MainActivity` on launch via `ActivityResultContracts.RequestPermission()`. Service starts regardless of grant result.
 - **Share sheet integration.** `ShareReceiverActivity` handles `ACTION_SEND` (single file/text) and `ACTION_SEND_MULTIPLE` (multiple files) with `*/*` MIME type. Text extras sent as text clips; file URIs routed to single or chunked upload based on 50 MB threshold. Minimal Compose UI shows progress and auto-finishes on success.
+- **`TransferMode` enum** (`LanServer`/`Bluetooth`) persisted in DataStore. `ConfigStore.transferMode` is a `Flow<TransferMode>`. `CopyEverywhereService.switchMode(mode)` handles stopping/starting SSE and RFCOMM server. `ConfigViewModel.updateTransferMode()` persists the change and notifies the running service via `CopyEverywhereService.instance?.switchMode()`.
+- **`CopyEverywhereService.instance`** static reference (set in `onCreate`, cleared in `onDestroy`) allows ViewModels to call service methods directly without binding. Used for `switchMode()`.
+- **Config screen conditional sections.** `FilterChip` segmented control switches between LAN and Bluetooth sections. LAN section shows Host URL, discovered servers, access token, target device, test connection. Bluetooth section shows device pairing UI (placeholder until US-062+).
+- **Mode switch service lifecycle (Android).** LAN→BT stops SSE; BT→LAN starts SSE. Queue polling in `MainViewModel` only runs in LAN mode. Notification text reflects active mode.
 
 **Cross-platform:**
 

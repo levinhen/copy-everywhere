@@ -8,6 +8,8 @@ import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.Device
 import com.copyeverywhere.app.data.DiscoveredServer
 import com.copyeverywhere.app.data.MdnsDiscoveryService
+import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.service.CopyEverywhereService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val targetDeviceId: StateFlow<String> = configStore.targetDeviceId
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
+    val transferMode: StateFlow<TransferMode> = configStore.transferMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TransferMode.LanServer)
 
     private val _accessToken = MutableStateFlow(configStore.getAccessToken())
     val accessToken: StateFlow<String> = _accessToken.asStateFlow()
@@ -60,6 +64,14 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateTargetDeviceId(id: String) {
         viewModelScope.launch { configStore.setTargetDeviceId(id) }
+    }
+
+    fun updateTransferMode(mode: TransferMode) {
+        viewModelScope.launch {
+            configStore.setTransferMode(mode)
+            // Notify the running service to switch modes
+            CopyEverywhereService.instance?.switchMode(mode)
+        }
     }
 
     fun testConnection() {

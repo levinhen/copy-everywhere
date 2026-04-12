@@ -47,6 +47,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.copyeverywhere.app.data.ClipResponse
+import com.copyeverywhere.app.data.TransferMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,6 +60,7 @@ fun MainScreen(
     val queue by viewModel.queue.collectAsState()
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val receiveStatus by viewModel.receiveStatus.collectAsState()
+    val transferMode by viewModel.transferMode.collectAsState()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -158,28 +160,44 @@ fun MainScreen(
                 }
             }
 
-            // Queue section
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text("Queue", style = MaterialTheme.typography.titleMedium)
+            // Queue section (LAN mode only)
+            if (transferMode == TransferMode.LanServer) {
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Queue", style = MaterialTheme.typography.titleMedium)
+                }
+
+                if (queue.isEmpty()) {
+                    item {
+                        Text(
+                            "No pending clips",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    items(queue, key = { it.id }) { clip ->
+                        val isReceiving = receiveStatus is ReceiveStatus.Receiving &&
+                                (receiveStatus as ReceiveStatus.Receiving).clipId == clip.id
+                        QueueItemCard(
+                            clip = clip,
+                            isReceiving = isReceiving,
+                            onClick = { viewModel.receiveQueueItem(clip) }
+                        )
+                    }
+                }
             }
 
-            if (queue.isEmpty()) {
+            // Bluetooth status section (BT mode only)
+            if (transferMode == TransferMode.Bluetooth) {
                 item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Bluetooth", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "No pending clips",
+                        "Waiting for Bluetooth connection...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                items(queue, key = { it.id }) { clip ->
-                    val isReceiving = receiveStatus is ReceiveStatus.Receiving &&
-                            (receiveStatus as ReceiveStatus.Receiving).clipId == clip.id
-                    QueueItemCard(
-                        clip = clip,
-                        isReceiving = isReceiving,
-                        onClick = { viewModel.receiveQueueItem(clip) }
                     )
                 }
             }
