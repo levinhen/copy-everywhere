@@ -144,3 +144,5 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.
 - **History storage (MVP):** Both macOS and Windows HistoryStore removed — replaced by live server queue view (`GET /clips?device_id=<self>`). macOS removed in US-027, Windows in US-033.
+- **Send routing via `TransferMode` (Windows).** `SendService` checks `ConfigStore.TransferMode` at the top of `SendTextAsync`/`SendFileAsync` and dispatches to `BluetoothSession` or `ApiClient`. `IsSendReady` property on `ConfigStore` returns true when the active mode's transport is ready (LAN configured or Bluetooth connected+handshake complete). All send entry points (Ctrl+V, drag-drop, FloatingBall drop) go through `SendService`.
+- **Bluetooth send progress (Windows).** `SendService.BluetoothSendProgress` event (0.0–1.0) drives the same `UploadProgressPanel` used for chunked uploads. `MainWindow` subscribes via the `SendService` property setter.

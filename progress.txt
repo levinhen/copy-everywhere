@@ -33,6 +33,8 @@
 - For cross-platform JSON enum interop (macOS sends lowercase), use string-backed properties in C# instead of `JsonStringEnumConverter`.
 - Windows `ConfigStore` persists Bluetooth config (`TransferMode`, `PairedDevices`) in the same `config.json` as device config. Use `AddPairedDevice()`/`RemovePairedDevice()` helpers — they auto-persist.
 - Windows Bluetooth UI is dynamically generated (clearing/rebuilding StackPanel children) same as discovered servers list. `RenderPairedDevices()`/`RenderDiscoveredBtDevices()` are the refresh methods.
+- Windows `SendService` is the single send dispatcher for all UI entry points. It checks `ConfigStore.TransferMode` and routes to `BluetoothSession` or `ApiClient`. Never bypass it for sends.
+- Windows `ConfigStore.IsSendReady` is the universal readiness check for send guards — true when LAN configured or Bluetooth connected. Use instead of `IsConfigured` in send paths.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -406,5 +408,30 @@
   - `DeviceInformationCollection` implements `IEnumerable<DeviceInformation>` — use `.ToList()` with `System.Linq` for mutable lists.
   - `BluetoothDevice.BluetoothAddress` is a `ulong` — format to MAC address string via `BitConverter.GetBytes()` (6 bytes, little-endian order means bytes[5] is the MSB).
   - WPF `ComboBox` `Tag` property is a convenient way to associate enum values with items without a full converter.
+  - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
+---
+
+## 2026-04-12 - US-047
+- What was implemented:
+  - `SendService` now accepts `BluetoothService` dependency and routes sends based on `ConfigStore.TransferMode`
+  - Bluetooth text send: dispatches to `BluetoothSession.SendTextAsync()` with `IProgress<double>` callback
+  - Bluetooth file send: dispatches to `BluetoothSession.SendFileAsync()` with chunk-streaming and progress
+  - `SendService.BluetoothSendProgress` event drives the existing `UploadProgressPanel` in MainWindow
+  - `ConfigStore.IsSendReady` property: returns true for LAN mode when configured, Bluetooth mode when connected
+  - All send entry points (Ctrl+V, drag-drop in MainWindow, FloatingBall drop) route through `SendService`
+  - FloatingBall readiness check updated to show mode-appropriate error message
+  - Toast notifications on success/failure for both text and file Bluetooth sends
+- Files changed:
+  - windows/CopyEverywhere/Services/SendService.cs — added BluetoothService dep, Bluetooth send paths, BluetoothSendProgress event
+  - windows/CopyEverywhere/Services/ConfigStore.cs — added IsSendReady property
+  - windows/CopyEverywhere/App.xaml.cs — pass BluetoothService to SendService constructor
+  - windows/CopyEverywhere/MainWindow.xaml.cs — expose BluetoothService, SendService setter wires progress event, OnBluetoothSendProgress handler, IsSendReady guards
+  - windows/CopyEverywhere/FloatingBallWindow.xaml.cs — IsSendReady guard with mode-appropriate error
+  - CLAUDE.md — documented send routing and progress patterns
+  - prd.json — US-047 passes: true
+- **Learnings for future iterations:**
+  - `SendService` is the single send dispatcher for all UI entry points — both LAN and Bluetooth. Never bypass it for sends.
+  - `IsSendReady` on `ConfigStore` is the universal readiness check — use it instead of `IsConfigured` in send guards.
+  - `BluetoothSendProgress` event uses `Action<double>` (not `IProgress<double>`) since it fires from `Progress<T>` callbacks that may arrive on the thread pool — the MainWindow handler marshals to the dispatcher.
   - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
 ---

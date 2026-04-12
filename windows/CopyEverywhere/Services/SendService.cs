@@ -9,21 +9,35 @@ public class SendService
 {
     private readonly ApiClient _apiClient;
     private readonly ConfigStore _configStore;
+    private readonly BluetoothService _bluetoothService;
 
     private const long ChunkedThreshold = 50L * 1024 * 1024; // 50MB
     private const int ChunkSize = 10 * 1024 * 1024; // 10MB
 
-    public SendService(ApiClient apiClient, ConfigStore configStore)
+    public SendService(ApiClient apiClient, ConfigStore configStore, BluetoothService bluetoothService)
     {
         _apiClient = apiClient;
         _configStore = configStore;
+        _bluetoothService = bluetoothService;
     }
 
     private string? SenderDeviceId => string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId;
     private string? TargetDeviceId => string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId;
 
+    /// <summary>
+    /// Progress callback for Bluetooth sends. UI can subscribe to show progress.
+    /// Reports 0.0–1.0.
+    /// </summary>
+    public event Action<double>? BluetoothSendProgress;
+
     public async Task SendTextAsync(string text)
     {
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            await SendTextBluetoothAsync(text);
+            return;
+        }
+
         var clip = await _apiClient.SendTextClipAsync(text, SenderDeviceId, TargetDeviceId);
         if (clip != null)
         {
@@ -37,6 +51,12 @@ public class SendService
 
     public async Task SendFileAsync(string filePath)
     {
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            await SendFileBluetoothAsync(filePath);
+            return;
+        }
+
         var fileInfo = new FileInfo(filePath);
         var filename = fileInfo.Name;
 
@@ -83,6 +103,54 @@ public class SendService
             {
                 ShowToast("Send failed", $"Failed to send: no response for {filename}");
             }
+        }
+    }
+
+    // ── Bluetooth send paths ────────────────────────────────────────
+
+    private async Task SendTextBluetoothAsync(string text)
+    {
+        var session = _bluetoothService.ActiveSession;
+        if (session == null || !session.IsHandshakeComplete)
+        {
+            ShowToast("Send failed", "Bluetooth is not connected");
+            return;
+        }
+
+        try
+        {
+            var progress = new Progress<double>(p => BluetoothSendProgress?.Invoke(p));
+            await session.SendTextAsync(text, progress);
+            ShowToast("Sent text", $"Sent text via Bluetooth ({text.Length} chars)");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("Send failed", $"Bluetooth send failed: {ex.Message}");
+            throw;
+        }
+    }
+
+    private async Task SendFileBluetoothAsync(string filePath)
+    {
+        var session = _bluetoothService.ActiveSession;
+        if (session == null || !session.IsHandshakeComplete)
+        {
+            ShowToast("Send failed", "Bluetooth is not connected");
+            return;
+        }
+
+        var filename = Path.GetFileName(filePath);
+
+        try
+        {
+            var progress = new Progress<double>(p => BluetoothSendProgress?.Invoke(p));
+            await session.SendFileAsync(filePath, progress);
+            ShowToast("Sent file", $"Sent {filename} via Bluetooth");
+        }
+        catch (Exception ex)
+        {
+            ShowToast("Send failed", $"Bluetooth send failed: {ex.Message}");
+            throw;
         }
     }
 

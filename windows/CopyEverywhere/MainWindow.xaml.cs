@@ -23,7 +23,20 @@ public partial class MainWindow : Window
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
-    public SendService? SendService { get; set; }
+    public BluetoothService BluetoothService => _bluetoothService;
+    private SendService? _sendService;
+    public SendService? SendService
+    {
+        get => _sendService;
+        set
+        {
+            if (_sendService != null)
+                _sendService.BluetoothSendProgress -= OnBluetoothSendProgress;
+            _sendService = value;
+            if (_sendService != null)
+                _sendService.BluetoothSendProgress += OnBluetoothSendProgress;
+        }
+    }
 
     public event Action<bool>? FloatingBallVisibilityChanged;
 
@@ -152,7 +165,7 @@ public partial class MainWindow : Window
 
     private async void PasteCommand_Executed(object sender, System.Windows.Input.ExecutedRoutedEventArgs e)
     {
-        if (!_configStore.IsConfigured || SendService == null) return;
+        if (!_configStore.IsSendReady || SendService == null) return;
 
         e.Handled = true; // Prevent default paste into text inputs
 
@@ -239,7 +252,7 @@ public partial class MainWindow : Window
 
     private void Window_DragEnter(object sender, DragEventArgs e)
     {
-        if (!_configStore.IsConfigured) return;
+        if (!_configStore.IsSendReady) return;
         if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.UnicodeText) || e.Data.GetDataPresent(DataFormats.Text))
         {
             DropOverlay.Visibility = Visibility.Visible;
@@ -274,7 +287,7 @@ public partial class MainWindow : Window
     {
         DropOverlay.Visibility = Visibility.Collapsed;
 
-        if (!_configStore.IsConfigured || SendService == null) return;
+        if (!_configStore.IsSendReady || SendService == null) return;
 
         // Handle file drops
         if (e.Data.GetDataPresent(DataFormats.FileDrop))
@@ -1631,6 +1644,23 @@ public partial class MainWindow : Window
     private void OnBluetoothConnectionAccepted(Windows.Networking.Sockets.StreamSocket socket, Windows.Devices.Bluetooth.BluetoothDevice? device)
     {
         // Session creation is automatic — SessionReady will fire on handshake success
+    }
+
+    private void OnBluetoothSendProgress(double progress)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (progress < 1.0)
+            {
+                UploadProgressPanel.Visibility = Visibility.Visible;
+                UploadProgressBar.Value = progress * 100;
+                UploadProgressText.Text = $"Bluetooth send — {progress * 100:F0}%";
+            }
+            else
+            {
+                UploadProgressPanel.Visibility = Visibility.Collapsed;
+            }
+        });
     }
 
     private static string FormatBluetoothAddress(ulong address)

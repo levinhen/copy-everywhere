@@ -157,6 +157,11 @@ public class ConfigStore : INotifyPropertyChanged
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl);
 
+    public bool IsSendReady =>
+        TransferMode == TransferMode.LanServer
+            ? IsConfigured
+            : BluetoothConnectionStatus == BluetoothConnectionStatus.Connected;
+
     public ConfigStore()
     {
         Load();
