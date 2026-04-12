@@ -10,7 +10,7 @@ US-056: API client — receive clip (metadata + download)     [x]
 US-057: SSE client and auto-receive                         [x]
 US-058: Foreground service and persistent notification      [x]
 US-059: Main Activity — text input and file upload          [x]
-US-060: Share sheet integration                             [ ]
+US-060: Share sheet integration                             [x]
 US-061: Transfer mode switch (LAN <-> Bluetooth)            [ ]
 US-062: Bluetooth RFCOMM service and session protocol       [ ]
 US-063: Bluetooth device scanning and pairing               [ ]
@@ -40,6 +40,7 @@ US-068: Boot receiver and battery optimization              [ ]
 - Notification channels: `CHANNEL_SERVICE` (low importance, ongoing) and `CHANNEL_TRANSFERS` (high importance, auto-cancel)
 - Android 13+ requires `POST_NOTIFICATIONS` runtime permission — request via `ActivityResultContracts.RequestPermission()`
 - `CopyEverywhereService.start(context)` / `.stop(context)` static helpers for service lifecycle
+- Share sheet: `ShareReceiverActivity` handles ACTION_SEND (single) and ACTION_SEND_MULTIPLE; routes to ApiClient single or chunked upload
 - `ActivityResultContracts.OpenDocument()` for system file picker; pass `arrayOf("*/*")` for all types
 - `Icons.AutoMirrored.Filled.Send` (not `Icons.Default.Send` — deprecated)
 - File save to Downloads: use `MediaStore.Downloads` (no storage permissions needed on API 29+)
@@ -224,4 +225,23 @@ US-068: Boot receiver and battery optimization              [ ]
   - `DisposableEffect(Unit)` for starting/stopping queue polling when screen is visible
   - `LazyColumn` with `items(key = { it.id })` for efficient queue list rendering
   - `ChunkedUploadState.job` can be cancelled for pause, then re-launch for resume after querying server status
+---
+
+## 2026-04-12 - US-060
+- Implemented ShareReceiverActivity with intent filters for ACTION_SEND and ACTION_SEND_MULTIPLE (*/* MIME type)
+- Handles shared text (EXTRA_TEXT) as text clip send, shared files (EXTRA_STREAM) as file upload
+- Routes files to single or chunked upload based on 50 MB threshold
+- Minimal Compose UI with progress bar, speed display, and auto-finish on completion
+- Multi-file support: uploads sequentially with per-file progress tracking
+- Error state shows message + Close button; success auto-finishes after 1.5s
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/service/ShareReceiverActivity.kt`
+- Files modified:
+  - `android/app/src/main/AndroidManifest.xml` — registered ShareReceiverActivity with intent filters
+- **Learnings for future iterations:**
+  - `coroutineScope {}` provides `launch` as a member function — don't use `kotlinx.coroutines.launch` (that's not a top-level function)
+  - `Intent.getParcelableExtra<Uri>(EXTRA_STREAM)` is deprecated on API 33+ but still works for minSdk 29
+  - `Intent.getParcelableArrayListExtra<Uri>(EXTRA_STREAM)` for ACTION_SEND_MULTIPLE
+  - ShareReceiverActivity uses full theme (not transparent) since it shows upload progress UI
+  - Auto-finish with delay after success gives user visual confirmation before closing
 ---

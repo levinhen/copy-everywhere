@@ -165,6 +165,7 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Clipboard trampoline.** Android 10+ restricts `ClipboardManager.primaryClip` to foreground activities. The "Send clipboard" notification action launches `ClipboardTrampolineActivity` (transparent, `excludeFromRecents`, `noHistory`) which reads clipboard → sends via `ApiClient` → toasts "Sent!" → updates service notification briefly → auto-finishes. `CopyEverywhereService.buildServiceNotificationStatic()` is the shared notification builder used by both the service and the trampoline.
 - **File save to Downloads.** Uses `MediaStore.Downloads.EXTERNAL_CONTENT_URI` — no storage permissions needed on API 29+.
 - **POST_NOTIFICATIONS permission.** Android 13+ requires runtime permission. Requested in `MainActivity` on launch via `ActivityResultContracts.RequestPermission()`. Service starts regardless of grant result.
+- **Share sheet integration.** `ShareReceiverActivity` handles `ACTION_SEND` (single file/text) and `ACTION_SEND_MULTIPLE` (multiple files) with `*/*` MIME type. Text extras sent as text clips; file URIs routed to single or chunked upload based on 50 MB threshold. Minimal Compose UI shows progress and auto-finishes on success.
 
 **Cross-platform:**
 
