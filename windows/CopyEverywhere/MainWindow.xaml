@@ -304,13 +304,13 @@
 
                 <Separator Margin="0,4,0,16"/>
 
-                <!-- History Section -->
-                <TextBlock Text="Send History" Style="{StaticResource SectionHeader}"/>
+                <!-- Server Queue Section -->
+                <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
 
-                <ScrollViewer x:Name="HistoryScrollViewer" MaxHeight="250" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
-                    <StackPanel x:Name="HistoryListPanel">
-                        <TextBlock x:Name="HistoryEmptyText"
-                                   Text="No history yet"
+                <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
+                    <StackPanel x:Name="QueueListPanel">
+                        <TextBlock x:Name="QueueEmptyText"
+                                   Text="Queue is empty — copy something and click the icon."
                                    Foreground="Gray"
                                    FontSize="12"
                                    HorizontalAlignment="Center"

@@ -16,7 +16,6 @@ public partial class MainWindow : Window
 {
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
-    private readonly HistoryStore _historyStore;
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
@@ -36,13 +35,15 @@ public partial class MainWindow : Window
     // Download state
     private ClipResponse? _downloadClipMetadata;
 
+    // Queue polling timer
+    private System.Windows.Threading.DispatcherTimer? _queueTimer;
+
     public MainWindow()
     {
         InitializeComponent();
 
         _configStore = new ConfigStore();
         _apiClient = new ApiClient(_configStore);
-        _historyStore = new HistoryStore();
 
         DataContext = _configStore;
 
@@ -53,7 +54,6 @@ public partial class MainWindow : Window
         UpdateDeviceInfoDisplay();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
-        RefreshHistoryList();
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -334,16 +334,7 @@ public partial class MainWindow : Window
             {
                 var expiresIn = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
                 ShowSendStatus($"Sent! Clip ID: {clip.Id}\nExpires at: {expiresIn}", isError: false);
-                _historyStore.AddRecord(new HistoryRecord
-                {
-                    ClipId = clip.Id,
-                    Type = "text",
-                    Filename = null,
-                    Timestamp = clip.CreatedAt,
-                    ExpiresAt = clip.ExpiresAt,
-                    Status = "success",
-                });
-                RefreshHistoryList();
+                _ = RefreshQueueAsync();
             }
             else
             {
@@ -541,16 +532,7 @@ public partial class MainWindow : Window
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
                     ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
-                    _historyStore.AddRecord(new HistoryRecord
-                    {
-                        ClipId = clip.Id,
-                        Type = clip.Type,
-                        Filename = clip.Filename,
-                        Timestamp = clip.CreatedAt,
-                        ExpiresAt = clip.ExpiresAt,
-                        Status = "success",
-                    });
-                    RefreshHistoryList();
+                    _ = RefreshQueueAsync();
                 }
             }
         }
@@ -561,17 +543,6 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             ShowFileUploadStatus($"Upload error: {ex.Message}", isError: true);
-            // Record failed upload in history
-            _historyStore.AddRecord(new HistoryRecord
-            {
-                ClipId = _chunkedUploadId ?? "?",
-                Type = "file",
-                Filename = Path.GetFileName(filePath),
-                Timestamp = DateTime.UtcNow,
-                ExpiresAt = DateTime.UtcNow.AddHours(1),
-                Status = "failed",
-            });
-            RefreshHistoryList();
         }
         finally
         {
@@ -638,16 +609,7 @@ public partial class MainWindow : Window
         {
             var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
             ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
-            _historyStore.AddRecord(new HistoryRecord
-            {
-                ClipId = clip.Id,
-                Type = clip.Type,
-                Filename = clip.Filename,
-                Timestamp = clip.CreatedAt,
-                ExpiresAt = clip.ExpiresAt,
-                Status = "success",
-            });
-            RefreshHistoryList();
+            _ = RefreshQueueAsync();
         }
 
         UploadProgressPanel.Visibility = Visibility.Collapsed;
@@ -702,16 +664,7 @@ public partial class MainWindow : Window
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
                     ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
-                    _historyStore.AddRecord(new HistoryRecord
-                    {
-                        ClipId = clip.Id,
-                        Type = clip.Type,
-                        Filename = clip.Filename,
-                        Timestamp = clip.CreatedAt,
-                        ExpiresAt = clip.ExpiresAt,
-                        Status = "success",
-                    });
-                    RefreshHistoryList();
+                    _ = RefreshQueueAsync();
                 }
                 UploadProgressPanel.Visibility = Visibility.Collapsed;
                 ChunkedControlPanel.Visibility = Visibility.Collapsed;
@@ -839,17 +792,49 @@ public partial class MainWindow : Window
         }
     }
 
-    // --- History ---
+    // --- Server Queue ---
 
-    private void RefreshHistoryList()
+    private void StartQueuePolling()
     {
-        HistoryListPanel.Children.Clear();
-
-        if (_historyStore.Records.Count == 0)
+        _queueTimer?.Stop();
+        _queueTimer = new System.Windows.Threading.DispatcherTimer
         {
-            HistoryListPanel.Children.Add(new TextBlock
+            Interval = TimeSpan.FromSeconds(5),
+        };
+        _queueTimer.Tick += async (_, _) => await RefreshQueueAsync();
+        _queueTimer.Start();
+        _ = RefreshQueueAsync();
+    }
+
+    private void StopQueuePolling()
+    {
+        _queueTimer?.Stop();
+    }
+
+    private async System.Threading.Tasks.Task RefreshQueueAsync()
+    {
+        if (!_configStore.IsConfigured || string.IsNullOrEmpty(_configStore.DeviceId)) return;
+
+        try
+        {
+            var items = await _apiClient.GetQueueAsync(_configStore.DeviceId);
+            RenderQueueList(items);
+        }
+        catch
+        {
+            // Best effort — don't crash on transient failures
+        }
+    }
+
+    private void RenderQueueList(System.Collections.Generic.List<ClipResponse> items)
+    {
+        QueueListPanel.Children.Clear();
+
+        if (items.Count == 0)
+        {
+            QueueListPanel.Children.Add(new TextBlock
             {
-                Text = "No history yet",
+                Text = "Queue is empty \u2014 copy something and click the icon.",
                 Foreground = new SolidColorBrush(Colors.Gray),
                 FontSize = 12,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -858,143 +843,156 @@ public partial class MainWindow : Window
             return;
         }
 
-        foreach (var record in _historyStore.Records)
+        foreach (var item in items)
         {
-            var row = CreateHistoryRow(record);
-            HistoryListPanel.Children.Add(row);
+            var row = CreateQueueRow(item);
+            QueueListPanel.Children.Add(row);
         }
     }
 
-    private Border CreateHistoryRow(HistoryRecord record)
+    private Border CreateQueueRow(ClipResponse item)
     {
-        var isGrayed = record.IsExpired || record.Status == "failed";
-
-        // Type icon + Clip ID
+        // Type icon
         var typeIcon = new TextBlock
         {
-            Text = record.TypeIcon,
+            Text = item.Type switch { "text" => "\ud83d\udcdd", "image" => "\ud83d\uddbc\ufe0f", _ => "\ud83d\udcce" },
             FontSize = 14,
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 6, 0),
         };
 
-        var clipIdText = new TextBlock
+        // Preview text (filename or text preview)
+        var preview = item.Filename ?? item.Type;
+        if (preview.Length > 60) preview = preview[..60] + "...";
+        var previewText = new TextBlock
         {
-            Text = record.ClipId,
-            FontWeight = FontWeights.SemiBold,
-            FontSize = 13,
+            Text = preview,
+            FontSize = 12,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = isGrayed ? new SolidColorBrush(Colors.Gray) : new SolidColorBrush(Colors.Black),
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 150,
         };
 
-        // Filename or type label
-        var detailText = new TextBlock
+        // Size
+        var sizeText = new TextBlock
         {
-            Text = record.Filename ?? record.Type,
+            Text = FormatBytes(item.SizeBytes),
             FontSize = 11,
             Foreground = new SolidColorBrush(Colors.Gray),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(8, 0, 0, 0),
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 120,
+        };
+
+        // Age
+        var age = DateTime.UtcNow - item.CreatedAt;
+        var ageStr = age.TotalMinutes < 1 ? "just now"
+            : age.TotalHours < 1 ? $"{(int)age.TotalMinutes}m ago"
+            : age.TotalDays < 1 ? $"{(int)age.TotalHours}h ago"
+            : $"{(int)age.TotalDays}d ago";
+        var ageText = new TextBlock
+        {
+            Text = ageStr,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Colors.Gray),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
         };
 
         var leftPanel = new StackPanel
         {
             Orientation = Orientation.Horizontal,
-            Children = { typeIcon, clipIdText, detailText },
+            Children = { typeIcon, previewText, sizeText, ageText },
         };
 
-        // Timestamp
-        var timestamp = new TextBlock
+        // Receive button
+        var receiveButton = new Button
         {
-            Text = record.Timestamp.ToLocalTime().ToString("MM/dd HH:mm"),
-            FontSize = 11,
-            Foreground = new SolidColorBrush(Colors.Gray),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0),
-        };
-
-        // Status label
-        var statusLabel = new TextBlock
-        {
-            Text = record.DisplayLabel,
-            FontSize = 11,
-            FontWeight = FontWeights.Medium,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 8, 0),
-            Foreground = record.Status == "failed"
-                ? new SolidColorBrush(Color.FromRgb(185, 28, 28))
-                : record.IsExpired
-                    ? new SolidColorBrush(Colors.Gray)
-                    : new SolidColorBrush(Color.FromRgb(21, 128, 61)),
-        };
-
-        // Delete button
-        var deleteButton = new Button
-        {
-            Content = "\u2715",
-            Width = 24,
+            Content = "Receive",
+            Width = 65,
             Height = 24,
             FontSize = 11,
-            Padding = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
-            Tag = record.ClipId,
+            Tag = item,
         };
-        deleteButton.Click += HistoryDeleteButton_Click;
+        receiveButton.Click += QueueReceiveButton_Click;
 
-        var rightPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Children = { timestamp, statusLabel, deleteButton },
-        };
-
-        var rowGrid = new DockPanel
-        {
-            LastChildFill = true,
-        };
-        DockPanel.SetDock(rightPanel, Dock.Right);
-        rowGrid.Children.Add(rightPanel);
+        var rowGrid = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(receiveButton, Dock.Right);
+        rowGrid.Children.Add(receiveButton);
         rowGrid.Children.Add(leftPanel);
 
-        var border = new Border
+        return new Border
         {
             BorderBrush = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
             BorderThickness = new Thickness(0, 0, 0, 1),
             Padding = new Thickness(4, 6, 4, 6),
-            Cursor = System.Windows.Input.Cursors.Hand,
-            Tag = record.ClipId,
             Child = rowGrid,
         };
-
-        border.MouseLeftButtonUp += HistoryRow_Click;
-
-        return border;
     }
 
-    private void HistoryRow_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    private async void QueueReceiveButton_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Border border && border.Tag is string clipId)
-        {
-            try
-            {
-                Clipboard.SetText(clipId);
-                ShowToastNotification("Clip ID Copied", $"Clip ID {clipId} copied to clipboard");
-            }
-            catch
-            {
-                // Clipboard may be locked
-            }
-        }
-    }
+        if (sender is not Button button || button.Tag is not ClipResponse item) return;
 
-    private void HistoryDeleteButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button button && button.Tag is string clipId)
+        button.IsEnabled = false;
+        button.Content = "...";
+
+        try
         {
-            _historyStore.DeleteRecord(clipId);
-            RefreshHistoryList();
+            if (item.Type == "file")
+            {
+                // Save file to Downloads
+                var downloadsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                var savePath = Path.Combine(downloadsPath, item.Filename ?? $"clip_{item.Id}");
+
+                var success = await _apiClient.ConsumeClipToFileAsync(item.Id, savePath);
+                if (success)
+                {
+                    ShowToastNotification("File saved", $"Saved {Path.GetFileName(savePath)} to Downloads");
+                }
+                else
+                {
+                    ShowToastNotification("Already consumed", "This clip was already received by another device.");
+                }
+            }
+            else
+            {
+                // Text or image — write to clipboard
+                var result = await _apiClient.ConsumeClipRawAsync(item.Id);
+                if (result != null)
+                {
+                    var (data, contentType) = result.Value;
+                    if (contentType != null && contentType.StartsWith("image/"))
+                    {
+                        using var ms = new System.IO.MemoryStream(data);
+                        var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                        bitmap.BeginInit();
+                        bitmap.StreamSource = ms;
+                        bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bitmap.EndInit();
+                        Clipboard.SetImage(bitmap);
+                        ShowToastNotification("Image received", "Image copied to clipboard");
+                    }
+                    else
+                    {
+                        var text = System.Text.Encoding.UTF8.GetString(data);
+                        Clipboard.SetText(text);
+                        ShowToastNotification("Text received", "Text copied to clipboard");
+                    }
+                }
+                else
+                {
+                    ShowToastNotification("Already consumed", "This clip was already received by another device.");
+                }
+            }
         }
+        catch (Exception ex)
+        {
+            ShowToastNotification("Receive failed", ex.Message);
+        }
+
+        // Refresh queue to remove the consumed item
+        await RefreshQueueAsync();
     }
 
     // --- Helpers ---
@@ -1160,21 +1158,25 @@ public partial class MainWindow : Window
             MainPanelPlaceholder.Visibility = Visibility.Collapsed;
             ClipboardPanel.Visibility = Visibility.Visible;
             RefreshClipboardPreview();
+            StartQueuePolling();
         }
         else
         {
             MainPanelPlaceholder.Visibility = Visibility.Visible;
             ClipboardPanel.Visibility = Visibility.Collapsed;
+            StopQueuePolling();
         }
     }
 
-    // Refresh clipboard preview when window is activated
+    // Refresh clipboard preview and queue when window is activated
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
         if (_configStore.IsConfigured)
         {
             RefreshClipboardPreview();
+            _ = RefreshQueueAsync();
+            StartQueuePolling();
         }
     }
 
@@ -1186,6 +1188,7 @@ public partial class MainWindow : Window
         {
             Hide();
             ShowInTaskbar = false;
+            StopQueuePolling();
         }
     }
 
@@ -1195,5 +1198,6 @@ public partial class MainWindow : Window
         e.Cancel = true;
         Hide();
         ShowInTaskbar = false;
+        StopQueuePolling();
     }
 }

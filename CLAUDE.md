@@ -99,4 +99,4 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 **Cross-platform:**
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.
-- **History storage (MVP):** macOS HistoryStore removed in US-027 — replaced by live server queue view. Windows `%LOCALAPPDATA%\CopyEverywhere\history.json` still exists until US-033 removes it.
+- **History storage (MVP):** Both macOS and Windows HistoryStore removed — replaced by live server queue view (`GET /clips?device_id=<self>`). macOS removed in US-027, Windows in US-033.

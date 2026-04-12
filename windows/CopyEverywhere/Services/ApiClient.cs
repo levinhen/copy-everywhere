@@ -193,6 +193,64 @@ public class ApiClient : IDisposable
         return JsonSerializer.Deserialize<ClipResponse>(json);
     }
 
+    public async Task<List<ClipResponse>> GetQueueAsync(string deviceId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips?device_id={deviceId}", ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<List<ClipResponse>>(json) ?? new List<ClipResponse>();
+    }
+
+    /// <summary>
+    /// Atomically consume a clip via GET /clips/:id/raw.
+    /// Returns (bytes, contentType) on success, or null if 410 Gone (already consumed).
+    /// </summary>
+    public async Task<(byte[] data, string? contentType)?> ConsumeClipRawAsync(string clipId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/{clipId}/raw", ct);
+        if (response.StatusCode == HttpStatusCode.Gone)
+            return null;
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        var data = await response.Content.ReadAsByteArrayAsync(ct);
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+        return (data, contentType);
+    }
+
+    /// <summary>
+    /// Atomically consume a clip and save it to a file path (for large files).
+    /// Returns true on success, false if 410 Gone.
+    /// </summary>
+    public async Task<bool> ConsumeClipToFileAsync(string clipId, string savePath, CancellationToken ct = default)
+    {
+        using var downloadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        downloadClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+
+        using var response = await downloadClient.GetAsync(
+            $"{BaseUrl}/api/v1/clips/{clipId}/raw",
+            HttpCompletionOption.ResponseHeadersRead,
+            ct);
+
+        if (response.StatusCode == HttpStatusCode.Gone || response.StatusCode == HttpStatusCode.NotFound)
+            return false;
+
+        response.EnsureSuccessStatusCode();
+
+        using var contentStream = await response.Content.ReadAsStreamAsync(ct);
+        using var fileStream = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192);
+
+        await contentStream.CopyToAsync(fileStream, ct);
+        return true;
+    }
+
     public async Task<ClipResponse?> GetLatestClipAsync(CancellationToken ct = default)
     {
         SetAuthHeader();

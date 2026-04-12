@@ -530,3 +530,20 @@
   - Clipboard image send: save BitmapSource to temp PNG via PngBitmapEncoder, send as file, then delete temp file
   - DispatcherTimer with 3s interval provides a clean auto-dismiss toast that runs on the UI thread
 ---
+
+## 2026-04-12 - US-033
+- What was implemented: Windows main window shows live server queue instead of local history; HistoryStore deleted; queue polls every 5s while window is visible; each row shows type icon, preview, size, age, and Receive button; Receive atomically consumes via GET /clips/:id/raw (200 or 410 Gone); text/image go to Clipboard, files to ~/Downloads
+- Files changed:
+  - `windows/CopyEverywhere/Services/HistoryStore.cs` (deleted) — no more local history
+  - `windows/CopyEverywhere/Services/ApiClient.cs` — Added GetQueueAsync(deviceId), ConsumeClipRawAsync(clipId), ConsumeClipToFileAsync(clipId, savePath)
+  - `windows/CopyEverywhere/MainWindow.xaml` — Replaced "Send History" section with "Server Queue" section (QueueListPanel, QueueEmptyText)
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Removed all HistoryStore references; added queue polling (StartQueuePolling/StopQueuePolling), RefreshQueueAsync, RenderQueueList, CreateQueueRow, QueueReceiveButton_Click; polling starts on config and OnActivated, stops on minimize/close
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` — Removed Microsoft.Data.Sqlite NuGet reference
+  - `prd.json` — Marked US-033 passes: true
+- **Learnings for future iterations:**
+  - Queue polling uses DispatcherTimer (5s interval) started on window activate, stopped on minimize/close — lightweight and no background thread needed
+  - ConsumeClipRawAsync returns (byte[], contentType) tuple so caller can dispatch on media type; 410 Gone returns null
+  - ConsumeClipToFileAsync uses HttpCompletionOption.ResponseHeadersRead + CopyToAsync for streaming large files to disk
+  - Image clips received to clipboard: create BitmapImage from MemoryStream with CacheOption.OnLoad, then Clipboard.SetImage
+  - Microsoft.Data.Sqlite NuGet removed along with HistoryStore — no more SQLite dependency on Windows client
+---
