@@ -25,6 +25,8 @@
 - `TransferMode` enum (`.lanServer`/`.bluetooth`) persisted in UserDefaults. Paired devices persisted as JSON-encoded `[PairedBluetoothDevice]` in UserDefaults.
 - All send entry points route through `transferMode` at the top of `sendClipboardText`/`sendText`/`sendFile`. `isSendReady` is the universal readiness check.
 - `BluetoothSession.sendText`/`sendFile` return `AsyncStream<Double>` for progress. Use `withCheckedContinuation` to bridge to async/await.
+- RFCOMM server must be started explicitly in Bluetooth mode (`startBluetoothServerIfNeeded`). Both `autoReconnectBluetooth()` and `setTransferMode(.bluetooth)` handle this.
+- Bluetooth event delegation chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSessionDelegate`) → `ConfigStore` (as `BluetoothServiceDelegate`). All new events need wiring through both layers.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -305,4 +307,28 @@
   - Bluetooth send methods use `withCheckedContinuation` to bridge completion-handler-based `BluetoothSession` APIs to async/await — the progress stream runs concurrently in a separate `Task`.
   - Reusing existing `@Published` properties (`fileUploadProgress`, `sendStatus`) for Bluetooth sends avoids duplicating UI — the same `MainPanelView` progress views work for both LAN and Bluetooth.
   - The `isSendReady` pattern (computed property checking mode-specific readiness) is the right abstraction for gating all send paths without duplicating mode checks everywhere.
+---
+
+## 2026-04-12 - US-044
+- What was implemented:
+  - `BluetoothServiceDelegate` extended with `didReceive(payload:from:)`, `receiveProgress(_:header:)`, and `didFailReceivingWithError(_:)` callbacks
+  - `BluetoothService` now forwards `BluetoothSessionDelegate` receive events to its own delegate (was previously stubbed out)
+  - `BluetoothSession.processTransferData()` reports receive progress via `session(_:receiveProgress:header:)` as content bytes accumulate
+  - Size verification: received `contentData.count` is checked against `header.size` — mismatch triggers new `BluetoothSessionError.sizeMismatch` error
+  - `ConfigStore` handles received payloads: text → NSPasteboard + notification, file → ~/Downloads (with dedup) + notification + Finder reveal
+  - `bluetoothReceiveProgress` and `bluetoothReceiveFilename` published properties drive the receive progress UI
+  - `MainPanelView` shows a blue "Receiving via Bluetooth" progress bar when `bluetoothReceiveProgress > 0`
+  - RFCOMM server auto-starts in Bluetooth mode via `startBluetoothServerIfNeeded()` — called from both `autoReconnectBluetooth()` and `setTransferMode(_:)`
+  - `setTransferMode(_:)` stops the RFCOMM server when switching away from Bluetooth mode
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothProtocol.swift — receiveProgress delegate method, sizeMismatch error, progress reporting in processTransferData
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothService.swift — receive delegate methods, receiveProgress forwarding
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift — receive handlers, RFCOMM server lifecycle, receive progress properties
+  - macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift — Bluetooth receive progress UI
+  - CLAUDE.md — documented Bluetooth receive and RFCOMM server auto-start patterns
+- **Learnings for future iterations:**
+  - `BluetoothService` delegates receive events from `BluetoothSessionDelegate` to `BluetoothServiceDelegate` — the double-delegate chain (Session → Service → ConfigStore) is the established pattern for all Bluetooth events.
+  - Receive progress is calculated as `(totalSize - bytesRemaining + min(buffered, remaining)) / totalSize` — this accounts for data already consumed from the buffer in previous calls.
+  - RFCOMM server must be explicitly started for the device to accept inbound connections. Unlike LAN SSE (where the client connects to the server), Bluetooth mode requires both sides to publish SDP records and listen.
+  - File dedup in ~/Downloads uses the same pattern as the LAN queue receive: `base (N).ext` incrementing counter.
 ---
