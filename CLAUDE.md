@@ -4,20 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-- Two iterations have shipped and are now archived — there is no active `prd.json` in the repo root right now. Historical context only:
+- Four iterations have shipped and are now archived — there is no active `prd.json` in the repo root right now. Historical context only:
   - **MVP (US-001 … US-017)** under [archive/mvp/](archive/mvp/) — initial clipboard-relay feature set.
   - **Queue + frictionless UX (US-018 … US-034)** under [archive/queue-and-frictionless-ux/](archive/queue-and-frictionless-ux/) — device registration, targeted queue, SSE push, drag-and-drop, auto-receive.
+  - **LAN & Bluetooth (US-035 … US-050)** under [archive/lan-and-bluetooth/](archive/lan-and-bluetooth/) — LAN self-hosted server, mDNS discovery, MenuBarExtra host app, Bluetooth RFCOMM peer-to-peer mode.
+  - **Android Client (US-051 … US-068)** under [archive/android-client/](archive/android-client/) — Kotlin + Jetpack Compose Android client with LAN server mode, Bluetooth RFCOMM, share sheet, foreground service, boot receiver.
 - When a new iteration starts, drop its fresh `prd.json` + `progress.txt` at the repo root and its PRD doc at `tasks/prd-*.md`, then update this section to point at them.
 - This repo is driven by the Ralph autonomous agent loop ([scripts/ralph/ralph.sh](scripts/ralph/ralph.sh) + [scripts/ralph/CLAUDE.md](scripts/ralph/CLAUDE.md)). One commit ≈ one user story; commit messages follow `feat: [US-XXX] - [Title]`. The hard-won "do this / don't do that" list lives in the **Conventions and gotchas** section below — add to it (don't replace) when you discover a new reusable pattern.
 
 ## Architecture
 
-Three independent codebases share a single REST contract:
+Four independent codebases share a single REST contract:
 
 - **[server/](server/)** — Go 1.22+ / Gin relay. SQLite metadata (`modernc.org/sqlite`, pure-Go, no CGO) plus a content store on disk. The server is stateless beyond `STORAGE_PATH`; clients address content by 6-char alphanumeric Clip IDs. Layout: `config/` env loader, `db/` schema + helpers, `middleware/` Bearer auth, `handlers/` (`clips.go` for single-shot, `uploads.go` for chunked), `cleanup/` background TTL goroutine, `main.go` wiring.
 - **[macos/CopyEverywhere/](macos/CopyEverywhere/)** — Swift Package Manager executable target (no .xcodeproj), macOS 13+ MenuBarExtra app. State lives in `ConfigStore` (`@MainActor` ObservableObject) and `HistoryStore`; views in `MenuBarView` / `MainPanelView` / `ConfigView`.
 - **[macos/CopyEverywhereServer/](macos/CopyEverywhereServer/)** — Swift Package Manager executable target, macOS 13+ MenuBarExtra host app. Manages the Go server binary (`copyeverywhere-server`) as a child `Process`. `ServerProcess` (`@MainActor` ObservableObject) owns the subprocess lifecycle (start/stop/restart) and captures stdout/stderr via `Pipe`. `AppDelegate` drives the NSStatusItem + NSPopover (same pattern as the client app).
 - **[windows/CopyEverywhere/](windows/CopyEverywhere/)** — .NET 8 WPF tray app using `Hardcodet.NotifyIcon.Wpf`. `Services/ApiClient.cs` mirrors the macOS networking layer; `Services/ConfigStore.cs` and `Services/HistoryStore.cs` are the persistence equivalents.
+<<<<<<< HEAD
+=======
+- **[android/](android/)** — Kotlin + Jetpack Compose, minSdk 29, targetSdk 35. Single-module Gradle (Kotlin DSL) with version catalog (`gradle/libs.versions.toml`). Material 3 + dynamic color theming. Package: `com.copyeverywhere.app`.
+>>>>>>> ralph/android-client
 
 The REST contract (all under `/api/v1`, Bearer auth required, except `/health`):
 
@@ -58,6 +64,15 @@ dotnet build
 dotnet run
 ```
 
+<<<<<<< HEAD
+=======
+Android (run from [android/](android/)):
+```bash
+./gradlew assembleDebug                 # debug build
+./gradlew assembleRelease               # release build
+```
+
+>>>>>>> ralph/android-client
 Note: Docker, the .NET SDK, and a Windows host are **not** present on this dev machine — those builds can only be verified on the appropriate platform. Don't claim "build verified" if you couldn't actually run it.
 
 ## Conventions and gotchas
@@ -140,9 +155,54 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Bluetooth pairing flow (Windows).** `BluetoothService.ConnectAsync(DeviceInformation)` triggers the Windows system pairing dialog if needed. On `SessionReady`, the device is added to `PairedDevices`. Reconnection uses `ConnectByAddressAsync(ulong)`.
 - **Bluetooth UI in MainWindow.** Transfer mode ComboBox controls `BluetoothSection` visibility. Scan uses `BluetoothService.FindDevicesAsync()` (static). Paired device list rendered programmatically with Connect/Disconnect/Forget buttons. Status badge shows connection state via colored dot.
 
+<<<<<<< HEAD
 **Cross-platform:**
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.
+=======
+**Android:**
+
+- **Gradle version catalog** at `android/gradle/libs.versions.toml` is the single source of truth for dependency versions. Use `libs.` references in `build.gradle.kts`, never hardcode version strings.
+- **Gradle wrapper (8.9)** — always use `./gradlew`, never bare `gradle`. AGP 8.7.3 + Kotlin 2.0.21 + Compose compiler via `kotlin-compose` plugin.
+- **Adaptive launcher icon** uses vector drawables (`ic_launcher_foreground.xml` + `ic_launcher_background.xml`) via `mipmap-anydpi-v26/ic_launcher.xml`. No raster PNGs needed.
+- **Theme** uses Material 3 dynamic color (Android 12+ `dynamicLightColorScheme`/`dynamicDarkColorScheme`) with fallback to default light/dark schemes.
+- **Config persistence.** `ConfigStore` (`data/ConfigStore.kt`) uses DataStore Preferences for non-secret config (host URL, device name, device ID, target device ID) and `EncryptedSharedPreferences` (Keystore-backed) for the access token. Access token API is synchronous; wrap in `MutableStateFlow` for Compose observation.
+- **API client.** `ApiClient` (`data/ApiClient.kt`) uses OkHttp + Gson. Bearer auth header skipped when token is empty. All network calls are `suspend` functions dispatched to `Dispatchers.IO`.
+- **Navigation.** `NavHost` in `MainActivity` with string routes (`"main"`, `"config"`). `ConfigScreen` gets its own `ConfigViewModel` (`AndroidViewModel` for app context access).
+- **Server platform value.** Device registration sends `platform = "android"` — the Go server's `/api/v1/devices/register` handler needs to accept `"android"` in its platform whitelist.
+- **mDNS discovery.** `MdnsDiscoveryService` (`data/MdnsDiscoveryService.kt`) wraps `NsdManager` to browse for `_copyeverywhere._tcp.` services. `DiscoveredServer` data class holds name, host, port, authRequired, version. TXT record attributes parsed from `NsdServiceInfo.attributes`. Discovery lifecycle tied to ConfigScreen via `DisposableEffect`. No extra permissions needed beyond `INTERNET`.
+- **Receive flow.** `fetchQueue()` lists unconsumed clips via `GET /clips?device_id=<self>`. `downloadClipRaw()` does a two-step fetch: metadata (`GET /clips/:id`) then raw content (`GET /clips/:id/raw`). Raw download atomically consumes the clip — 410 Gone means already consumed (`ClipAlreadyConsumedException`). Download progress via suspend callback using metadata `sizeBytes` as total.
+- **SSE client.** `SseClient` (`data/SseClient.kt`) uses OkHttp with `readTimeout(0)` for infinite timeout. Parses SSE events line-by-line via `BufferedReader`. Exponential backoff reconnect (1s → 2s → 4s → capped 30s). `connect()` suspends forever — cancel the coroutine to stop.
+- **Foreground service.** `CopyEverywhereService` (`service/CopyEverywhereService.kt`) hosts SSE client. Uses `foregroundServiceType="dataSync"`. Two notification channels: `copyeverywhere_service` (ongoing, low importance) and `copyeverywhere_transfers` (high importance). Static `start(context)`/`stop(context)` helpers. `startSse()`/`stopSse()` public for transfer mode switching.
+- **Clipboard trampoline.** Android 10+ restricts `ClipboardManager.primaryClip` to foreground activities. The "Send clipboard" notification action launches `ClipboardTrampolineActivity` (transparent, `excludeFromRecents`, `noHistory`) which reads clipboard → sends via `ApiClient` → toasts "Sent!" → updates service notification briefly → auto-finishes. `CopyEverywhereService.buildServiceNotificationStatic()` is the shared notification builder used by both the service and the trampoline.
+- **File save to Downloads.** Uses `MediaStore.Downloads.EXTERNAL_CONTENT_URI` — no storage permissions needed on API 29+.
+- **POST_NOTIFICATIONS permission.** Android 13+ requires runtime permission. Requested in `MainActivity` on launch via `ActivityResultContracts.RequestPermission()`. Service starts regardless of grant result.
+- **Share sheet integration.** `ShareReceiverActivity` handles `ACTION_SEND` (single file/text) and `ACTION_SEND_MULTIPLE` (multiple files) with `*/*` MIME type. Text extras sent as text clips; file URIs routed to single or chunked upload based on 50 MB threshold. Minimal Compose UI shows progress and auto-finishes on success.
+- **`TransferMode` enum** (`LanServer`/`Bluetooth`) persisted in DataStore. `ConfigStore.transferMode` is a `Flow<TransferMode>`. `CopyEverywhereService.switchMode(mode)` handles stopping/starting SSE and RFCOMM server. `ConfigViewModel.updateTransferMode()` persists the change and notifies the running service via `CopyEverywhereService.instance?.switchMode()`.
+- **`CopyEverywhereService.instance`** static reference (set in `onCreate`, cleared in `onDestroy`) allows ViewModels to call service methods directly without binding. Used for `switchMode()`.
+- **Config screen conditional sections.** `FilterChip` segmented control switches between LAN and Bluetooth sections. LAN section shows Host URL, discovered servers, access token, target device, test connection. Bluetooth section shows device pairing UI (placeholder until US-062+).
+- **Mode switch service lifecycle (Android).** LAN→BT stops SSE + starts RFCOMM server; BT→LAN stops RFCOMM server + starts SSE. Queue polling in `MainViewModel` only runs in LAN mode. Notification text reflects active mode.
+- **Bluetooth RFCOMM protocol (Android).** `BluetoothProtocol.kt` defines the wire protocol. Same format as macOS/Windows: newline-delimited JSON headers (`0x0A`) + raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON (`type`, `filename`, `size`) + `\n` + content bytes.
+- **`BluetoothSession` wraps `BluetoothSocket`.** `start()` performs handshake with 5s timeout, then enters a receive loop. Receive uses a buffer-based state machine: handshake → header → content accumulation. `sendText()` and `sendFile()` return `Flow<Double>` for progress. File sends stream from content URI via `contentResolver.openInputStream()` in 16 KB chunks.
+- **`BluetoothService` owns `activeSession`.** On RFCOMM connect (server accept or client connect), `createSession()` creates a `BluetoothSession` that auto-starts handshake. Delegate chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSession.Listener`) → `BluetoothService.Listener`.
+- **`CopyEverywhereService.bluetoothService`** is the live `BluetoothService` instance. `startBluetoothServer()` / `stopBluetoothServer()` manage the RFCOMM server lifecycle in `switchMode()`. `BluetoothService.destroy()` called in `onDestroy()`.
+- **RFCOMM Service UUID** is `CE000001-1000-1000-8000-00805F9B34FB` — defined in `BluetoothProtocol.SERVICE_UUID`. Must match macOS `kCopyEverywhereServiceUUID` and Windows `BluetoothService.CopyEverywhereServiceUuid` exactly.
+- **Bluetooth permissions (Android 12+).** `BLUETOOTH` + `BLUETOOTH_ADMIN` (maxSdkVersion 30) for pre-12, `BLUETOOTH_CONNECT` + `BLUETOOTH_SCAN` for 12+. Runtime permissions requested in US-063.
+- **`@SuppressLint("MissingPermission")`** on `BluetoothService` methods that use Bluetooth APIs. Actual runtime permission checks happen in the UI layer (US-063).
+- **Bluetooth device scanning.** `ConfigViewModel` manages `BluetoothAdapter.startDiscovery()` + `BroadcastReceiver(ACTION_FOUND)`. On API 33+ register with `Context.RECEIVER_EXPORTED`. `BluetoothDevice.name` can throw `SecurityException` — catch and skip unnamed devices. Stop scanning in `onCleared()`.
+- **Paired device persistence.** `PairedBluetoothDevice(name, address)` stored as JSON list in DataStore via Gson. `ConfigStore.addPairedDevice()`/`removePairedDevice()` manage the list. `lastConnectedBtAddress` tracks the most recently connected device for auto-reconnect (US-064).
+- **`BluetoothService.listener` ownership.** `CopyEverywhereService` implements `BluetoothService.Listener` and sets itself as listener in `onCreate()`. `ConfigViewModel` temporarily overrides the listener in `init` and restores the service as listener in `onCleared()`. This ensures the service always receives connection status events for notification updates.
+- **Bluetooth auto-reconnect.** `BluetoothService.autoReconnect(address, onStatusChange)` uses exponential backoff (2s → 4s → 8s → 16s → capped 30s), max 5 attempts. Called by `CopyEverywhereService.autoReconnectBluetooth()` on launch in BT mode and on mode switch to BT. Checks `isSessionReady` before each attempt to bail out if an inbound RFCOMM connection was accepted.
+- **`stopBluetoothServer()` calls `cancelReconnect()`.** Switching from BT to LAN must cancel in-progress reconnect attempts.
+- **Bluetooth runtime permissions (Android 12+).** `BLUETOOTH_CONNECT` + `BLUETOOTH_SCAN` requested via `ActivityResultContracts.RequestMultiplePermissions` in ConfigScreen before scanning. `BLUETOOTH_SCAN` has `neverForLocation` flag to avoid location permission requirement.
+- **Send routing via `transferMode` (Android).** All send entry points (`ClipboardTrampolineActivity`, `MainViewModel.sendText()`/`sendFile()`, `ShareReceiverActivity`) check `transferMode` at the top and dispatch to `BluetoothSession` or `ApiClient`. Pattern: `CopyEverywhereService.instance?.bluetoothService?.activeSession` → verify `isHandshakeComplete` → send. Error: "No Bluetooth device connected" if no ready session.
+- **Bluetooth send progress (Android).** `MainViewModel.sendFileBluetooth()` reuses `_uploadProgress` (same `UploadProgress` data class as LAN chunked uploads). Speed calculated from elapsed time + progress fraction × file size. `BluetoothSession.sendText()` / `sendFile()` return `Flow<Double>` — must `collect` even if progress isn't displayed (Flow is cold).
+- **Bluetooth receive (Android).** `CopyEverywhereService` handles `onTransferReceived` from `BluetoothService.Listener`: text → `ClipboardManager.setPrimaryClip()` + notification, file → `MediaStore.Downloads` + notification with Share action. `btReceiveProgress`/`btReceiveFilename` `StateFlow`s on the service drive the receive progress UI in `MainScreen`. `MainViewModel.startBtReceiveObserving()` collects these flows. MIME type guessed via `ApiClient.guessMimeType(filename)`. File size verified against header in both `BluetoothSession.readContent()` and `onTransferReceived`. Sequential transfers work because `BluetoothSession`'s receive loop continues after each transfer.
+
+**Cross-platform:**
+
+- **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet. Android → EncryptedSharedPreferences (Keystore-backed).
+>>>>>>> ralph/android-client
 - **History storage (MVP):** Both macOS and Windows HistoryStore removed — replaced by live server queue view (`GET /clips?device_id=<self>`). macOS removed in US-027, Windows in US-033.
 - **Send routing via `TransferMode` (Windows).** `SendService` checks `ConfigStore.TransferMode` at the top of `SendTextAsync`/`SendFileAsync` and dispatches to `BluetoothSession` or `ApiClient`. `IsSendReady` property on `ConfigStore` returns true when the active mode's transport is ready (LAN configured or Bluetooth connected+handshake complete). All send entry points (Ctrl+V, drag-drop, FloatingBall drop) go through `SendService`.
 - **Bluetooth send progress (Windows).** `SendService.BluetoothSendProgress` event (0.0–1.0) drives the same `UploadProgressPanel` used for chunked uploads. `MainWindow` subscribes via the `SendService` property setter.
@@ -150,3 +210,9 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **RFCOMM server auto-start (Windows).** `StartBluetoothServerIfNeeded()` starts the RFCOMM server in Bluetooth mode. Called from `InitializeTransferModeUI()` (on launch) and `TransferModeComboBox_SelectionChanged` (on mode switch). Mirrors macOS `startBluetoothServerIfNeeded()`.
 - **Mode switch service lifecycle.** On both macOS and Windows, switching transfer mode must stop/start background services: LAN→BT stops SSE + queue polling, starts RFCOMM server; BT→LAN stops RFCOMM server, restarts SSE + queue polling. `UpdateMainPanelState()` (Windows) / `MainPanelView` (macOS) conditionally shows queue (LAN) or BT status section.
 - **`UpdateBtStatusPanel()` (Windows)** mirrors macOS `bluetoothStatusColor`/`bluetoothStatusText` helpers. Called from `UpdateBluetoothStatus()` when in BT mode and from `UpdateMainPanelState()`. Updates `BtStatusDot`, `BtStatusLabel`, `BtConnectedDeviceText`, `BtPairHintText`.
+<<<<<<< HEAD
+=======
+- **Boot receiver (Android).** `BootReceiver` listens for `BOOT_COMPLETED` and starts the foreground service. Registered in manifest with `exported="true"`. Requires `RECEIVE_BOOT_COMPLETED` permission.
+- **Battery optimization (Android).** `MainActivity.requestBatteryOptimizationExemption()` uses `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` to prompt the user. Checks `PowerManager.isIgnoringBatteryOptimizations()` first to avoid re-prompting. Requires `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission.
+- **WakeLock (Android).** `CopyEverywhereService.acquireWakeLock()`/`releaseWakeLock()` with nested holder counting. Acquired around SSE clip downloads and Bluetooth receive transfers. 10-minute safety timeout on `acquire()`. `releaseWakeLockFully()` in `onDestroy()` as cleanup.
+>>>>>>> ralph/android-client
