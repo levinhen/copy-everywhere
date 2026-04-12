@@ -15,6 +15,7 @@ struct CopyEverywhereApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let configStore = ConfigStore()
+    let serverProcess = ServerProcess()
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var eventMonitor: Any?
@@ -36,6 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupKeyMonitor()
         // Start SSE connection if already configured
         configStore.startSSE()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Graceful shutdown: send SIGTERM to the embedded server if running
+        serverProcess.stop()
     }
 
     // MARK: - Popover
