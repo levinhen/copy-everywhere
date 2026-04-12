@@ -20,10 +20,14 @@ public partial class MainWindow : Window
     private readonly ApiClient _apiClient;
     private readonly MdnsDiscoveryService _mdnsService;
     private readonly BluetoothService _bluetoothService;
+    private readonly ServerConfig _serverConfig;
+    private readonly ServerProcess _serverProcess;
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
     public BluetoothService BluetoothService => _bluetoothService;
+    public ServerConfig ServerConfig => _serverConfig;
+    public ServerProcess ServerProcess => _serverProcess;
     private SendService? _sendService;
     public SendService? SendService
     {
@@ -71,6 +75,8 @@ public partial class MainWindow : Window
         _apiClient = new ApiClient(_configStore);
         _mdnsService = new MdnsDiscoveryService();
         _bluetoothService = new BluetoothService();
+        _serverConfig = new ServerConfig();
+        _serverProcess = new ServerProcess { Config = _serverConfig };
 
         // Wire up Bluetooth events
         _bluetoothService.SessionReady += OnBluetoothSessionReady;
@@ -97,6 +103,12 @@ public partial class MainWindow : Window
         // Start mDNS discovery
         _mdnsService.ServersChanged += OnDiscoveredServersChanged;
         _mdnsService.StartBrowsing();
+
+        // Auto-start embedded server if configured
+        if (_serverConfig.ServerEnabled && _serverConfig.AutoStartServer)
+        {
+            SetServerEnabled(true);
+        }
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -2117,6 +2129,36 @@ public partial class MainWindow : Window
                 ? "Access Token (required)"
                 : "Access Token (optional)";
         }
+    }
+
+    // ── Embedded server toggle ─��──────────────────────────────────────
+
+    public void SetServerEnabled(bool enabled)
+    {
+        _serverConfig.ServerEnabled = enabled;
+        _serverConfig.Save();
+
+        if (enabled)
+        {
+            _serverProcess.Start();
+            AutoConnectToLocalServer();
+        }
+        else
+        {
+            _serverProcess.Stop();
+        }
+    }
+
+    private void AutoConnectToLocalServer()
+    {
+        _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+        if (_serverConfig.AuthEnabled && !string.IsNullOrEmpty(_serverConfig.AccessToken))
+        {
+            _configStore.AccessToken = _serverConfig.AccessToken;
+            AccessTokenBox.Password = _serverConfig.AccessToken;
+        }
+        _configStore.Save();
+        UpdateMainPanelState();
     }
 
     private void UpdateMainPanelState()

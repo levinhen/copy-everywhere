@@ -144,3 +144,18 @@
   - `ServerConfigData` is internal (not private nested) because C# `System.Text.Json` requires accessible classes for deserialization
 ---
 
+## 2026-04-13 - US-078
+- Added `ServerConfig` and `ServerProcess` fields to MainWindow, initialized in constructor
+- `ServerProcess.Config` linked to `ServerConfig` for environment forwarding
+- Added `SetServerEnabled(bool)` public method: starts/stops subprocess, auto-connects client to `http://localhost:<port>`
+- `AutoConnectToLocalServer()` copies server auth credentials to client config and calls `Save()` + `UpdateMainPanelState()`
+- Auto-start on launch: if `ServerEnabled && AutoStartServer`, calls `SetServerEnabled(true)` in constructor
+- User can manually override HostUrl after auto-connect (HostUrl remains editable in config UI)
+- Public properties `ServerConfig` and `ServerProcess` exposed for use by US-079/080
+- Files changed:
+  - windows/CopyEverywhere/MainWindow.xaml.cs (added ServerConfig, ServerProcess, SetServerEnabled, AutoConnectToLocalServer, auto-start)
+- **Learnings for future iterations:**
+  - Same pattern as macOS: toggle logic lives in the window that owns all singletons (ConfigStore, ServerConfig, ServerProcess)
+  - `AutoConnectToLocalServer()` mirrors macOS `autoConnectToLocalServer()` — sets hostURL and copies auth token
+---
+
