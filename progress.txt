@@ -476,3 +476,21 @@
   - BluetoothConnectionStatus enum cases: .disconnected, .connecting, .connected, .error(String). Use switch exhaustively for UI color/text mapping.
   - `bluetoothConnectedDeviceName` on ConfigStore is the canonical way to show which BT device is connected (not BluetoothService.activeSession).
 ---
+
+## 2026-04-12 - US-050
+- What was implemented:
+  - TransferModeComboBox_SelectionChanged now stops SSE + queue polling when switching to Bluetooth, restarts them when switching back to LAN
+  - UpdateMainPanelState() is mode-aware: shows ClipboardPanel in both modes, toggles LanQueueSection vs BtStatusSection
+  - New BtStatusSection in XAML with status dot, status label, connected device text, and pair hint
+  - New UpdateBtStatusPanel() method mirrors macOS bluetooth status helpers — called from UpdateBluetoothStatus() and UpdateMainPanelState()
+  - OnActivated() conditionally refreshes queue (LAN) or BT status (Bluetooth)
+  - CLAUDE.md updated with mode switch service lifecycle patterns
+- Files changed:
+  - windows/CopyEverywhere/MainWindow.xaml — wrapped queue in LanQueueSection, added BtStatusSection with status UI elements
+  - windows/CopyEverywhere/MainWindow.xaml.cs — mode-aware TransferModeComboBox handler, UpdateMainPanelState, UpdateBtStatusPanel, OnActivated
+  - CLAUDE.md — mode switch lifecycle and UpdateBtStatusPanel conventions
+- **Learnings for future iterations:**
+  - Windows UpdateMainPanelState() must handle 3 states: LAN configured, Bluetooth mode, unconfigured. Use `isBtMode || IsConfigured` for panel visibility.
+  - UpdateBluetoothStatus() already renders the Bluetooth config section status — UpdateBtStatusPanel() is a separate method for the main panel's bottom status section. Don't conflate them.
+  - dotnet build cannot be verified on this macOS dev machine. Manual verification on Windows is required.
+---
