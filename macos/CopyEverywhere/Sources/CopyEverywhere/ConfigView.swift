@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ConfigView: View {
     @EnvironmentObject var configStore: ConfigStore
+    @EnvironmentObject var serverConfig: ServerConfig
+    @EnvironmentObject var serverProcess: ServerProcess
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -24,6 +26,10 @@ struct ConfigView: View {
             } else {
                 bluetoothSection
             }
+
+            Divider()
+
+            embeddedServerSection
         }
         .padding()
     }
@@ -418,6 +424,98 @@ struct ConfigView: View {
                         .buttonStyle(.plain)
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Embedded Server Section
+
+    @ViewBuilder
+    private var embeddedServerSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Enable embedded server", isOn: Binding(
+                get: { serverConfig.serverEnabled },
+                set: { newValue in
+                    // Use AppDelegate's toggle logic for start/stop + auto-connect
+                    if let appDelegate = NSApp.delegate as? AppDelegate {
+                        appDelegate.setServerEnabled(newValue)
+                    }
+                }
+            ))
+
+            if serverConfig.serverEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Port")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    TextField("8080", text: $serverConfig.port)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Bind Address")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    TextField("0.0.0.0", text: $serverConfig.bindAddress)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Storage Path")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    TextField("~/Library/Application Support/...", text: $serverConfig.storagePath)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("TTL (hours)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        TextField("24", value: $serverConfig.ttlHours, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Max Clip Size (MB)")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        TextField("50", value: $serverConfig.maxClipSizeMB, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 80)
+                    }
+                }
+
+                Toggle("Require authentication", isOn: $serverConfig.authEnabled)
+
+                if serverConfig.authEnabled {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Access Token")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        SecureField("Server access token", text: $serverConfig.accessToken)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                Toggle("Auto-start server on launch", isOn: $serverConfig.autoStartServer)
+
+                Button("Apply & Restart Server") {
+                    serverConfig.save()
+                    if serverProcess.isRunning {
+                        serverProcess.restart()
+                        // Re-connect after restart
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_000_000_000)
+                            if let appDelegate = NSApp.delegate as? AppDelegate {
+                                appDelegate.autoConnectToLocalServer()
+                            }
+                        }
+                    }
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
     }

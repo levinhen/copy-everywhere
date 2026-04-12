@@ -1,0 +1,70 @@
+# Embedded Server — Progress
+
+## Codebase Patterns
+- ServerProcess from CopyEverywhereServer is already `@MainActor` + `ObservableObject` — copies directly into the client app without adaptation.
+- ServerProcess depends on ServerConfig for its `environment` property — need at least a stub for compilation.
+- AppDelegate owns top-level singletons (configStore, serverConfig, serverProcess) and injects them via `@EnvironmentObject`.
+- New ConfigData fields must be `Optional` with defaults in `load()` for backward compat with older config files.
+
+---
+
+## 2026-04-13 - US-069
+- Copied ServerProcess.swift from macos/CopyEverywhereServer into macos/CopyEverywhere/Sources/CopyEverywhere/
+- Added minimal ServerConfig stub (empty environment dict) for compilation — full implementation in US-070
+- Added `serverProcess` property to AppDelegate
+- Added `applicationWillTerminate` with `serverProcess.stop()` for graceful SIGTERM shutdown
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerProcess.swift (new — copied from server host app)
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerConfig.swift (new — minimal stub)
+  - macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift (added serverProcess + shutdown)
+- **Learnings for future iterations:**
+  - ServerProcess references ServerConfig type — must exist even as a stub for the build to succeed
+  - The existing CopyEverywhereServer code was clean enough to copy verbatim; no @MainActor adaptation needed
+  - swift build produces only pre-existing warnings (expiryDate never read in ConfigStore)
+---
+
+## 2026-04-13 - US-070
+- Replaced ServerConfig stub with full implementation migrated from CopyEverywhereServer
+- Adapted for client app context: config path → `~/Library/Application Support/CopyEverywhere/server-config.json`, storage path → `.../CopyEverywhere/server-data`
+- Added `maxClipSizeMB` property (default 50) with `MAX_CLIP_SIZE_MB` in environment dict
+- Removed `launchAtLogin` / `SMAppService` (standalone server app concern, not relevant for embedded server)
+- Default `ttlHours` set to 24 (was 1 in the standalone app)
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerConfig.swift (replaced stub with full implementation)
+- **Learnings for future iterations:**
+  - The standalone CopyEverywhereServer config used `launchAtLogin` via SMAppService — not needed when the server is embedded (the client app handles its own launch-at-login)
+  - ConfigData uses optional fields (`bindAddress`, `maxClipSizeMB`) for backward compatibility with older config files
+---
+
+## 2026-04-13 - US-071
+- Added `serverEnabled` and `autoStartServer` booleans to ServerConfig with persistence (optional fields in ConfigData for backward compat)
+- Added `setServerEnabled(_:)` on AppDelegate: toggles subprocess + auto-connects client to `http://localhost:<port>`
+- Added `autoConnectToLocalServer()` helper that sets `configStore.hostURL` and optionally copies the server's access token
+- Auto-start on launch: `applicationDidFinishLaunching` checks `serverEnabled && autoStartServer`
+- Injected `serverConfig` and `serverProcess` as `@EnvironmentObject` into the view hierarchy for use by US-072
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerConfig.swift (added serverEnabled, autoStartServer + persistence)
+  - macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift (added serverConfig, toggle logic, auto-start, env objects)
+- **Learnings for future iterations:**
+  - AppDelegate owns all three singletons (configStore, serverConfig, serverProcess) — toggle logic lives there because it needs all three
+  - `autoConnectToLocalServer()` calls `configStore.save()` which triggers device registration + SSE restart — no extra wiring needed
+  - New ConfigData fields must be optional (`Bool?`) with defaults in `load()` for backward compatibility with existing config files
+---
+
+## 2026-04-13 - US-072
+- Added embedded server configuration section to ConfigView, below the transfer mode sections (separated by Divider)
+- Toggle: Enable embedded server — wired through AppDelegate.setServerEnabled() for start/stop + auto-connect
+- When enabled: Port, Bind Address, Storage Path, TTL (hours), Max Clip Size (MB) fields
+- Toggle: Require authentication with conditional SecureField for access token
+- Toggle: Auto-start server on launch
+- Apply & Restart Server button — saves config, restarts subprocess if running, re-auto-connects after 1s delay
+- Fields hidden (not just disabled) when server is not enabled — matches the pattern used elsewhere in ConfigView
+- ConfigView now requires `serverConfig` and `serverProcess` as `@EnvironmentObject` (already injected in US-071)
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift (added embeddedServerSection)
+- **Learnings for future iterations:**
+  - ConfigView accesses AppDelegate via `NSApp.delegate as? AppDelegate` for actions that need all three singletons (toggle server, auto-connect) — matches the pattern established in US-071
+  - Server config fields are shown/hidden (not disabled) when server is toggled — consistent with how LAN/Bluetooth sections work
+  - Apply & Restart needs a delay before auto-connect because the Go binary needs time to start listening
+---
+
