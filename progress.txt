@@ -130,3 +130,17 @@
   - `ServerProcess` depends on `ServerConfig.GetEnvironment()` — needs at least a stub for compilation (same pattern as macOS US-069/070)
 ---
 
+## 2026-04-13 - US-077
+- Created `Services/ServerConfig.cs` with `INotifyPropertyChanged`
+- Properties: Port (8080), StoragePath (%APPDATA%/CopyEverywhere/server-data), BindAddress (0.0.0.0), TtlHours (24), AuthEnabled (false), AccessToken, MaxClipSizeMB (50), ServerEnabled (false), AutoStartServer (false), UsedSpaceBytes
+- Config persisted to `%APPDATA%/CopyEverywhere/server-config.json` via `System.Text.Json`
+- `GetEnvironment()` returns `Dictionary<string, string>` for subprocess env vars
+- `Save()`, `Load()`, `RefreshUsedSpace()` methods — RefreshUsedSpace uses `Task.Run` + `Dispatcher.Invoke` for async directory traversal
+- Internal `ServerConfigData` class for JSON serialization with `[JsonPropertyName]` attributes
+- Files changed:
+  - windows/CopyEverywhere/Services/ServerConfig.cs (new)
+- **Learnings for future iterations:**
+  - Windows uses `%APPDATA%` (SpecialFolder.ApplicationData) while macOS uses `~/Library/Application Support` — same logical location, different API
+  - `ServerConfigData` is internal (not private nested) because C# `System.Text.Json` requires accessible classes for deserialization
+---
+
