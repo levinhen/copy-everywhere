@@ -1,0 +1,280 @@
+## Codebase Patterns
+- Use `modernc.org/sqlite` (pure Go, no CGO) for SQLite
+- Database package lives in `server/db/` with `Open(storagePath)` constructor
+- Clip model uses `*string` for nullable fields (e.g., Filename)
+- ID generation: 6-char alphanumeric via crypto/rand
+- Tests use `t.TempDir()` for isolated DB instances
+- SQLite connection uses `SetMaxOpenConns(1)` for write safety
+- Handlers live in `server/handlers/` with struct-based dependency injection (DB, config)
+- Gin route order matters: `/clips/latest` must be registered before `/clips/:id` to avoid param conflict
+- Use `c.File()` for streaming file content in Gin (handles range requests automatically)
+- Clip API returns `clipResponse` (subset of Clip) to avoid leaking internal fields like StoragePath
+- Chunked uploads store parts in `STORAGE_PATH/uploads/<id>/part_N`, merged on complete to `STORAGE_PATH/<id>/<filename>`
+- `UpdateClip(id, status, sizeBytes, storagePath)` updates clip record after chunked upload completes
+- Cleanup package in `server/cleanup/` runs background goroutine with `Start(db, storagePath, interval)`
+- `GetExpiredClips()` returns all clips where `expires_at < now()` (both ready and uploading)
+- `GetStorageStats()` returns `{ClipCount, StorageUsedBytes}` via SQL COUNT/SUM
+- macOS app uses Swift Package Manager (not .xcodeproj) in `macos/CopyEverywhere/`
+- Build with `swift build` from `macos/CopyEverywhere/` directory
+- MenuBarExtra with `.window` style creates popover panel from menu bar icon
+- `NSApp.setActivationPolicy(.accessory)` hides dock icon programmatically
+- Keychain access via Security framework: `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete`
+- ConfigStore is `@MainActor` ObservableObject shared via `.environmentObject()`
+- Use `UserNotifications` framework (not deprecated `NSUserNotification`) for macOS notifications
+- Receive flow: first GET /api/v1/clips/latest for metadata, then GET /api/v1/clips/:id/raw for content
+- File upload uses `URLSession.upload(for:fromFile:)` with `URLSessionTaskDelegate` for progress tracking
+- `UploadProgressDelegate` bridges delegate callbacks to `AsyncStream<Double>` for async/await consumption
+- 50MB threshold separates small file (single POST) from chunked upload flow
+- Chunked upload flow: init → upload parts (1-indexed) → complete; pause/resume via server status query
+- `FileHandle` for reading file chunks without loading entire file into memory
+- File download uses `URLSession.download(for:)` with `URLSessionDownloadDelegate` for streaming + progress
+- `DownloadProgressDelegate` yields `(totalBytesWritten, totalBytesExpectedToWrite)` via `AsyncStream`
+- `NSSavePanel` for choosing download save location; `NSWorkspace.shared.activateFileViewerSelecting` to reveal in Finder
+- Clip metadata API (`GET /clips/:id`) returns `clipResponse` without `status` field; `/raw` returns 403 for failed uploads
+- HistoryStore uses UserDefaults with JSON encoding (Codable) for local history persistence
+- ConfigStore receives `historyStore` reference via MenuBarView `.onAppear` (not init param) to work with @EnvironmentObject
+- Windows project in `windows/CopyEverywhere/` uses .NET 8 WPF with `Hardcodet.NotifyIcon.Wpf` for system tray
+- Windows config stored in Windows Credential Manager via `CredentialManagement` NuGet package
+- Windows WPF PasswordBox doesn't support data binding — use `PasswordChanged` event handler to sync
+- `ShutdownMode="OnExplicitShutdown"` in App.xaml prevents app from closing when main window hides to tray
+- Windows toast notifications via `Microsoft.Toolkit.Uwp.Notifications` NuGet (works with .NET 8 WPF)
+- ApiClient uses `MultipartFormDataContent` for clip uploads matching server's multipart/form-data expectation
+- Clipboard text send uses "clipboard.txt" filename with "text/plain" content type
+- Receive flow: GET /clips/latest for metadata → GET /clips/:id/raw for content (same as macOS)
+- `ProgressStreamContent` (extends HttpContent) for tracking upload progress in .NET — no built-in alternative
+- WPF file dialogs (`OpenFileDialog`, `SaveFileDialog`) are in `Microsoft.Win32` namespace
+- `Process.Start("explorer.exe", "/select,\"path\"")` reveals file in Explorer
+- Chunked upload 409 from PUT parts means chunk already uploaded — treat as success during resume
+- Windows HistoryStore uses JSON file in AppData/Local/CopyEverywhere/history.json (mirrors macOS UserDefaults approach)
+- WPF history list built programmatically with DockPanel rows, Border.MouseLeftButtonUp for click-to-copy, Button.Tag for passing ClipId
+
+---
+
+## 2026-04-11 - US-002
+- What was implemented: SQLite database schema with clips table, Clip model struct, and all CRUD helper functions (CreateClip, GetClipByID, GetLatestClip, ListClips, DeleteClip) plus 6-char alphanumeric ID generation
+- Files changed:
+  - `server/db/db.go` (new) - Database initialization, schema migration, model, and helpers
+  - `server/db/db_test.go` (new) - 9 tests covering all helpers, ID generation, null fields, and DB creation
+  - `server/go.mod` / `server/go.sum` - Added modernc.org/sqlite dependency
+- **Learnings for future iterations:**
+  - `modernc.org/sqlite` is a pure Go SQLite driver, no CGO required - good for cross-compilation
+  - GetLatestClip filters by `status = 'ready'` AND `expires_at > now()` - important for future API endpoints
+  - Clip.Filename is `*string` (nullable) - text clips don't need a filename
+  - The `Open()` function auto-creates the storage directory and runs migrations with `IF NOT EXISTS`
+---
+
+## 2026-04-11 - US-003
+- What was implemented: Clips API with four endpoints - upload (POST /api/v1/clips), get metadata (GET /api/v1/clips/:id), get latest (GET /api/v1/clips/latest), and download raw content (GET /api/v1/clips/:id/raw)
+- Files changed:
+  - `server/handlers/clips.go` (new) - ClipHandler struct with Upload, GetByID, GetLatest, GetRaw methods
+  - `server/handlers/clips_test.go` (new) - 12 tests covering all endpoints, error cases, size limits, and round-trip
+  - `server/main.go` - Added DB initialization and route registration
+- **Learnings for future iterations:**
+  - Register `/clips/latest` before `/clips/:id` in Gin to avoid route param conflicts
+  - Use `clipResponse` struct to avoid leaking internal fields (StoragePath, Status) in API responses
+  - `c.File()` in Gin handles Content-Type detection and range requests automatically
+  - Handler tests use `httptest.NewRecorder()` + `gin.New()` without middleware for isolation
+---
+
+## 2026-04-11 - US-004
+- What was implemented: Chunked upload API with four endpoints - init upload (POST /api/v1/uploads/init), upload part (PUT /api/v1/uploads/:id/parts/:n), complete upload (POST /api/v1/uploads/:id/complete), and get status (GET /api/v1/uploads/:id/status)
+- Files changed:
+  - `server/handlers/uploads.go` (new) - UploadHandler struct with InitUpload, UploadPart, CompleteUpload, GetUploadStatus methods
+  - `server/handlers/uploads_test.go` (new) - 10 tests including full round-trip with chunk merge verification
+  - `server/db/db.go` - Added UpdateClip helper for updating status, size, and storage path
+  - `server/main.go` - Added UploadHandler initialization and route registration
+- **Learnings for future iterations:**
+  - Chunk parts stored as `part_N` files in `STORAGE_PATH/uploads/<upload_id>/` directory
+  - `getPartsInfo` infers total chunk count from first part's file size - works because all chunks except last are same size
+  - After complete, parts directory is cleaned up with `os.RemoveAll` and final file moved to `STORAGE_PATH/<clip_id>/`
+  - Upload clip record is created at init time with status=uploading, updated to ready on complete
+  - The `UpdateClip` DB helper updates status, size_bytes, and storage_path in one call
+---
+
+## 2026-04-11 - US-005
+- What was implemented: TTL cleanup background goroutine (every 10 minutes) that deletes expired clips from disk and DB, plus enhanced /health endpoint with storage_used_bytes and clip_count fields
+- Files changed:
+  - `server/cleanup/cleanup.go` (new) - Background cleanup goroutine with Start() entry point
+  - `server/db/db.go` - Added GetExpiredClips() and GetStorageStats() methods
+  - `server/db/db_test.go` - Added tests for GetExpiredClips and GetStorageStats
+  - `server/main.go` - Added cleanup.Start() call and storage stats to /health
+- **Learnings for future iterations:**
+  - Cleanup runs once immediately at startup then every ticker interval
+  - For uploading clips, cleanup removes both the upload parts dir and the DB record
+  - StorageStats uses COALESCE(SUM(size_bytes), 0) to handle empty table case
+  - /health endpoint gracefully degrades if stats query fails (still returns version/uptime)
+---
+
+## 2026-04-11 - US-006
+- What was implemented: Multi-stage Dockerfile (golang:1.26-alpine build, alpine:3.20 runtime), docker-compose.yml with relay service exposing port 8080 and volume mount, .dockerignore for excluding unnecessary files
+- Files changed:
+  - `server/Dockerfile` (new) - Multi-stage build with CGO_ENABLED=0 for static binary
+  - `server/docker-compose.yml` (new) - Single relay service with env vars and named volume
+  - `server/.dockerignore` (new) - Excludes .git, tests, docs, compose/dockerfile themselves
+- **Learnings for future iterations:**
+  - Docker not installed on dev machine, so `docker-compose up --build` could not be verified locally
+  - Used CGO_ENABLED=0 for static binary since modernc.org/sqlite is pure Go (no CGO needed)
+  - docker-compose uses env var substitution with defaults (e.g., `${ACCESS_TOKEN:-changeme}`)
+---
+
+## 2026-04-11 - US-007
+- What was implemented: macOS SwiftUI menu bar app with MenuBarExtra shell, server config UI with Keychain storage, and Test Connection functionality
+- Files changed:
+  - `macos/CopyEverywhere/Package.swift` (new) - SPM manifest targeting macOS 13+
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` (new) - App entry point with MenuBarExtra and AppDelegate for hiding dock icon
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` (new) - ObservableObject managing config, Keychain CRUD, and connection testing
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` (new) - Config UI with Host URL, Access Token, Test Connection, Save
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` (new) - Main panel with gear icon to toggle config, quit button
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` (new) - Root view routing between config and main panel
+  - `macos/CopyEverywhere/.gitignore` (new) - Excludes .build/ and .swiftpm/
+- **Learnings for future iterations:**
+  - SPM executable targets can create macOS menu bar apps without Xcode project files
+  - `NSApp.setActivationPolicy(.accessory)` is the programmatic way to hide dock icon (no Info.plist needed for SPM builds)
+  - MenuBarExtra `.window` style gives a proper popover panel vs `.menu` which gives a dropdown menu
+  - ConfigStore uses `@MainActor` annotation since it interacts with UI-bound state
+  - Keychain operations: delete-before-add pattern for updates (SecItemUpdate is more complex)
+  - URLError codes `.cannotConnectToHost`, `.timedOut` map well to user-friendly error messages
+---
+
+## 2026-04-11 - US-008
+- What was implemented: macOS send clipboard text feature - clipboard preview in main panel (max 500 chars truncated), Send Clipboard button that POSTs multipart/form-data to /api/v1/clips, success/error display with Retry button
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added SendStatus enum, ClipResult struct, getClipboardText() and sendClipboardText() methods with multipart upload
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Replaced "Ready" placeholder with clipboard preview, send button, and status display
+- **Learnings for future iterations:**
+  - Server upload API expects multipart/form-data with "type" field and "content" file part (filename required)
+  - For text clips, use filename "clipboard.txt" with Content-Type text/plain
+  - Build multipart body manually with UUID boundary - no built-in Swift multipart helper
+  - Clipboard refresh on `NSApplication.didBecomeActiveNotification` keeps preview current when user switches back to app
+  - `SendStatus` enum with associated values (clipID, expiresAt) works well for displaying contextual results
+---
+
+## 2026-04-11 - US-009
+- What was implemented: macOS receive clipboard text - Receive Latest button fetches latest text clip and copies to clipboard with notification, manual Clip ID input for fetching specific clips
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added ReceiveStatus enum, receiveLatest(), receiveByID(), fetchAndCopyText() methods, UNUserNotificationCenter for notifications
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added receive section with Receive Latest button, Clip ID text field + Fetch button, and status display
+- **Learnings for future iterations:**
+  - Use `UserNotifications` framework (`UNMutableNotificationContent` + `UNNotificationRequest`) instead of deprecated `NSUserNotification`
+  - Receive flow is two-step: GET /latest for metadata (to check type), then GET /:id/raw for content
+  - `ReceiveStatus` enum mirrors `SendStatus` pattern but adds `.noContent` case for 404/empty scenarios
+  - Manual Clip ID fetch reuses `fetchAndCopyText()` private method - good for code reuse across receive paths
+---
+
+## 2026-04-11 - US-010
+- What was implemented: macOS send small file feature - drop zone for drag-and-drop from Finder, Choose File button with NSOpenPanel, upload progress bar with percentage and speed, file size validation (< 50MB), and result display with Clip ID, filename, size, and expiry
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added FileUploadStatus enum, fileUploadProgress/fileUploadSpeed published properties, sendFile(url:) method, formatBytes() helper, and UploadProgressDelegate class for tracking upload progress
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added Send File section with drop zone (onDrop + .fileURL), Choose File button, upload progress view, and result display; added chooseFile() and handleFileDrop() helpers
+- **Learnings for future iterations:**
+  - Use `URLSession.upload(for:fromFile:)` with a custom `URLSessionTaskDelegate` to track upload progress via `didSendBodyData`
+  - `UploadProgressDelegate` uses `AsyncStream<Double>` to bridge delegate callbacks to async/await
+  - File drop uses `NSItemProvider.loadItem(forTypeIdentifier: "public.file-url")` to get file URLs from drag providers
+  - `ByteCountFormatter` provides clean human-readable file sizes (e.g., "12.3 MB")
+  - Image types are detected by extension for correct MIME type; everything else uses `application/octet-stream`
+  - 50MB threshold matches US-011 chunked upload boundary
+---
+
+## 2026-04-11 - US-011
+- What was implemented: macOS chunked upload for large files (>= 50MB) - automatic chunked upload with 10MB chunks, chunk-by-chunk progress display, pause/resume support with server-side status check
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added `chunkedUploading`/`chunkedPaused` enum cases, `sendFileChunked()`, `pauseChunkedUpload()`, `resumeChunkedUpload()`, `uploadChunks()` methods, chunked upload state properties
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added chunked upload progress UI with Pause/Resume buttons, updated `isFileUploading` and status switch to handle new cases
+- **Learnings for future iterations:**
+  - Chunked upload API: POST /uploads/init → PUT /uploads/:id/parts/:n → POST /uploads/:id/complete
+  - Server accepts both 200 and 201 for init/complete responses
+  - `FileHandle.seek(toOffset:)` + `read(upToCount:)` reads specific chunk ranges without loading entire file into memory
+  - Pause works by setting a flag and cancelling the current task; resume queries GET /uploads/:id/status for received_parts to skip already-uploaded chunks
+  - 409 from PUT parts endpoint means chunk already uploaded (safe to treat as success during resume)
+---
+
+## 2026-04-11 - US-012
+- What was implemented: macOS file download feature - Clip ID lookup shows file metadata (filename, type, size, upload time, expiry), Download button opens NSSavePanel, streaming download via URLSessionDownloadTask with progress bar (percentage + speed), Finder reveal on completion, 403 handling for incomplete uploads
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added ClipMetadata struct, FileDownloadStatus enum, fileDownloadProgress/fileDownloadSpeed properties, fetchClipMetadata() and downloadFile() methods, DownloadProgressDelegate class
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added Download File section with Clip ID lookup, metadata display, download progress, success/error/uploadIncomplete states, chooseDownloadLocation() helper
+- **Learnings for future iterations:**
+  - `URLSession.download(for:)` works with `URLSessionDownloadDelegate` for progress tracking - delegate receives `didWriteData` callbacks during download
+  - `DownloadProgressDelegate` uses `AsyncStream<(Int64, Int64)>` to bridge bytesWritten/totalExpected to async/await
+  - Clip metadata API does not expose `status` field - must handle 403 from `/raw` endpoint to detect failed uploads
+  - `NSSavePanel.nameFieldStringValue` sets the suggested filename; `NSWorkspace.shared.activateFileViewerSelecting([url])` reveals the file in Finder
+---
+
+## 2026-04-11 - US-013
+- What was implemented: macOS send history list and management - HistoryStore with UserDefaults persistence, HistoryRecord model (Codable), history section in MainPanelView with type icons/timestamps/expired+failed labels, click-to-copy Clip ID, delete button per entry, history recording on text send, file upload success, and file upload failure
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/HistoryStore.swift` (new) - HistoryRecord struct and HistoryStore ObservableObject with UserDefaults persistence
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added historyStore property, recording history entries after text send, file upload success, and file upload failure
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added History section with scrollable list, historyRow helper, formatTimestamp helper, delete button per row
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` - Added HistoryStore @EnvironmentObject and onAppear to wire it to ConfigStore
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` - Added HistoryStore @StateObject and environmentObject injection
+- **Learnings for future iterations:**
+  - HistoryStore uses UserDefaults with JSON encoding (Codable) — simpler than SQLite for small datasets
+  - ConfigStore can't take HistoryStore as init parameter when using @StateObject — use onAppear assignment instead
+  - HistoryRecord.isExpired computed property checks Date() > expiresAt for dynamic expired status display
+  - `contentShape(Rectangle())` on history rows ensures the entire row area is tappable, not just the text
+---
+
+## 2026-04-11 - US-014
+- What was implemented: Windows WPF (.NET 8) project with system tray (Hardcodet.NotifyIcon.Wpf), server config UI with Host URL and Access Token fields, Windows Credential Manager storage via CredentialManagement NuGet, Test Connection with specific error messages (connection refused, auth failed 401, timeout)
+- Files changed:
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` (new) - .NET 8 WPF project with NuGet dependencies
+  - `windows/CopyEverywhere/App.xaml` / `App.xaml.cs` (new) - App startup with TaskbarIcon system tray, left-click handler, context menu with Exit
+  - `windows/CopyEverywhere/MainWindow.xaml` / `MainWindow.xaml.cs` (new) - Config UI with save, test connection, minimize-to-tray on close
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` (new) - Config storage via Windows Credential Manager
+  - `windows/CopyEverywhere/Services/ApiClient.cs` (new) - HTTP client with TestConnectionAsync, specific error handling
+  - `windows/CopyEverywhere/.gitignore` (new) - Excludes bin/, obj/, .vs/
+- **Learnings for future iterations:**
+  - dotnet SDK not available on dev machine — build verification requires Windows environment
+  - WPF PasswordBox doesn't support two-way data binding — must use PasswordChanged event to sync value
+  - `ShutdownMode="OnExplicitShutdown"` prevents WPF app from shutting down when hiding main window to tray
+  - `Hardcodet.NotifyIcon.Wpf` v1.1.0 is the standard WPF system tray library for .NET 8
+  - CredentialManagement NuGet wraps Windows Credential Manager with simple Target/Password/Save/Load API
+  - Test Connection verifies both /health (no auth) and /api/v1/clips/latest (auth) to confirm full connectivity
+---
+
+## 2026-04-11 - US-015
+- What was implemented: Windows send and receive clipboard text — clipboard preview (max 500 chars truncated), Send Clipboard button with multipart POST to /api/v1/clips, Receive Latest button fetching latest text clip and writing to clipboard, manual Clip ID input with Fetch button, Windows toast notifications on receive, per-section status display
+- Files changed:
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` - Added Microsoft.Toolkit.Uwp.Notifications NuGet for toast notifications
+  - `windows/CopyEverywhere/Services/ApiClient.cs` - Added ClipResponse model, SendTextClipAsync, GetLatestClipAsync, GetClipMetadataAsync, GetClipRawTextAsync methods
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added Send Clipboard section (preview, send button), Receive section (Receive Latest, Clip ID input, Fetch), status borders, increased window height to 650
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added event handlers for send/receive/fetch, clipboard preview refresh on window activation, toast notification helper, separate status methods for send/receive sections
+- **Learnings for future iterations:**
+  - `Microsoft.Toolkit.Uwp.Notifications` v7.1.3 works with .NET 8 WPF for toast notifications (despite "Uwp" in name)
+  - `MultipartFormDataContent` in .NET handles boundary generation automatically
+  - `Clipboard.ContainsText()` check is needed before `GetText()` — clipboard may be empty or contain non-text
+  - Clipboard access can throw if locked by another process — wrap in try/catch
+  - OnActivated override refreshes clipboard preview when user switches back to the app
+  - ClipboardPanel visibility toggled based on IsConfigured — hides send/receive UI until server is configured
+---
+
+## 2026-04-11 - US-016
+- What was implemented: Windows send and receive files with chunked upload support — drop zone for drag-and-drop from Explorer, Choose File button with OpenFileDialog, small file upload (< 50MB) via single POST with ProgressStreamContent for progress tracking, large file upload (>= 50MB) via chunked upload with pause/resume, file download with streaming progress and Explorer reveal, metadata lookup before download
+- Files changed:
+  - `windows/CopyEverywhere/Services/ApiClient.cs` - Added SendFileAsync (with ProgressStreamContent), InitChunkedUploadAsync, UploadChunkAsync, CompleteChunkedUploadAsync, GetUploadStatusAsync, DownloadFileAsync methods; UploadInitResponse, UploadStatusResponse, ProgressStreamContent classes
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added Send File section (drop zone, Choose File button, progress bar, pause/resume buttons), Download File section (Clip ID lookup, metadata display, download button, progress bar), increased window height to 800
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added file upload/download event handlers, chunked upload state management, drag-and-drop handlers, FormatBytes/FormatSpeed helpers, ShowFileUploadStatus/ShowDownloadStatus helpers
+- **Learnings for future iterations:**
+  - `ProgressStreamContent` extends `HttpContent` to report upload progress via `IProgress<(long, long)>` — .NET has no built-in progress-tracking upload
+  - WPF drop zone uses `AllowDrop="True"` with `Drop`/`DragOver`/`DragLeave` events and `DataFormats.FileDrop`
+  - `OpenFileDialog` and `SaveFileDialog` are in `Microsoft.Win32` namespace (not `System.Windows.Forms`)
+  - `Process.Start("explorer.exe", "/select,\"path\"")` opens Explorer and selects the downloaded file
+  - Chunked upload pause works by cancelling CancellationTokenSource; resume queries server for received_parts
+  - 409 from chunk upload endpoint means already uploaded — safe to ignore during resume
+  - Download uses `HttpCompletionOption.ResponseHeadersRead` for streaming (doesn't buffer entire response)
+---
+
+## 2026-04-11 - US-017
+- What was implemented: Windows send history list and management — HistoryStore with JSON file persistence in AppData/Local/CopyEverywhere/, HistoryRecord model with type icons/expired/failed status, history section in MainWindow with scrollable list, click-to-copy Clip ID, delete button per entry, history recording on text send, file upload success, chunked upload success, and upload failure
+- Files changed:
+  - `windows/CopyEverywhere/Services/HistoryStore.cs` (new) - HistoryRecord class and HistoryStore with JSON file persistence
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added History section with ScrollViewer and StackPanel, increased window height to 900
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added HistoryStore integration, RefreshHistoryList/CreateHistoryRow builders, click-to-copy and delete handlers, history recording in all send/upload paths
+- **Learnings for future iterations:**
+  - JSON file in AppData is simpler than SQLite for small datasets (mirrors macOS UserDefaults approach)
+  - WPF programmatic UI: use DockPanel with Dock.Right for right-aligned elements in list rows
+  - Border.MouseLeftButtonUp works for clickable rows; Button.Tag stores the ClipId for delete handlers
+  - HistoryRecord.DisplayLabel computed property centralizes status text logic (Active/Expired/Upload Failed)
+  - Unicode emoji chars (\U0001F4DD etc.) work in WPF TextBlock for type icons
+---
