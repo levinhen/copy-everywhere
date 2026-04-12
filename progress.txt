@@ -18,7 +18,7 @@ US-064: Bluetooth auto-reconnect and RFCOMM server          [x]
 US-065: Bluetooth send — text and files                     [x]
 US-066: Bluetooth receive — text and files                  [x]
 US-067: Notifications and user feedback                     [x]
-US-068: Boot receiver and battery optimization              [ ]
+US-068: Boot receiver and battery optimization              [x]
 
 ## Codebase Patterns
 - Gradle version catalog at `android/gradle/libs.versions.toml` — always use `libs.` references
@@ -63,6 +63,9 @@ US-068: Boot receiver and battery optimization              [ ]
 - `BluetoothSession.sendText()`/`sendFile()` return cold `Flow<Double>` — must `collect` to execute the send
 - BT receive progress: `CopyEverywhereService.btReceiveProgress`/`btReceiveFilename` StateFlows — observe from ViewModel via `startBtReceiveObserving()`
 - `CopyEverywhereService.showTransferNotificationStatic(context, title, text)` — post transfer notifications from any context (Activity, ViewModel, Service)
+- `BootReceiver` starts the foreground service on `BOOT_COMPLETED` — registered in manifest with `exported="true"`
+- WakeLock: `CopyEverywhereService.acquireWakeLock()`/`releaseWakeLock()` — nested holder counting, 10-min safety timeout, use around active transfers
+- Battery optimization: `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` + `PowerManager.isIgnoringBatteryOptimizations()` to check/request
 
 ---
 
@@ -408,4 +411,27 @@ US-068: Boot receiver and battery optimization              [ ]
   - `PendingIntent` request codes must be unique per notification — Share and Open actions on the same file notification need different request codes (e.g., `filename.hashCode()` vs `filename.hashCode() + 1`)
   - `showTransferNotificationStatic()` on companion object allows posting transfer notifications from any context (Activity, ViewModel, Service)
   - `Intent.ACTION_VIEW` with `setDataAndType(uri, mimeType)` + `FLAG_GRANT_READ_URI_PERMISSION` opens files with appropriate system handler
+---
+
+## 2026-04-12 - US-068
+- Created `BootReceiver` BroadcastReceiver that starts CopyEverywhereService on BOOT_COMPLETED
+- Added `RECEIVE_BOOT_COMPLETED`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, and `WAKE_LOCK` permissions to manifest
+- Registered BootReceiver with BOOT_COMPLETED intent filter in AndroidManifest.xml
+- Battery optimization exemption requested via `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` on first launch (skips if already exempted)
+- WakeLock support: `acquireWakeLock()`/`releaseWakeLock()` on CopyEverywhereService with nested holder counting and 10-minute safety timeout
+- WakeLock acquired during SSE clip download (handleSseEvent) and Bluetooth receive (onReceiveProgress → onTransferReceived/onReceiveFailed)
+- START_STICKY already in place from US-057
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/service/BootReceiver.kt`
+- Files modified:
+  - `android/app/src/main/AndroidManifest.xml` — permissions + receiver registration
+  - `android/app/src/main/java/com/copyeverywhere/app/MainActivity.kt` — battery optimization prompt
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt` — WakeLock lifecycle
+- **Learnings for future iterations:**
+  - `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` with `package:$packageName` URI shows the system dialog — requires `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission
+  - `PowerManager.isIgnoringBatteryOptimizations(packageName)` checks current exemption status — skip the prompt if already exempted
+  - `PowerManager.PARTIAL_WAKE_LOCK` keeps CPU alive without keeping screen on — appropriate for background transfers
+  - WakeLock `acquire(timeout)` with a safety net timeout prevents leaks if release is missed
+  - Nested WakeLock holder counting pattern: increment on acquire, decrement on release, only call `wakeLock.acquire()`/`release()` at edges (0→1 and 1→0)
+  - `@Suppress("BatteryLife")` on the battery optimization method silences the lint warning about `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`
 ---
