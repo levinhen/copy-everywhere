@@ -460,3 +460,19 @@
   - File save to Downloads needs duplicate-name avoidance (append counter) since Bluetooth receive doesn't have clip IDs.
   - `dotnet build` cannot be verified on macOS dev machine — Windows-only changes require manual verification on a Windows host.
 ---
+
+## 2026-04-12 - US-049
+- What was implemented:
+  - ConfigStore.setTransferMode() now stops SSE when switching to Bluetooth and restarts SSE + queue fetch when switching back to LAN
+  - MainPanelView conditionally shows server queue (LAN mode) or Bluetooth status section (BT mode)
+  - Bluetooth status section shows connection status badge (color + text), connected device name, and guidance when not paired
+  - Queue polling timer only starts when in LAN mode
+  - Helper functions bluetoothStatusColor/bluetoothStatusText for BT connection status display
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift — setTransferMode stops/starts SSE and queue fetch on mode switch
+  - macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift — conditional queue/BT status sections, BT status helpers, LAN-only queue timer
+- **Learnings for future iterations:**
+  - Most of US-049 was already implemented in earlier stories (picker, LAN/BT config sections, mode persistence). The gaps were service lifecycle on switch and panel mode awareness.
+  - BluetoothConnectionStatus enum cases: .disconnected, .connecting, .connected, .error(String). Use switch exhaustively for UI color/text mapping.
+  - `bluetoothConnectedDeviceName` on ConfigStore is the canonical way to show which BT device is connected (not BluetoothService.activeSession).
+---
