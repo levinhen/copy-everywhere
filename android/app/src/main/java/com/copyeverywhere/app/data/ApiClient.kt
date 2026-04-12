@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import java.io.InputStream
+import java.io.OutputStream
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -82,6 +84,16 @@ data class UploadStatusResponse(
 
 data class UploadCompleteResponse(
     @SerializedName("clip_id") val clipId: String
+)
+
+/** Thrown when a clip has already been consumed (410 Gone). */
+class ClipAlreadyConsumedException(clipId: String) : IOException("Clip already consumed: $clipId")
+
+/** Result of downloading a clip's raw content. */
+data class DownloadedClip(
+    val metadata: ClipResponse,
+    val contentType: String,
+    val bytes: ByteArray
 )
 
 class ChunkedUploadState(
@@ -423,6 +435,97 @@ class ApiClient {
         state.completedParts.clear()
         state.completedParts.addAll(status.receivedParts)
         state.updateProgress(state.completedParts.size)
+    }
+
+    /**
+     * Fetch the queue of unconsumed clips for a device.
+     * GET /api/v1/clips?device_id=<deviceId>
+     */
+    suspend fun fetchQueue(
+        hostUrl: String,
+        accessToken: String,
+        deviceId: String
+    ): List<ClipResponse> = withContext(Dispatchers.IO) {
+        val url = "${hostUrl.trimEnd('/')}/api/v1/clips?device_id=$deviceId"
+        val request = buildRequest(url, accessToken).get().build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IOException("Fetch queue failed: ${response.code}")
+        }
+        val body = response.body?.string() ?: throw IOException("Empty response")
+        gson.fromJson(body, Array<ClipResponse>::class.java).toList()
+    }
+
+    /**
+     * Download a clip's raw content. Atomically consumes the clip on the server.
+     * GET /api/v1/clips/:id/raw
+     *
+     * @param progressCallback optional callback invoked with progress 0.0..1.0
+     * @throws ClipAlreadyConsumedException if the clip was already consumed (410 Gone)
+     */
+    suspend fun downloadClipRaw(
+        hostUrl: String,
+        accessToken: String,
+        clipId: String,
+        expectedSize: Long = -1,
+        progressCallback: (suspend (Double) -> Unit)? = null
+    ): DownloadedClip = withContext(Dispatchers.IO) {
+        // First get metadata
+        val metaUrl = "${hostUrl.trimEnd('/')}/api/v1/clips/$clipId"
+        val metaRequest = buildRequest(metaUrl, accessToken).get().build()
+        val metaResponse = client.newCall(metaRequest).execute()
+        if (!metaResponse.isSuccessful) {
+            throw IOException("Fetch clip metadata failed: ${metaResponse.code}")
+        }
+        val metaBody = metaResponse.body?.string() ?: throw IOException("Empty response")
+        val metadata = gson.fromJson(metaBody, ClipResponse::class.java)
+
+        // Download raw content (atomically consumes)
+        val rawUrl = "${hostUrl.trimEnd('/')}/api/v1/clips/$clipId/raw"
+        val rawRequest = buildRequest(rawUrl, accessToken).get().build()
+        val rawResponse = client.newCall(rawRequest).execute()
+
+        when (rawResponse.code) {
+            410 -> throw ClipAlreadyConsumedException(clipId)
+            403 -> throw IOException("Clip upload not completed: $clipId")
+        }
+        if (!rawResponse.isSuccessful) {
+            throw IOException("Download clip failed: ${rawResponse.code}")
+        }
+
+        val responseBody = rawResponse.body ?: throw IOException("Empty response body")
+        val contentType = responseBody.contentType()?.toString() ?: "application/octet-stream"
+        val totalBytes = if (expectedSize > 0) expectedSize else metadata.sizeBytes
+
+        val bytes = if (totalBytes > 0 && progressCallback != null) {
+            readWithProgress(responseBody.byteStream(), totalBytes, progressCallback)
+        } else {
+            responseBody.bytes()
+        }
+
+        DownloadedClip(
+            metadata = metadata,
+            contentType = contentType,
+            bytes = bytes
+        )
+    }
+
+    private suspend fun readWithProgress(
+        inputStream: InputStream,
+        totalBytes: Long,
+        progressCallback: suspend (Double) -> Unit
+    ): ByteArray {
+        val output = java.io.ByteArrayOutputStream(totalBytes.toInt().coerceAtMost(8 * 1024 * 1024))
+        val buffer = ByteArray(READ_BUFFER_SIZE)
+        var bytesRead = 0L
+        while (true) {
+            val read = inputStream.read(buffer)
+            if (read == -1) break
+            output.write(buffer, 0, read)
+            bytesRead += read
+            progressCallback(bytesRead.toDouble() / totalBytes)
+        }
+        return output.toByteArray()
     }
 
     companion object {

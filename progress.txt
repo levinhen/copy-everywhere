@@ -6,7 +6,7 @@ US-052: Configuration screen and persistence                [x]
 US-053: mDNS server discovery                               [x]
 US-054: API client — small clip send (text + file < 50 MB)  [x]
 US-055: API client — chunked upload (file >= 50 MB)         [x]
-US-056: API client — receive clip (metadata + download)     [ ]
+US-056: API client — receive clip (metadata + download)     [x]
 US-057: SSE client and auto-receive                         [ ]
 US-058: Foreground service and persistent notification      [ ]
 US-059: Main Activity — text input and file upload          [ ]
@@ -132,4 +132,21 @@ US-068: Boot receiver and battery optimization              [ ]
   - `currentCoroutineContext().ensureActive()` is the pattern for cooperative cancellation in loops
   - `ChunkedUploadState` uses MutableStateFlow for progress/speed so Compose can collect them
   - Default chunk size 5 MB balances between too many HTTP requests and memory usage
+---
+
+## 2026-04-12 - US-056
+- Added `fetchQueue()` method: GET /api/v1/clips?device_id=<self> returns list of unconsumed clips
+- Added `downloadClipRaw()` method: GET /api/v1/clips/:id/raw with two-step flow (metadata fetch then raw download)
+- Raw download atomically consumes the clip on the server (first caller wins)
+- Download progress reported via suspend callback (0.0 to 1.0)
+- `ClipAlreadyConsumedException` for 410 Gone (clip already consumed by another device)
+- `DownloadedClip` data class holds metadata + contentType + raw bytes
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`
+- **Learnings for future iterations:**
+  - Server GET /clips/:id/raw atomically consumes the clip — subsequent calls return 410 Gone
+  - Two-step receive: metadata first (GET /clips/:id), then raw content (GET /clips/:id/raw)
+  - `ClipResponse` from the list endpoint doesn't include `status` or `consumed_at` — server intentionally hides internal state
+  - For progress tracking on downloads, use the metadata's `sizeBytes` as total since OkHttp response body `contentLength()` may be -1
+  - `ByteArrayOutputStream` with capped initial capacity avoids OOM for large download buffers
 ---
