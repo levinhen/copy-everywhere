@@ -48,7 +48,7 @@
         "swift build succeeds"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-037 — scaffold + process management only"
     },
     {

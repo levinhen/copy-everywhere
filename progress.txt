@@ -7,6 +7,8 @@
 - `isConfigured` only requires `hostURL`/`HostUrl` — token is optional for LAN-only deployments.
 - Branch `ralph/lan-and-bluetooth` is based on `ralph/copy-everywhere-queue-ux` (not `main`), since `main` only has 2 initial commits.
 - mDNS service type is `_copyeverywhere._tcp` (constant in `discovery.ServiceType`). TXT records: `version`, `auth`. Clients browse this same type for auto-discovery.
+- Server host app (`macos/CopyEverywhereServer/`) follows the same AppDelegate + NSStatusItem + NSPopover pattern as the client. `ServerProcess` is the subprocess manager (`@MainActor` ObservableObject).
+- Go binary path convention: sibling `copyeverywhere-server` next to the Swift executable. Build independently with `go build -o copyeverywhere-server .` in `server/`.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -55,4 +57,30 @@
   - `github.com/hashicorp/mdns` is the go-to pure-Go mDNS library. It wraps `github.com/miekg/dns` underneath.
   - mDNS multicast discovery is unreliable in isolated/CI environments — keep discovery tests non-fatal or skip in short mode.
   - Service type `_copyeverywhere._tcp` is the shared constant in `discovery.ServiceType` — clients should use the same string for browsing.
+---
+
+## 2026-04-12 - US-037A
+- What was implemented:
+  - New `macos/CopyEverywhereServer/` SPM project (macOS 13+, executable target)
+  - `CopyEverywhereServerApp.swift` — @main entry point + AppDelegate with NSStatusItem + NSPopover (same pattern as client)
+  - `ServerProcess.swift` — @MainActor ObservableObject managing Go server binary via Foundation.Process
+    - start/stop/restart lifecycle; SIGTERM for graceful shutdown
+    - stdout/stderr captured via Pipe with readabilityHandler, surfaced as @Published logLines
+    - terminationHandler detects unexpected exits
+  - `MenuBarView.swift` — SwiftUI panel with status badge (green/gray), Start/Stop/Restart buttons, scrollable log viewer, Quit button
+  - Menu bar icon tints green when running, gray when stopped
+  - NSApp.setActivationPolicy(.accessory) hides Dock icon
+- Files changed:
+  - macos/CopyEverywhereServer/Package.swift — new SPM manifest
+  - macos/CopyEverywhereServer/.gitignore — .build/, .swiftpm/
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/CopyEverywhereServerApp.swift — app + delegate
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/ServerProcess.swift — subprocess manager
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/MenuBarView.swift — panel UI
+  - CLAUDE.md — architecture and conventions for server host app
+  - prd.json — US-037A passes: true
+- **Learnings for future iterations:**
+  - `Process.terminate()` sends SIGTERM on macOS — matches Go server's existing signal handler for mDNS deregistration.
+  - `Pipe.fileHandleForReading.readabilityHandler` is the async-compatible way to stream subprocess output without blocking.
+  - Icon tinting via `NSImage` drawing with `.sourceAtop` compositing works for SF Symbols but requires `isTemplate = false`.
+  - The server host app is intentionally minimal for US-037A — config panel (US-037B) and launch-at-login (US-037C) are separate stories.
 ---
