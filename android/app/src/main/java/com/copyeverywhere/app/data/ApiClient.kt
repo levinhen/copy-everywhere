@@ -1,13 +1,21 @@
 package com.copyeverywhere.app.data
 
+import android.content.ContentResolver
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import okio.source
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -34,6 +42,17 @@ data class RegisterRequest(
 
 data class RegisterResponse(
     @SerializedName("device_id") val deviceId: String
+)
+
+data class ClipResponse(
+    val id: String = "",
+    val type: String = "",
+    val filename: String = "",
+    @SerializedName("size_bytes") val sizeBytes: Long = 0,
+    @SerializedName("content_type") val contentType: String = "",
+    @SerializedName("created_at") val createdAt: String = "",
+    @SerializedName("sender_device_id") val senderDeviceId: String? = null,
+    @SerializedName("target_device_id") val targetDeviceId: String? = null
 )
 
 class ApiClient {
@@ -93,5 +112,119 @@ class ApiClient {
         }
         val body = response.body?.string() ?: throw IOException("Empty response")
         gson.fromJson(body, Array<Device>::class.java).toList()
+    }
+
+    /**
+     * Send a text clip to the server.
+     */
+    suspend fun sendTextClip(
+        hostUrl: String,
+        accessToken: String,
+        text: String,
+        senderDeviceId: String,
+        targetDeviceId: String
+    ): ClipResponse = withContext(Dispatchers.IO) {
+        val url = "${hostUrl.trimEnd('/')}/api/v1/clips"
+        val textBytes = text.toByteArray(Charsets.UTF_8)
+        val contentBody = textBytes.toRequestBody("text/plain".toMediaType())
+
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("type", "text")
+            .addFormDataPart("content", "clipboard.txt", contentBody)
+            .apply {
+                if (senderDeviceId.isNotEmpty()) addFormDataPart("sender_device_id", senderDeviceId)
+                if (targetDeviceId.isNotEmpty()) addFormDataPart("target_device_id", targetDeviceId)
+            }
+            .build()
+
+        val request = buildRequest(url, accessToken).post(multipart).build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IOException("Send text clip failed: ${response.code}")
+        }
+        val body = response.body?.string() ?: throw IOException("Empty response")
+        gson.fromJson(body, ClipResponse::class.java)
+    }
+
+    /**
+     * Send a file clip to the server, streaming from a content URI.
+     * Only for files < 50 MB. Larger files should use chunked upload.
+     */
+    suspend fun sendFileClip(
+        hostUrl: String,
+        accessToken: String,
+        contentResolver: ContentResolver,
+        fileUri: Uri,
+        senderDeviceId: String,
+        targetDeviceId: String
+    ): ClipResponse = withContext(Dispatchers.IO) {
+        val url = "${hostUrl.trimEnd('/')}/api/v1/clips"
+
+        val filename = getFileName(contentResolver, fileUri)
+        val mimeType = contentResolver.getType(fileUri) ?: guessMimeType(filename)
+
+        val streamBody = object : RequestBody() {
+            override fun contentType() = mimeType.toMediaType()
+            override fun contentLength(): Long = getFileSize(contentResolver, fileUri)
+            override fun writeTo(sink: BufferedSink) {
+                contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                    inputStream.source().use { source ->
+                        sink.writeAll(source)
+                    }
+                } ?: throw IOException("Cannot open file URI: $fileUri")
+            }
+        }
+
+        val clipType = if (mimeType.startsWith("image/")) "image" else "file"
+
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("type", clipType)
+            .addFormDataPart("content", filename, streamBody)
+            .apply {
+                if (senderDeviceId.isNotEmpty()) addFormDataPart("sender_device_id", senderDeviceId)
+                if (targetDeviceId.isNotEmpty()) addFormDataPart("target_device_id", targetDeviceId)
+            }
+            .build()
+
+        val request = buildRequest(url, accessToken).post(multipart).build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IOException("Send file clip failed: ${response.code}")
+        }
+        val body = response.body?.string() ?: throw IOException("Empty response")
+        gson.fromJson(body, ClipResponse::class.java)
+    }
+
+    companion object {
+        fun getFileName(contentResolver: ContentResolver, uri: Uri): String {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (nameIndex >= 0) {
+                        return cursor.getString(nameIndex)
+                    }
+                }
+            }
+            return uri.lastPathSegment ?: "unknown"
+        }
+
+        fun getFileSize(contentResolver: ContentResolver, uri: Uri): Long {
+            contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (sizeIndex >= 0) {
+                        return cursor.getLong(sizeIndex)
+                    }
+                }
+            }
+            return -1L
+        }
+
+        fun guessMimeType(filename: String): String {
+            val ext = filename.substringAfterLast('.', "").lowercase()
+            return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
+        }
     }
 }
