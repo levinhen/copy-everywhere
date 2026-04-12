@@ -61,6 +61,8 @@ fun MainScreen(
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val receiveStatus by viewModel.receiveStatus.collectAsState()
     val transferMode by viewModel.transferMode.collectAsState()
+    val btReceiveProgress by viewModel.btReceiveProgress.collectAsState()
+    val btReceiveFilename by viewModel.btReceiveFilename.collectAsState()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -70,7 +72,11 @@ fun MainScreen(
 
     DisposableEffect(Unit) {
         viewModel.startQueuePolling()
-        onDispose { viewModel.stopQueuePolling() }
+        viewModel.startBtReceiveObserving()
+        onDispose {
+            viewModel.stopQueuePolling()
+            viewModel.stopBtReceiveObserving()
+        }
     }
 
     Scaffold(
@@ -194,16 +200,48 @@ fun MainScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Bluetooth", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        "Waiting for Bluetooth connection...",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+
+                    // Receive progress card
+                    val progress = btReceiveProgress
+                    val filename = btReceiveFilename
+                    if (progress != null && filename != null) {
+                        BtReceiveProgressCard(filename = filename, progress = progress)
+                    } else {
+                        Text(
+                            "Waiting for Bluetooth connection...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 
             // Bottom spacing
             item { Spacer(modifier = Modifier.height(16.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun BtReceiveProgressCard(
+    filename: String,
+    progress: Double
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Receiving via Bluetooth", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(filename, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${(progress * 100).toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { progress.toFloat() },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }

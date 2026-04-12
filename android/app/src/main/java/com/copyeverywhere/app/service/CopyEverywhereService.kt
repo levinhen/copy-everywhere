@@ -20,6 +20,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.copyeverywhere.app.MainActivity
 import com.copyeverywhere.app.R
 import com.copyeverywhere.app.data.ApiClient
+import com.copyeverywhere.app.data.BluetoothContentType
 import com.copyeverywhere.app.data.BluetoothPayload
 import com.copyeverywhere.app.data.BluetoothService
 import com.copyeverywhere.app.data.BluetoothSession
@@ -33,6 +34,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
@@ -47,6 +51,14 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     /** Bluetooth RFCOMM service — manages server and client connections. */
     var bluetoothService: BluetoothService? = null
         private set
+
+    /** Bluetooth receive progress (0.0–1.0), observed by MainViewModel for UI. */
+    private val _btReceiveProgress = MutableStateFlow<Double?>(null)
+    val btReceiveProgress: StateFlow<Double?> = _btReceiveProgress.asStateFlow()
+
+    /** Filename of the Bluetooth transfer currently being received. */
+    private val _btReceiveFilename = MutableStateFlow<String?>(null)
+    val btReceiveFilename: StateFlow<String?> = _btReceiveFilename.asStateFlow()
 
     override fun onCreate() {
         super.onCreate()
@@ -211,15 +223,37 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     }
 
     override fun onTransferReceived(session: BluetoothSession, payload: BluetoothPayload) {
-        // Will be handled by US-066
+        Log.d(TAG, "Bluetooth transfer received: type=${payload.header.type}, filename=${payload.header.filename}, size=${payload.data.size}")
+        // Clear receive progress
+        _btReceiveProgress.value = null
+        _btReceiveFilename.value = null
+
+        // Verify size matches header
+        if (payload.data.size.toLong() != payload.header.size) {
+            Log.w(TAG, "BT receive size mismatch: header=${payload.header.size}, actual=${payload.data.size}")
+            showTransferNotification("Receive failed", "File size mismatch")
+            return
+        }
+
+        when (payload.header.type) {
+            BluetoothContentType.Text -> handleTextClip(payload.data)
+            BluetoothContentType.File -> {
+                val mimeType = ApiClient.guessMimeType(payload.header.filename)
+                handleFileClip(payload.header.filename, mimeType, payload.data)
+            }
+        }
     }
 
     override fun onReceiveProgress(session: BluetoothSession, progress: Double, header: BluetoothTransferHeader) {
-        // Will be handled by US-066
+        _btReceiveProgress.value = progress
+        _btReceiveFilename.value = header.filename
     }
 
     override fun onReceiveFailed(session: BluetoothSession, error: Exception) {
         Log.w(TAG, "Bluetooth receive failed: ${error.message}")
+        _btReceiveProgress.value = null
+        _btReceiveFilename.value = null
+        showTransferNotification("Receive failed", error.message ?: "Unknown error")
     }
 
     override fun onSessionDisconnected(session: BluetoothSession) {

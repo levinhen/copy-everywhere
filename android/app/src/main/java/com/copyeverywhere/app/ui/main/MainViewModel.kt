@@ -57,6 +57,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _receiveStatus = MutableStateFlow<ReceiveStatus>(ReceiveStatus.Idle)
     val receiveStatus: StateFlow<ReceiveStatus> = _receiveStatus.asStateFlow()
 
+    /** Bluetooth receive progress (0.0–1.0), read from the foreground service. */
+    private val _btReceiveProgress = MutableStateFlow<Double?>(null)
+    val btReceiveProgress: StateFlow<Double?> = _btReceiveProgress.asStateFlow()
+
+    /** Filename of the Bluetooth transfer currently being received. */
+    private val _btReceiveFilename = MutableStateFlow<String?>(null)
+    val btReceiveFilename: StateFlow<String?> = _btReceiveFilename.asStateFlow()
+
+    private var btReceivePollingJob: Job? = null
     private var queuePollingJob: Job? = null
     private var chunkedUploadState: ChunkedUploadState? = null
     private var chunkedUploadUri: Uri? = null
@@ -295,6 +304,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopQueuePolling() {
         queuePollingJob?.cancel()
         queuePollingJob = null
+    }
+
+    /** Start observing Bluetooth receive progress from the foreground service. */
+    fun startBtReceiveObserving() {
+        btReceivePollingJob?.cancel()
+        if (transferMode.value != TransferMode.Bluetooth) return
+        btReceivePollingJob = viewModelScope.launch {
+            val service = CopyEverywhereService.instance ?: return@launch
+            launch { service.btReceiveProgress.collect { _btReceiveProgress.value = it } }
+            launch { service.btReceiveFilename.collect { _btReceiveFilename.value = it } }
+        }
+    }
+
+    fun stopBtReceiveObserving() {
+        btReceivePollingJob?.cancel()
+        btReceivePollingJob = null
+        _btReceiveProgress.value = null
+        _btReceiveFilename.value = null
     }
 
     private suspend fun refreshQueue() {
