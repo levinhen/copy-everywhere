@@ -6,6 +6,7 @@
 - macOS client uses `setAuthHeader(&request)` helper to conditionally add Bearer token. Windows uses `SetAuthHeader(client)` overload.
 - `isConfigured` only requires `hostURL`/`HostUrl` — token is optional for LAN-only deployments.
 - Branch `ralph/lan-and-bluetooth` is based on `ralph/copy-everywhere-queue-ux` (not `main`), since `main` only has 2 initial commits.
+- mDNS service type is `_copyeverywhere._tcp` (constant in `discovery.ServiceType`). TXT records: `version`, `auth`. Clients browse this same type for auto-discovery.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -34,4 +35,24 @@
   - The main branch only has initial setup commits; all code lives on `ralph/copy-everywhere-queue-ux`. New feature branches should fork from there.
   - macOS ConfigStore has ~15 places setting the auth header — centralizing into a helper was essential.
   - Windows ApiClient already had a `SetAuthHeader()` but only for the default `_httpClient`. An overload accepting `HttpClient` was needed for the one-off clients (download, upload).
+---
+
+## 2026-04-12 - US-036
+- What was implemented:
+  - New `discovery/` package wrapping `github.com/hashicorp/mdns` (pure-Go, no CGO)
+  - `discovery.Start(port, version, authEnabled)` registers mDNS service type `_copyeverywhere._tcp` with TXT records `version=<v>` and `auth=<bool>`
+  - `MDNSServer.Shutdown()` deregisters the service (idempotent)
+  - `main.go` starts mDNS after config load; signal handler deregisters on SIGINT/SIGTERM
+  - Tests verify Start/Shutdown lifecycle and idempotent shutdown; discovery test is non-fatal (multicast depends on network environment)
+- Files changed:
+  - server/discovery/mdns.go — new mDNS service advertisement package
+  - server/discovery/mdns_test.go — lifecycle and discovery tests
+  - server/main.go — mDNS startup + signal-based shutdown
+  - server/go.mod, server/go.sum — added github.com/hashicorp/mdns dependency
+  - CLAUDE.md — documented mDNS pattern
+  - prd.json — US-036 passes: true
+- **Learnings for future iterations:**
+  - `github.com/hashicorp/mdns` is the go-to pure-Go mDNS library. It wraps `github.com/miekg/dns` underneath.
+  - mDNS multicast discovery is unreliable in isolated/CI environments — keep discovery tests non-fatal or skip in short mode.
+  - Service type `_copyeverywhere._tcp` is the shared constant in `discovery.ServiceType` — clients should use the same string for browsing.
 ---
