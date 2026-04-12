@@ -337,6 +337,283 @@ func TestGetStorageStats(t *testing.T) {
 	}
 }
 
+func TestGenerateDeviceID(t *testing.T) {
+	id, err := GenerateDeviceID()
+	if err != nil {
+		t.Fatalf("generate device id: %v", err)
+	}
+	if len(id) != 8 {
+		t.Fatalf("expected 8 chars, got %d: %s", len(id), id)
+	}
+	for _, c := range id {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') {
+			t.Fatalf("invalid char %c in id %s", c, id)
+		}
+	}
+}
+
+func TestRegisterDevice(t *testing.T) {
+	d := setupTestDB(t)
+
+	dev, err := d.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+	if len(dev.ID) != 8 {
+		t.Fatalf("expected 8-char id, got %d", len(dev.ID))
+	}
+	if dev.Name != "Mac" {
+		t.Fatalf("expected name Mac, got %s", dev.Name)
+	}
+	if dev.Platform != "macos" {
+		t.Fatalf("expected platform macos, got %s", dev.Platform)
+	}
+}
+
+func TestRegisterDeviceIdempotent(t *testing.T) {
+	d := setupTestDB(t)
+
+	dev1, err := d.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	dev2, err := d.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("re-register device: %v", err)
+	}
+
+	if dev1.ID != dev2.ID {
+		t.Fatalf("expected same id on re-register, got %s vs %s", dev1.ID, dev2.ID)
+	}
+}
+
+func TestRegisterDeviceDifferentPlatform(t *testing.T) {
+	d := setupTestDB(t)
+
+	dev1, _ := d.RegisterDevice("MyPC", "macos")
+	dev2, _ := d.RegisterDevice("MyPC", "windows")
+
+	if dev1.ID == dev2.ID {
+		t.Fatal("expected different ids for different platforms")
+	}
+}
+
+func TestListDevices(t *testing.T) {
+	d := setupTestDB(t)
+
+	devices, err := d.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("expected 0 devices, got %d", len(devices))
+	}
+
+	d.RegisterDevice("Mac", "macos")
+	d.RegisterDevice("PC", "windows")
+
+	devices, err = d.ListDevices()
+	if err != nil {
+		t.Fatalf("list devices: %v", err)
+	}
+	if len(devices) != 2 {
+		t.Fatalf("expected 2 devices, got %d", len(devices))
+	}
+}
+
+func TestCreateClipWithDeviceIDs(t *testing.T) {
+	d := setupTestDB(t)
+
+	target := "dev12345"
+	sender := "dev67890"
+	clip := &Clip{
+		Type:           "text",
+		SizeBytes:      10,
+		Status:         "ready",
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    "/tmp/dev",
+		TargetDeviceID: &target,
+		SenderDeviceID: &sender,
+	}
+	if err := d.CreateClip(clip); err != nil {
+		t.Fatalf("create clip: %v", err)
+	}
+
+	got, err := d.GetClipByID(clip.ID)
+	if err != nil {
+		t.Fatalf("get clip: %v", err)
+	}
+	if got.TargetDeviceID == nil || *got.TargetDeviceID != target {
+		t.Fatalf("expected target_device_id=%s, got %v", target, got.TargetDeviceID)
+	}
+	if got.SenderDeviceID == nil || *got.SenderDeviceID != sender {
+		t.Fatalf("expected sender_device_id=%s, got %v", sender, got.SenderDeviceID)
+	}
+	if got.ConsumedAt != nil {
+		t.Fatalf("expected consumed_at=nil, got %v", got.ConsumedAt)
+	}
+}
+
+func TestCreateClipNullDeviceIDs(t *testing.T) {
+	d := setupTestDB(t)
+
+	clip := &Clip{
+		Type:        "text",
+		SizeBytes:   10,
+		Status:      "ready",
+		ExpiresAt:   time.Now().UTC().Add(time.Hour),
+		StoragePath: "/tmp/null",
+	}
+	if err := d.CreateClip(clip); err != nil {
+		t.Fatalf("create clip: %v", err)
+	}
+
+	got, err := d.GetClipByID(clip.ID)
+	if err != nil {
+		t.Fatalf("get clip: %v", err)
+	}
+	if got.TargetDeviceID != nil {
+		t.Fatalf("expected nil target_device_id, got %v", got.TargetDeviceID)
+	}
+	if got.SenderDeviceID != nil {
+		t.Fatalf("expected nil sender_device_id, got %v", got.SenderDeviceID)
+	}
+	if got.ConsumedAt != nil {
+		t.Fatalf("expected nil consumed_at, got %v", got.ConsumedAt)
+	}
+}
+
+func TestListQueueClips(t *testing.T) {
+	d := setupTestDB(t)
+	now := time.Now().UTC()
+
+	// Untargeted, unconsumed
+	d.CreateClip(&Clip{ID: "lq0001", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour)})
+	// Targeted to dev_a
+	targetA := "dev_a"
+	d.CreateClip(&Clip{ID: "lq0002", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now.Add(-1 * time.Minute), ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetA})
+	// Targeted to dev_b — not visible to dev_a
+	targetB := "dev_b"
+	d.CreateClip(&Clip{ID: "lq0003", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now, ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetB})
+	// Already consumed
+	consumed := now
+	d.CreateClip(&Clip{ID: "lq0004", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now, ExpiresAt: now.Add(time.Hour), ConsumedAt: &consumed})
+	// Status uploading
+	d.CreateClip(&Clip{ID: "lq0005", Type: "file", SizeBytes: 0, Status: "uploading", CreatedAt: now, ExpiresAt: now.Add(time.Hour)})
+	// Expired
+	d.CreateClip(&Clip{ID: "lq0006", Type: "text", SizeBytes: 5, Status: "ready", CreatedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-1 * time.Hour)})
+
+	clips, err := d.ListQueueClips("dev_a")
+	if err != nil {
+		t.Fatalf("list queue: %v", err)
+	}
+	if len(clips) != 2 {
+		t.Fatalf("expected 2 clips, got %d", len(clips))
+	}
+	// Newest first
+	if clips[0].ID != "lq0002" {
+		t.Errorf("expected lq0002 first, got %s", clips[0].ID)
+	}
+	if clips[1].ID != "lq0001" {
+		t.Errorf("expected lq0001 second, got %s", clips[1].ID)
+	}
+}
+
+func TestConsumeClip(t *testing.T) {
+	d := setupTestDB(t)
+
+	d.CreateClip(&Clip{
+		ID: "csm001", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: time.Now().UTC().Add(time.Hour),
+	})
+
+	// First consume should succeed
+	ok, err := d.ConsumeClip("csm001")
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected first consume to succeed")
+	}
+
+	// Second consume should fail
+	ok, err = d.ConsumeClip("csm001")
+	if err != nil {
+		t.Fatalf("second consume: %v", err)
+	}
+	if ok {
+		t.Fatal("expected second consume to fail")
+	}
+
+	// Verify consumed_at is set
+	clip, _ := d.GetClipByID("csm001")
+	if clip.ConsumedAt == nil {
+		t.Fatal("expected consumed_at to be set")
+	}
+}
+
+func TestConsumeClipNotFound(t *testing.T) {
+	d := setupTestDB(t)
+
+	ok, err := d.ConsumeClip("nonexist")
+	if err != nil {
+		t.Fatalf("consume nonexistent: %v", err)
+	}
+	if ok {
+		t.Fatal("expected consume of nonexistent clip to return false")
+	}
+}
+
+func TestGetConsumedClips(t *testing.T) {
+	d := setupTestDB(t)
+	now := time.Now().UTC()
+
+	// Consumed clip older than threshold (consumed 2 minutes ago)
+	consumedOld := now.Add(-2 * time.Minute)
+	d.CreateClip(&Clip{
+		ID: "gc0001", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: now.Add(time.Hour), ConsumedAt: &consumedOld,
+	})
+
+	// Consumed clip newer than threshold (consumed just now)
+	consumedNew := now
+	d.CreateClip(&Clip{
+		ID: "gc0002", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: now.Add(time.Hour), ConsumedAt: &consumedNew,
+	})
+
+	// Unconsumed clip
+	d.CreateClip(&Clip{
+		ID: "gc0003", Type: "text", SizeBytes: 5, Status: "ready",
+		ExpiresAt: now.Add(time.Hour),
+	})
+
+	// With 60s threshold, only gc0001 should be returned
+	clips, err := d.GetConsumedClips(60 * time.Second)
+	if err != nil {
+		t.Fatalf("get consumed clips: %v", err)
+	}
+	if len(clips) != 1 {
+		t.Fatalf("expected 1 consumed clip, got %d", len(clips))
+	}
+	if clips[0].ID != "gc0001" {
+		t.Fatalf("expected gc0001, got %s", clips[0].ID)
+	}
+}
+
+func TestGetConsumedClipsEmpty(t *testing.T) {
+	d := setupTestDB(t)
+
+	clips, err := d.GetConsumedClips(60 * time.Second)
+	if err != nil {
+		t.Fatalf("get consumed clips: %v", err)
+	}
+	if len(clips) != 0 {
+		t.Fatalf("expected 0 consumed clips, got %d", len(clips))
+	}
+}
+
 func TestDatabaseCreatedAtStoragePath(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(dir)

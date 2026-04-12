@@ -12,3 +12,6 @@ scripts/ralph/
 # Ralph runtime state
 progress.txt
 archive/
+
+# Server runtime data (SQLite DB + uploaded files)
+server/data/

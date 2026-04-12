@@ -8,6 +8,46 @@ struct ClipResult {
     let expiresAt: Date
 }
 
+struct DeviceInfo: Identifiable, Equatable, Hashable {
+    let id: String
+    let name: String
+    let platform: String
+    let lastSeenAt: Date
+}
+
+struct QueueItem: Identifiable, Equatable {
+    let id: String
+    let type: String
+    let filename: String?
+    let sizeBytes: Int64
+    let createdAt: Date
+    let expiresAt: Date
+
+    var typeIcon: String {
+        switch type {
+        case "text": return "doc.text"
+        case "image": return "photo"
+        default: return "doc"
+        }
+    }
+
+    var preview: String {
+        if let filename = filename, filename != "clipboard.txt" {
+            return filename
+        }
+        if type == "text" { return "Text clip" }
+        if type == "image" { return "Image" }
+        return filename ?? "File"
+    }
+
+    var age: String {
+        let interval = Date().timeIntervalSince(createdAt)
+        if interval < 60 { return "\(Int(interval))s ago" }
+        if interval < 3600 { return "\(Int(interval / 60))m ago" }
+        return "\(Int(interval / 3600))h ago"
+    }
+}
+
 @MainActor
 final class ConfigStore: ObservableObject {
     @Published var hostURL: String = ""
@@ -22,16 +62,24 @@ final class ConfigStore: ObservableObject {
     @Published var fileDownloadStatus: FileDownloadStatus = .idle
     @Published var fileDownloadProgress: Double = 0
     @Published var fileDownloadSpeed: String = ""
+    @Published var deviceID: String = ""
+    @Published var deviceName: String = ""
+    @Published var toastMessage: String? = nil
+    @Published var queueItems: [QueueItem] = []
+    @Published var queueError: String? = nil
+    @Published var availableDevices: [DeviceInfo] = []
+    @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
+
+    // SSE state
+    private var sseTask: Task<Void, Never>?
+    private var sseRetryDelay: TimeInterval = 1.0
+    private let sseMaxRetryDelay: TimeInterval = 30.0
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
     private let chunkSize: Int64 = 10 * 1024 * 1024 // 10MB chunks
     private let hostKey = "hostURL"
     private let tokenKey = "accessToken"
-
-    // Chunked upload state
-    // History store reference (set externally)
-    var historyStore: HistoryStore?
 
     // Chunked upload state
     private var chunkedUploadID: String?
@@ -91,6 +139,8 @@ final class ConfigStore: ObservableObject {
 
     init() {
         loadFromKeychain()
+        deviceID = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceID") ?? ""
+        deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
     }
 
     // MARK: - Keychain Operations
@@ -99,6 +149,45 @@ final class ConfigStore: ObservableObject {
         saveToKeychain(account: hostKey, value: hostURL)
         saveToKeychain(account: tokenKey, value: accessToken)
         isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
+        if isConfigured {
+            Task {
+                await registerDevice()
+                // Restart SSE with new credentials
+                stopSSE()
+                startSSE()
+            }
+        }
+    }
+
+    func registerDevice() async {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(urlString)/api/v1/devices/register") else { return }
+
+        let name = Host.current().localizedName ?? "Mac"
+        let payload: [String: String] = ["name": name, "platform": "macos"]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        request.timeoutInterval = 15
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let id = json["device_id"] as? String {
+                deviceID = id
+                deviceName = name
+                UserDefaults.standard.set(id, forKey: "com.copyeverywhere.deviceID")
+                UserDefaults.standard.set(name, forKey: "com.copyeverywhere.deviceName")
+            }
+        } catch {
+            // Registration is best-effort — don't block the save flow
+        }
     }
 
     func clearConfig() {
@@ -260,6 +349,9 @@ final class ConfigStore: ObservableObject {
         body.append(textData)
         body.append("\r\n".data(using: .utf8)!)
 
+        // Device ID fields
+        appendDeviceFields(to: &body, boundary: boundary)
+
         // End boundary
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
@@ -293,10 +385,6 @@ final class ConfigStore: ObservableObject {
                         expiryDate = date
                     }
                     sendStatus = .success(clipID: clipID, expiresAt: expiryDisplay)
-                    historyStore?.addRecord(HistoryRecord(
-                        clipID: clipID, type: "text", filename: nil,
-                        timestamp: Date(), expiresAt: expiryDate, status: "success"
-                    ))
                 } else {
                     sendStatus = .error("Unexpected response format")
                 }
@@ -318,6 +406,56 @@ final class ConfigStore: ObservableObject {
             }
         } catch {
             sendStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+
+    /// Fire-and-forget text send for drag-and-drop (does not touch sendStatus).
+    func sendText(_ text: String) async -> (success: Bool, message: String) {
+        guard isConfigured else { return (false, "Not configured") }
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(urlString)/api/v1/clips") else {
+            return (false, "Invalid server URL")
+        }
+
+        let boundary = UUID().uuidString
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        var body = Data()
+        let textData = Data(text.utf8)
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"type\"\r\n\r\n".data(using: .utf8)!)
+        body.append("text\r\n".data(using: .utf8)!)
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"content\"; filename=\"clipboard.txt\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: text/plain\r\n\r\n".data(using: .utf8)!)
+        body.append(textData)
+        body.append("\r\n".data(using: .utf8)!)
+
+        // Device ID fields
+        appendDeviceFields(to: &body, boundary: boundary)
+
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return (false, "Invalid response")
+            }
+            if httpResponse.statusCode == 201 {
+                return (true, "text (\(text.count) chars)")
+            }
+            return (false, "Server error (\(httpResponse.statusCode))")
+        } catch {
+            return (false, error.localizedDescription)
         }
     }
 
@@ -454,6 +592,10 @@ final class ConfigStore: ObservableObject {
         body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
+
+        // Device ID fields
+        appendDeviceFields(to: &body, boundary: boundary)
+
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
         // Write body to temp file for upload task (enables progress tracking)
@@ -524,10 +666,6 @@ final class ConfigStore: ObservableObject {
                         fileSize: formatBytes(fileSize),
                         expiresAt: expiryDisplay
                     )
-                    historyStore?.addRecord(HistoryRecord(
-                        clipID: clipID, type: clipType, filename: filename,
-                        timestamp: Date(), expiresAt: expiryDate, status: "success"
-                    ))
                 } else {
                     fileUploadStatus = .error("Unexpected response format")
                 }
@@ -549,18 +687,10 @@ final class ConfigStore: ObservableObject {
             default:
                 fileUploadStatus = .error("Network error: \(error.localizedDescription)")
             }
-            historyStore?.addRecord(HistoryRecord(
-                clipID: "—", type: clipType, filename: filename,
-                timestamp: Date(), expiresAt: Date(), status: "failed"
-            ))
         } catch {
             progressTask.cancel()
             session.invalidateAndCancel()
             fileUploadStatus = .error("Error: \(error.localizedDescription)")
-            historyStore?.addRecord(HistoryRecord(
-                clipID: "—", type: clipType, filename: filename,
-                timestamp: Date(), expiresAt: Date(), status: "failed"
-            ))
         }
     }
 
@@ -587,11 +717,17 @@ final class ConfigStore: ObservableObject {
         initRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         initRequest.timeoutInterval = 30
 
-        let initBody: [String: Any] = [
+        var initBody: [String: Any] = [
             "filename": filename,
             "size_bytes": fileSize,
             "chunk_size": chunkSize
         ]
+        if !deviceID.isEmpty {
+            initBody["sender_device_id"] = deviceID
+        }
+        if let targetID = targetDeviceID {
+            initBody["target_device_id"] = targetID
+        }
         initRequest.httpBody = try? JSONSerialization.data(withJSONObject: initBody)
 
         do {
@@ -811,10 +947,6 @@ final class ConfigStore: ObservableObject {
                     fileSize: formatBytes(fileSize),
                     expiresAt: expiryDisplay
                 )
-                historyStore?.addRecord(HistoryRecord(
-                    clipID: clipID, type: "file", filename: filename,
-                    timestamp: Date(), expiresAt: expiryDate, status: "success"
-                ))
             } else {
                 fileUploadStatus = .error("Unexpected complete response format")
             }
@@ -1010,11 +1142,379 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // MARK: - Queue Operations
+
+    func fetchQueue() async {
+        guard isConfigured, !deviceID.isEmpty else { return }
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let url = URL(string: "\(urlString)/api/v1/clips?device_id=\(deviceID)") else {
+            queueError = "Invalid server URL"
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                queueError = "Invalid response"
+                return
+            }
+
+            if httpResponse.statusCode == 200 {
+                let isoFormatter = ISO8601DateFormatter()
+                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+                guard let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                    queueError = "Unexpected response format"
+                    return
+                }
+
+                var items: [QueueItem] = []
+                for json in jsonArray {
+                    guard let id = json["id"] as? String,
+                          let type = json["type"] as? String,
+                          let sizeBytes = json["size_bytes"] as? Int64,
+                          let createdAtStr = json["created_at"] as? String,
+                          let expiresAtStr = json["expires_at"] as? String else { continue }
+
+                    let filename = json["filename"] as? String
+                    let createdAt = isoFormatter.date(from: createdAtStr) ?? Date()
+                    let expiresAt = isoFormatter.date(from: expiresAtStr) ?? Date()
+
+                    items.append(QueueItem(
+                        id: id, type: type, filename: filename,
+                        sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt
+                    ))
+                }
+                queueItems = items
+                queueError = nil
+            } else if httpResponse.statusCode == 401 {
+                queueError = "Authentication failed (401)"
+            } else {
+                queueError = "Server error (\(httpResponse.statusCode))"
+            }
+        } catch {
+            queueError = "Network error: \(error.localizedDescription)"
+        }
+    }
+
+    func receiveQueueItem(_ item: QueueItem) async {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(item.id)/raw") else { return }
+
+        var request = URLRequest(url: rawURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+
+        do {
+            if item.type == "text" || item.type == "image" {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+
+                if httpResponse.statusCode == 200 {
+                    if item.type == "text" {
+                        if let text = String(data: data, encoding: .utf8) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(text, forType: .string)
+                            toastMessage = "Copied text to clipboard"
+                        }
+                    } else {
+                        // image
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setData(data, forType: .png)
+                        toastMessage = "Copied image to clipboard"
+                    }
+                    // Remove from local queue (server already deleted it)
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                } else if httpResponse.statusCode == 410 {
+                    toastMessage = "Already consumed by another device"
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                } else {
+                    toastMessage = "Failed to receive (status \(httpResponse.statusCode))"
+                    dismissToastAfterDelay()
+                }
+            } else {
+                // File — download to ~/Downloads/
+                let delegate = DownloadProgressDelegate()
+                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+
+                let (tempURL, response) = try await session.download(for: request)
+                session.invalidateAndCancel()
+
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+
+                if httpResponse.statusCode == 200 {
+                    let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+                        .appendingPathComponent("Downloads")
+                    let filename = item.filename ?? item.id
+                    var destURL = downloadsURL.appendingPathComponent(filename)
+
+                    // Avoid overwriting existing files
+                    let fm = FileManager.default
+                    if fm.fileExists(atPath: destURL.path) {
+                        let base = destURL.deletingPathExtension().lastPathComponent
+                        let ext = destURL.pathExtension
+                        var counter = 1
+                        repeat {
+                            let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+                            destURL = downloadsURL.appendingPathComponent(newName)
+                            counter += 1
+                        } while fm.fileExists(atPath: destURL.path)
+                    }
+
+                    try fm.moveItem(at: tempURL, to: destURL)
+                    toastMessage = "Saved \(destURL.lastPathComponent) to Downloads"
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                    NSWorkspace.shared.activateFileViewerSelecting([destURL])
+                } else if httpResponse.statusCode == 410 {
+                    toastMessage = "Already consumed by another device"
+                    queueItems.removeAll { $0.id == item.id }
+                    dismissToastAfterDelay()
+                } else {
+                    toastMessage = "Failed to receive (status \(httpResponse.statusCode))"
+                    dismissToastAfterDelay()
+                }
+            }
+        } catch {
+            toastMessage = "Network error: \(error.localizedDescription)"
+            dismissToastAfterDelay()
+        }
+    }
+
+    private func dismissToastAfterDelay() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            toastMessage = nil
+        }
+    }
+
+    // MARK: - Device List
+
+    func fetchDevices() async {
+        guard isConfigured else { return }
+
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let url = URL(string: "\(urlString)/api/v1/devices") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 10
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+
+            let isoFormatter = ISO8601DateFormatter()
+            isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+            guard let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+
+            var devices: [DeviceInfo] = []
+            for json in jsonArray {
+                guard let id = json["device_id"] as? String,
+                      let name = json["name"] as? String,
+                      let platform = json["platform"] as? String else { continue }
+                // Exclude self
+                if id == deviceID { continue }
+                let lastSeenAtStr = json["last_seen_at"] as? String ?? ""
+                let lastSeenAt = isoFormatter.date(from: lastSeenAtStr) ?? Date()
+                devices.append(DeviceInfo(id: id, name: name, platform: platform, lastSeenAt: lastSeenAt))
+            }
+            availableDevices = devices
+        } catch {
+            // Best-effort — don't block
+        }
+    }
+
+    // MARK: - SSE Auto-Receive
+
+    func startSSE() {
+        guard isConfigured, !deviceID.isEmpty else { return }
+        // Don't start a second connection
+        guard sseTask == nil else { return }
+        sseRetryDelay = 1.0
+        sseTask = Task { await sseLoop() }
+    }
+
+    func stopSSE() {
+        sseTask?.cancel()
+        sseTask = nil
+    }
+
+    private func sseLoop() async {
+        while !Task.isCancelled {
+            do {
+                try await connectSSE()
+            } catch is CancellationError {
+                return
+            } catch {
+                // Reconnect with exponential backoff
+                if Task.isCancelled { return }
+                try? await Task.sleep(nanoseconds: UInt64(sseRetryDelay * 1_000_000_000))
+                if Task.isCancelled { return }
+                sseRetryDelay = min(sseRetryDelay * 2, sseMaxRetryDelay)
+            }
+        }
+    }
+
+    private func connectSSE() async throws {
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let url = URL(string: "\(urlString)/api/v1/devices/\(deviceID)/stream") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = .infinity
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        // Connected successfully — reset backoff
+        sseRetryDelay = 1.0
+
+        var eventType = ""
+        var dataBuffer = ""
+
+        for try await line in bytes.lines {
+            if Task.isCancelled { return }
+
+            if line.isEmpty {
+                // Empty line = end of event
+                if eventType == "clip" && !dataBuffer.isEmpty {
+                    await handleSSEClipEvent(dataBuffer)
+                }
+                eventType = ""
+                dataBuffer = ""
+            } else if line.hasPrefix("event: ") {
+                eventType = String(line.dropFirst(7))
+            } else if line.hasPrefix("data: ") {
+                dataBuffer = String(line.dropFirst(6))
+            }
+            // Ignore id:, comments (:), etc.
+        }
+    }
+
+    private func handleSSEClipEvent(_ jsonString: String) async {
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let clipID = json["clip_id"] as? String,
+              let clipType = json["type"] as? String else { return }
+
+        let filename = json["filename"] as? String
+
+        // Auto-receive the targeted clip
+        let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(clipID)/raw") else { return }
+
+        var request = URLRequest(url: rawURL)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+
+        do {
+            if clipType == "text" {
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                if let text = String(data: responseData, encoding: .utf8) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                    toastMessage = "Received text from sender"
+                    dismissToastAfterDelay()
+                    AppDelegate.sendNotification(body: "Received text from sender")
+                }
+            } else if clipType == "image" {
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setData(responseData, forType: .png)
+                toastMessage = "Received image from sender"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Received image from sender")
+            } else {
+                // File — download to ~/Downloads/
+                let delegate = DownloadProgressDelegate()
+                let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+
+                let (tempURL, response) = try await session.download(for: request)
+                session.invalidateAndCancel()
+
+                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+
+                let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Downloads")
+                let destFilename = filename ?? clipID
+                var destURL = downloadsURL.appendingPathComponent(destFilename)
+
+                // Avoid overwriting existing files
+                let fm = FileManager.default
+                if fm.fileExists(atPath: destURL.path) {
+                    let base = destURL.deletingPathExtension().lastPathComponent
+                    let ext = destURL.pathExtension
+                    var counter = 1
+                    repeat {
+                        let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+                        destURL = downloadsURL.appendingPathComponent(newName)
+                        counter += 1
+                    } while fm.fileExists(atPath: destURL.path)
+                }
+
+                try fm.moveItem(at: tempURL, to: destURL)
+                toastMessage = "Saved \(destURL.lastPathComponent) to Downloads"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Saved \(destURL.lastPathComponent) to Downloads")
+                NSWorkspace.shared.activateFileViewerSelecting([destURL])
+            }
+
+            // Remove from local queue if present
+            queueItems.removeAll { $0.id == clipID }
+        } catch {
+            // Auto-receive failed silently — the item remains in the queue for manual receive
+        }
+    }
+
     func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useBytes, .useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: bytes)
+    }
+
+    /// Appends sender_device_id and target_device_id multipart fields to a body.
+    private func appendDeviceFields(to body: inout Data, boundary: String) {
+        if !deviceID.isEmpty {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"sender_device_id\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(deviceID)\r\n".data(using: .utf8)!)
+        }
+        if let targetID = targetDeviceID {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"target_device_id\"\r\n\r\n".data(using: .utf8)!)
+            body.append("\(targetID)\r\n".data(using: .utf8)!)
+        }
     }
 
     private func fetchAndCopyText(clipID: String) async {

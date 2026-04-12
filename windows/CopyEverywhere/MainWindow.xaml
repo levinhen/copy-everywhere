@@ -6,6 +6,14 @@
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanMinimize">
 
+    <Window.InputBindings>
+        <KeyBinding Key="V" Modifiers="Ctrl" Command="{x:Static ApplicationCommands.Paste}"/>
+    </Window.InputBindings>
+
+    <Window.CommandBindings>
+        <CommandBinding Command="{x:Static ApplicationCommands.Paste}" Executed="PasteCommand_Executed"/>
+    </Window.CommandBindings>
+
     <Window.Resources>
         <Style x:Key="SectionHeader" TargetType="TextBlock">
             <Setter Property="FontSize" Value="14"/>
@@ -17,6 +25,43 @@
             <Setter Property="FontSize" Value="12"/>
         </Style>
     </Window.Resources>
+
+    <Grid AllowDrop="True"
+          DragEnter="Window_DragEnter"
+          DragOver="Window_DragOver"
+          DragLeave="Window_DragLeave"
+          Drop="Window_Drop">
+
+        <!-- In-window toast banner -->
+        <Border x:Name="ToastBanner"
+                Visibility="Collapsed"
+                Panel.ZIndex="200"
+                VerticalAlignment="Top"
+                HorizontalAlignment="Stretch"
+                Background="#DCFCE7"
+                Padding="12,8"
+                Margin="0">
+            <TextBlock x:Name="ToastBannerText"
+                       FontSize="13"
+                       Foreground="#15803D"
+                       TextWrapping="Wrap"
+                       HorizontalAlignment="Center"/>
+        </Border>
+
+        <!-- Drop overlay -->
+        <Border x:Name="DropOverlay"
+                Visibility="Collapsed"
+                Background="#C0FFFFFF"
+                Panel.ZIndex="100">
+            <Border BorderBrush="#3B82F6" BorderThickness="3"
+                    CornerRadius="8" Margin="16">
+                <TextBlock Text="Drop to send"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           FontSize="20" FontWeight="SemiBold"
+                           Foreground="#3B82F6"/>
+            </Border>
+        </Border>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
     <Grid Margin="16">
@@ -63,6 +108,38 @@
                            TextWrapping="Wrap"
                            FontSize="12"/>
             </Border>
+
+            <!-- Device Info (read-only, shown when registered) -->
+            <StackPanel x:Name="DeviceInfoPanel" Visibility="Collapsed" Margin="0,0,0,12">
+                <TextBlock Text="Registered Device" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Padding="8,6" Background="#F9F9F9">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,2">
+                            <TextBlock Text="Name: " FontSize="12" Foreground="Gray"/>
+                            <TextBlock x:Name="DeviceNameText" FontSize="12"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="ID: " FontSize="12" Foreground="Gray"/>
+                            <TextBlock x:Name="DeviceIdText" FontSize="12" FontFamily="Consolas"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <!-- Target Device Selector -->
+            <TextBlock Text="Target Device" Style="{StaticResource FieldLabel}"/>
+            <ComboBox x:Name="TargetDeviceComboBox"
+                      Margin="0,0,0,12"
+                      Padding="6,4"
+                      SelectionChanged="TargetDeviceComboBox_SelectionChanged"/>
+
+            <!-- Floating Ball Toggle -->
+            <CheckBox x:Name="FloatingBallCheckBox"
+                      Content="Show floating drop target"
+                      IsChecked="True"
+                      Margin="0,0,0,12"
+                      Checked="FloatingBallCheckBox_Changed"
+                      Unchecked="FloatingBallCheckBox_Changed"/>
 
             <!-- Separator -->
             <Separator Margin="0,4,0,16"/>
@@ -234,13 +311,13 @@
 
                 <Separator Margin="0,4,0,16"/>
 
-                <!-- History Section -->
-                <TextBlock Text="Send History" Style="{StaticResource SectionHeader}"/>
+                <!-- Server Queue Section -->
+                <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
 
-                <ScrollViewer x:Name="HistoryScrollViewer" MaxHeight="250" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
-                    <StackPanel x:Name="HistoryListPanel">
-                        <TextBlock x:Name="HistoryEmptyText"
-                                   Text="No history yet"
+                <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
+                    <StackPanel x:Name="QueueListPanel">
+                        <TextBlock x:Name="QueueEmptyText"
+                                   Text="Queue is empty — copy something and click the icon."
                                    Foreground="Gray"
                                    FontSize="12"
                                    HorizontalAlignment="Center"
@@ -258,4 +335,5 @@
         </StackPanel>
     </Grid>
     </ScrollViewer>
+    </Grid>
 </Window>

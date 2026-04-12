@@ -6,20 +6,22 @@ import (
 )
 
 type Config struct {
-	AccessToken    string
-	Port           string
-	StoragePath    string
-	MaxClipSizeMB int
-	TTLHours       int
+	AccessToken            string
+	Port                   string
+	StoragePath            string
+	MaxClipSizeMB          int
+	TTLHours               int
+	CleanupIntervalSeconds int
 }
 
 func Load() *Config {
 	return &Config{
-		AccessToken:    getEnv("ACCESS_TOKEN", ""),
-		Port:           getEnv("PORT", "8080"),
-		StoragePath:    getEnv("STORAGE_PATH", "./data"),
-		MaxClipSizeMB: getEnvInt("MAX_CLIP_SIZE_MB", 500),
-		TTLHours:       getEnvInt("TTL_HOURS", 1),
+		AccessToken:            getEnv("ACCESS_TOKEN", ""),
+		Port:                   getEnv("PORT", "8080"),
+		StoragePath:            getEnv("STORAGE_PATH", "./data"),
+		MaxClipSizeMB:          getEnvInt("MAX_CLIP_SIZE_MB", 500),
+		TTLHours:               getEnvInt("TTL_HOURS", 1),
+		CleanupIntervalSeconds: getEnvInt("CLEANUP_INTERVAL_SECONDS", 30),
 	}
 }
 

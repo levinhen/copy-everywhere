@@ -4,15 +4,35 @@ import UniformTypeIdentifiers
 
 struct MainPanelView: View {
     @EnvironmentObject var configStore: ConfigStore
-    @EnvironmentObject var historyStore: HistoryStore
     @State private var showingConfig = false
     @State private var clipboardText: String? = nil
-    @State private var manualClipID: String = ""
     @State private var isDragTargeted = false
-    @State private var downloadClipID: String = ""
+    @State private var isFullPanelDragTargeted = false
+    @State private var queueRefreshTimer: Timer?
 
     var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
         VStack(spacing: 12) {
+            // Toast banner for ⌘V send feedback
+            if let toast = configStore.toastMessage {
+                HStack(spacing: 6) {
+                    Image(systemName: "paperplane.fill")
+                        .foregroundColor(.white)
+                    Text(toast)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .font(.caption)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
+                .background(Color.accentColor)
+                .cornerRadius(6)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .animation(.easeInOut(duration: 0.2), value: configStore.toastMessage)
+            }
+
             HStack {
                 Text("CopyEverywhere")
                     .font(.headline)
@@ -317,253 +337,52 @@ struct MainPanelView: View {
 
                 Divider()
 
-                // Receive section
+                // Server queue section
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Receive")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    Button(action: {
-                        Task {
-                            await configStore.receiveLatest()
-                        }
-                    }) {
-                        HStack {
-                            if configStore.receiveStatus == .receiving {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                    .frame(width: 16, height: 16)
-                                Text("Receiving...")
-                            } else {
-                                Image(systemName: "arrow.down.circle.fill")
-                                Text("Receive Latest")
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .disabled(configStore.receiveStatus == .receiving)
-
-                    HStack(spacing: 8) {
-                        TextField("Clip ID", text: $manualClipID)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-
-                        Button("Fetch") {
-                            Task {
-                                await configStore.receiveByID(manualClipID)
-                            }
-                        }
-                        .disabled(manualClipID.trimmingCharacters(in: .whitespaces).isEmpty || configStore.receiveStatus == .receiving)
-                    }
-
-                    // Receive status display
-                    switch configStore.receiveStatus {
-                    case .idle:
-                        EmptyView()
-                    case .receiving:
-                        EmptyView()
-                    case .success(let clipID):
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                            Text("Clip \(clipID) copied to clipboard")
-                                .foregroundColor(.green)
-                        }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color.green.opacity(0.1))
-                        .cornerRadius(6)
-                    case .noContent:
-                        HStack {
-                            Image(systemName: "info.circle.fill")
-                                .foregroundColor(.orange)
-                            Text("No content available or expired")
-                                .foregroundColor(.orange)
-                        }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(6)
-                    case .error(let message):
-                        HStack {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.red)
-                            Text(message)
-                                .foregroundColor(.red)
-                        }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(6)
-                    }
-                }
-
-                Divider()
-
-                // Download file section
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Download File")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    HStack(spacing: 8) {
-                        TextField("Clip ID", text: $downloadClipID)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-
-                        Button("Lookup") {
-                            Task {
-                                await configStore.fetchClipMetadata(downloadClipID)
-                            }
-                        }
-                        .disabled(downloadClipID.trimmingCharacters(in: .whitespaces).isEmpty || configStore.fileDownloadStatus == .fetchingMetadata)
-                    }
-
-                    switch configStore.fileDownloadStatus {
-                    case .idle:
-                        EmptyView()
-                    case .fetchingMetadata:
-                        HStack {
-                            ProgressView()
-                                .scaleEffect(0.7)
-                                .frame(width: 16, height: 16)
-                            Text("Fetching metadata...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    case .metadataLoaded(let meta):
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Image(systemName: "doc.fill")
-                                    .foregroundColor(.accentColor)
-                                Text(meta.filename ?? "Untitled")
-                                    .fontWeight(.semibold)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
-                            Group {
-                                HStack {
-                                    Text("Type:")
-                                        .foregroundColor(.secondary)
-                                    Text(meta.type)
-                                }
-                                HStack {
-                                    Text("Size:")
-                                        .foregroundColor(.secondary)
-                                    Text(configStore.formatBytes(meta.sizeBytes))
-                                }
-                                HStack {
-                                    Text("Uploaded:")
-                                        .foregroundColor(.secondary)
-                                    Text(meta.createdAt)
-                                }
-                                HStack {
-                                    Text("Expires:")
-                                        .foregroundColor(.secondary)
-                                    Text(meta.expiresAt)
-                                }
-                            }
-
-                            Button(action: { chooseDownloadLocation(clipID: meta.id, suggestedName: meta.filename) }) {
-                                HStack {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                    Text("Download")
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                        }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                        .cornerRadius(6)
-                    case .downloading(let filename):
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(filename)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            ProgressView(value: configStore.fileDownloadProgress)
-                            HStack {
-                                Text("\(Int(configStore.fileDownloadProgress * 100))%")
-                                if !configStore.fileDownloadSpeed.isEmpty {
-                                    Text("- \(configStore.fileDownloadSpeed)")
-                                }
-                                Spacer()
-                            }
-                            .font(.caption2)
+                    HStack {
+                        Text("Queue")
+                            .font(.subheadline)
                             .foregroundColor(.secondary)
+                        Spacer()
+                        Button(action: {
+                            Task { await configStore.fetchQueue() }
+                        }) {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption)
                         }
-                        .padding(8)
-                        .background(Color(nsColor: .controlBackgroundColor))
-                        .cornerRadius(6)
-                    case .success(let savedPath):
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                Text("Downloaded successfully!")
-                                    .foregroundColor(.green)
-                            }
-                            Text(savedPath)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color.green.opacity(0.1))
-                        .cornerRadius(6)
-                    case .uploadIncomplete:
+                        .buttonStyle(.plain)
+                    }
+
+                    if let error = configStore.queueError {
                         HStack {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.orange)
-                            Text("Upload incomplete - download unavailable")
+                            Text(error)
                                 .foregroundColor(.orange)
                         }
                         .font(.caption)
                         .padding(8)
                         .background(Color.orange.opacity(0.1))
                         .cornerRadius(6)
-                    case .error(let message):
-                        HStack {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundColor(.red)
-                            Text(message)
-                                .foregroundColor(.red)
-                        }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(6)
                     }
-                }
-            }
 
-            Divider()
-
-            // History section
-            VStack(alignment: .leading, spacing: 8) {
-                Text("History")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-
-                if historyStore.records.isEmpty {
-                    Text("No items yet")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .italic()
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(8)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: 4) {
-                            ForEach(historyStore.records) { record in
-                                historyRow(record)
+                    if configStore.queueItems.isEmpty && configStore.queueError == nil {
+                        Text("Queue is empty \u{2014} copy something and click the icon.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .italic()
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(8)
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 4) {
+                                ForEach(configStore.queueItems) { item in
+                                    queueRow(item)
+                                }
                             }
                         }
+                        .frame(maxHeight: 200)
                     }
-                    .frame(maxHeight: 160)
                 }
             }
 
@@ -575,8 +394,41 @@ struct MainPanelView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding()
+        }
+        .overlay(
+            Group {
+                if isFullPanelDragTargeted {
+                    ZStack {
+                        Color.accentColor.opacity(0.08)
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(
+                                Color.accentColor,
+                                style: StrokeStyle(lineWidth: 2, dash: [8, 4])
+                            )
+                            .padding(4)
+                        VStack(spacing: 6) {
+                            Image(systemName: "arrow.down.doc.fill")
+                                .font(.title)
+                                .foregroundColor(.accentColor)
+                            Text("Drop to send")
+                                .font(.headline)
+                                .foregroundColor(.accentColor)
+                        }
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+        )
+        .onDrop(of: [.fileURL, .plainText], isTargeted: $isFullPanelDragTargeted) { providers in
+            handlePanelDrop(providers)
+        }
         .onAppear {
             refreshClipboard()
+            Task { await configStore.fetchQueue() }
+            startQueueRefresh()
+        }
+        .onDisappear {
+            stopQueueRefresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboard()
@@ -596,16 +448,17 @@ struct MainPanelView: View {
         clipboardText = NSPasteboard.general.string(forType: .string)
     }
 
-    private func chooseDownloadLocation(clipID: String, suggestedName: String?) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = suggestedName ?? clipID
-        panel.canCreateDirectories = true
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            Task {
-                await configStore.downloadFile(clipID: clipID, saveURL: url)
+    private func startQueueRefresh() {
+        queueRefreshTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { _ in
+            Task { @MainActor in
+                await configStore.fetchQueue()
             }
         }
+    }
+
+    private func stopQueueRefresh() {
+        queueRefreshTimer?.invalidate()
+        queueRefreshTimer = nil
     }
 
     private func chooseFile() {
@@ -622,78 +475,71 @@ struct MainPanelView: View {
     }
 
     @ViewBuilder
-    private func historyRow(_ record: HistoryRecord) -> some View {
-        let isExpired = record.isExpired
-        let isFailed = record.status == "failed"
-
+    private func queueRow(_ item: QueueItem) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: record.typeIcon)
-                .foregroundColor(isExpired || isFailed ? .secondary : .accentColor)
+            Image(systemName: item.typeIcon)
+                .foregroundColor(.accentColor)
                 .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(record.clipID)
-                        .fontWeight(.medium)
-                    if let filename = record.filename {
-                        Text("— \(filename)")
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .font(.caption)
+                Text(item.preview)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 HStack(spacing: 4) {
-                    Text(formatTimestamp(record.timestamp))
+                    Text(configStore.formatBytes(item.sizeBytes))
                         .font(.caption2)
                         .foregroundColor(.secondary)
-
-                    if isFailed {
-                        Text("Upload Failed")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundColor(.red)
-                    } else if isExpired {
-                        Text("Expired")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundColor(.secondary)
-                    }
+                    Text(item.age)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
             }
-            .opacity(isExpired || isFailed ? 0.6 : 1.0)
 
             Spacer()
 
             Button(action: {
-                historyStore.deleteRecord(clipID: record.clipID)
+                Task { await configStore.receiveQueueItem(item) }
             }) {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
+                Text("Receive")
+                    .font(.caption2)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor))
         .cornerRadius(6)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(record.clipID, forType: .string)
-        }
     }
 
-    private func formatTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .none
-        formatter.timeStyle = .short
-        let calendar = Calendar.current
-        if !calendar.isDateInToday(date) {
-            formatter.dateStyle = .short
+    private func handlePanelDrop(_ providers: [NSItemProvider]) -> Bool {
+        // Try file URLs first
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier("public.file-url") {
+                provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { item, _ in
+                    guard let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
+                    Task { @MainActor in
+                        await configStore.sendFile(url: url)
+                    }
+                }
+                return true
+            }
         }
-        return formatter.string(from: date)
+        // Fall back to text
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier("public.plain-text") {
+                provider.loadItem(forTypeIdentifier: "public.plain-text", options: nil) { item, _ in
+                    guard let text = item as? String else { return }
+                    Task { @MainActor in
+                        let _ = await configStore.sendText(text)
+                    }
+                }
+                return true
+            }
+        }
+        return false
     }
 
     private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {

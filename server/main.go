@@ -10,6 +10,7 @@ import (
 	"github.com/copy-everywhere/server/db"
 	"github.com/copy-everywhere/server/handlers"
 	"github.com/copy-everywhere/server/middleware"
+	"github.com/copy-everywhere/server/sse"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,14 +29,17 @@ func main() {
 	}
 	defer database.Close()
 
-	// Start TTL cleanup goroutine (every 10 minutes)
-	cleanup.Start(database, cfg.StoragePath, 10*time.Minute)
+	// Start cleanup goroutine (expired + consumed clips)
+	cleanup.Start(database, cfg.StoragePath, time.Duration(cfg.CleanupIntervalSeconds)*time.Second)
+
+	broker := sse.NewBroker()
 
 	clipHandler := &handlers.ClipHandler{
 		DB:            database,
 		StoragePath:   cfg.StoragePath,
 		MaxClipSizeMB: cfg.MaxClipSizeMB,
 		TTLHours:      cfg.TTLHours,
+		Broker:        broker,
 	}
 
 	uploadHandler := &handlers.UploadHandler{
@@ -43,6 +47,12 @@ func main() {
 		StoragePath:   cfg.StoragePath,
 		MaxClipSizeMB: cfg.MaxClipSizeMB,
 		TTLHours:      cfg.TTLHours,
+		Broker:        broker,
+	}
+
+	deviceHandler := &handlers.DeviceHandler{
+		DB:     database,
+		Broker: broker,
 	}
 
 	r := gin.Default()
@@ -68,6 +78,7 @@ func main() {
 	api.Use(middleware.AuthRequired(cfg.AccessToken))
 	{
 		api.POST("/clips", clipHandler.Upload)
+		api.GET("/clips", clipHandler.ListQueue)
 		api.GET("/clips/latest", clipHandler.GetLatest)
 		api.GET("/clips/:id", clipHandler.GetByID)
 		api.GET("/clips/:id/raw", clipHandler.GetRaw)
@@ -76,6 +87,10 @@ func main() {
 		api.PUT("/uploads/:id/parts/:n", uploadHandler.UploadPart)
 		api.POST("/uploads/:id/complete", uploadHandler.CompleteUpload)
 		api.GET("/uploads/:id/status", uploadHandler.GetUploadStatus)
+
+		api.POST("/devices/register", deviceHandler.Register)
+		api.GET("/devices", deviceHandler.List)
+		api.GET("/devices/:id/stream", deviceHandler.Stream)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)

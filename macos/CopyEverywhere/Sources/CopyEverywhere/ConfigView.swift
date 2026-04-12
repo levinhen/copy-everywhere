@@ -24,6 +24,46 @@ struct ConfigView: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            if !configStore.deviceID.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Registered Device")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        Image(systemName: "desktopcomputer")
+                            .foregroundColor(.accentColor)
+                        Text(configStore.deviceName)
+                        Text("(\(configStore.deviceID))")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Target Device")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Picker("", selection: Binding(
+                        get: { configStore.targetDeviceID ?? "" },
+                        set: { configStore.targetDeviceID = $0.isEmpty ? nil : $0 }
+                    )) {
+                        Text("(Queue \u{2014} any device)")
+                            .tag("")
+                        ForEach(configStore.availableDevices) { device in
+                            HStack {
+                                Text(platformIcon(device.platform))
+                                Text("\(device.name)")
+                            }
+                            .tag(device.id)
+                        }
+                    }
+                    .labelsHidden()
+                }
+                .onAppear {
+                    Task { await configStore.fetchDevices() }
+                }
+            }
+
             HStack {
                 Button("Test Connection") {
                     Task {
@@ -44,6 +84,15 @@ struct ConfigView: View {
             connectionStatusView
         }
         .padding()
+    }
+
+    private func platformIcon(_ platform: String) -> String {
+        switch platform {
+        case "macos": return "\u{1F4BB}" // laptop
+        case "windows": return "\u{1F5A5}" // desktop
+        case "linux": return "\u{1F427}" // penguin
+        default: return "\u{1F4F1}" // phone
+        }
     }
 
     @ViewBuilder

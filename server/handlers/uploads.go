@@ -12,13 +12,16 @@ import (
 	"time"
 
 	"github.com/copy-everywhere/server/db"
+	"github.com/copy-everywhere/server/sse"
 	"github.com/gin-gonic/gin"
 )
 
 type initUploadRequest struct {
-	Filename  string `json:"filename" binding:"required"`
-	SizeBytes int64  `json:"size_bytes" binding:"required"`
-	ChunkSize int64  `json:"chunk_size" binding:"required"`
+	Filename       string  `json:"filename" binding:"required"`
+	SizeBytes      int64   `json:"size_bytes" binding:"required"`
+	ChunkSize      int64   `json:"chunk_size" binding:"required"`
+	TargetDeviceID *string `json:"target_device_id"`
+	SenderDeviceID *string `json:"sender_device_id"`
 }
 
 type initUploadResponse struct {
@@ -39,6 +42,7 @@ type UploadHandler struct {
 	StoragePath   string
 	MaxClipSizeMB int
 	TTLHours      int
+	Broker        *sse.Broker
 }
 
 // InitUpload handles POST /api/v1/uploads/init
@@ -81,14 +85,16 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 	// Create clip record with status=uploading
 	now := time.Now().UTC()
 	clip := &db.Clip{
-		ID:          uploadID,
-		Type:        "file",
-		Filename:    &req.Filename,
-		SizeBytes:   req.SizeBytes,
-		Status:      "uploading",
-		CreatedAt:   now,
-		ExpiresAt:   now.Add(time.Duration(h.TTLHours) * time.Hour),
-		StoragePath: partsDir,
+		ID:             uploadID,
+		Type:           "file",
+		Filename:       &req.Filename,
+		SizeBytes:      req.SizeBytes,
+		Status:         "uploading",
+		CreatedAt:      now,
+		ExpiresAt:      now.Add(time.Duration(h.TTLHours) * time.Hour),
+		StoragePath:    partsDir,
+		TargetDeviceID: req.TargetDeviceID,
+		SenderDeviceID: req.SenderDeviceID,
 	}
 
 	if err := h.DB.CreateClip(clip); err != nil {
@@ -243,6 +249,20 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	// Re-read updated clip
 	clip, _ = h.DB.GetClipByID(uploadID)
+
+	// Notify SSE subscribers if this clip targets a specific device
+	if clip != nil && clip.TargetDeviceID != nil && h.Broker != nil {
+		fname := ""
+		if clip.Filename != nil {
+			fname = *clip.Filename
+		}
+		h.Broker.Notify(*clip.TargetDeviceID, sse.ClipEvent{
+			ClipID:    clip.ID,
+			Type:      clip.Type,
+			Filename:  fname,
+			SizeBytes: clip.SizeBytes,
+		})
+	}
 
 	c.JSON(http.StatusOK, clipToResponse(clip))
 }

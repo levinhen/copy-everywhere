@@ -1,0 +1,572 @@
+## Codebase Patterns
+- Use `modernc.org/sqlite` (pure Go, no CGO) for SQLite
+- Database package lives in `server/db/` with `Open(storagePath)` constructor
+- Clip model uses `*string` for nullable fields (e.g., Filename)
+- ID generation: 6-char alphanumeric via crypto/rand
+- Tests use `t.TempDir()` for isolated DB instances
+- SQLite connection uses `SetMaxOpenConns(1)` for write safety
+- Handlers live in `server/handlers/` with struct-based dependency injection (DB, config)
+- Gin route order matters: `/clips/latest` must be registered before `/clips/:id` to avoid param conflict
+- Use `c.File()` for streaming file content in Gin (handles range requests automatically)
+- Clip API returns `clipResponse` (subset of Clip) to avoid leaking internal fields like StoragePath
+- Chunked uploads store parts in `STORAGE_PATH/uploads/<id>/part_N`, merged on complete to `STORAGE_PATH/<id>/<filename>`
+- `UpdateClip(id, status, sizeBytes, storagePath)` updates clip record after chunked upload completes
+- Cleanup package in `server/cleanup/` runs background goroutine with `Start(db, storagePath, interval)`
+- `GetExpiredClips()` returns all clips where `expires_at < now()` (both ready and uploading)
+- `GetStorageStats()` returns `{ClipCount, StorageUsedBytes}` via SQL COUNT/SUM
+- macOS app uses Swift Package Manager (not .xcodeproj) in `macos/CopyEverywhere/`
+- Build with `swift build` from `macos/CopyEverywhere/` directory
+- MenuBarExtra with `.window` style creates popover panel from menu bar icon
+- `NSApp.setActivationPolicy(.accessory)` hides dock icon programmatically
+- Keychain access via Security framework: `SecItemAdd`/`SecItemCopyMatching`/`SecItemDelete`
+- ConfigStore is `@MainActor` ObservableObject shared via `.environmentObject()`
+- Use `UserNotifications` framework (not deprecated `NSUserNotification`) for macOS notifications
+- Receive flow: first GET /api/v1/clips/latest for metadata, then GET /api/v1/clips/:id/raw for content
+- File upload uses `URLSession.upload(for:fromFile:)` with `URLSessionTaskDelegate` for progress tracking
+- `UploadProgressDelegate` bridges delegate callbacks to `AsyncStream<Double>` for async/await consumption
+- 50MB threshold separates small file (single POST) from chunked upload flow
+- Chunked upload flow: init → upload parts (1-indexed) → complete; pause/resume via server status query
+- `FileHandle` for reading file chunks without loading entire file into memory
+- File download uses `URLSession.download(for:)` with `URLSessionDownloadDelegate` for streaming + progress
+- `DownloadProgressDelegate` yields `(totalBytesWritten, totalBytesExpectedToWrite)` via `AsyncStream`
+- `NSSavePanel` for choosing download save location; `NSWorkspace.shared.activateFileViewerSelecting` to reveal in Finder
+- Clip metadata API (`GET /clips/:id`) returns `clipResponse` without `status` field; `/raw` returns 403 for failed uploads
+- HistoryStore uses UserDefaults with JSON encoding (Codable) for local history persistence
+- ConfigStore receives `historyStore` reference via MenuBarView `.onAppear` (not init param) to work with @EnvironmentObject
+- Windows project in `windows/CopyEverywhere/` uses .NET 8 WPF with `Hardcodet.NotifyIcon.Wpf` for system tray
+- Windows config stored in Windows Credential Manager via `CredentialManagement` NuGet package
+- Windows WPF PasswordBox doesn't support data binding — use `PasswordChanged` event handler to sync
+- `ShutdownMode="OnExplicitShutdown"` in App.xaml prevents app from closing when main window hides to tray
+- Windows toast notifications via `Microsoft.Toolkit.Uwp.Notifications` NuGet (works with .NET 8 WPF)
+- ApiClient uses `MultipartFormDataContent` for clip uploads matching server's multipart/form-data expectation
+- Clipboard text send uses "clipboard.txt" filename with "text/plain" content type
+- Receive flow: GET /clips/latest for metadata → GET /clips/:id/raw for content (same as macOS)
+- `ProgressStreamContent` (extends HttpContent) for tracking upload progress in .NET — no built-in alternative
+- WPF file dialogs (`OpenFileDialog`, `SaveFileDialog`) are in `Microsoft.Win32` namespace
+- `Process.Start("explorer.exe", "/select,\"path\"")` reveals file in Explorer
+- Chunked upload 409 from PUT parts means chunk already uploaded — treat as success during resume
+- Windows HistoryStore uses JSON file in AppData/Local/CopyEverywhere/history.json (mirrors macOS UserDefaults approach)
+- WPF history list built programmatically with DockPanel rows, Border.MouseLeftButtonUp for click-to-copy, Button.Tag for passing ClipId
+- Windows device config (device_id, device_name) persisted as JSON in %LOCALAPPDATA%\CopyEverywhere\config.json — not in Credential Manager (not a secret)
+- Windows device registration on save: best-effort POST /devices/register in SaveButton_Click, exceptions swallowed
+- Windows SendService is shared by FloatingBallWindow, MainWindow drops, and Ctrl+V — reads ConfigStore for device IDs
+- Windows SSE uses HttpClient with ResponseHeadersRead + StreamReader line loop; Timeout.InfiniteTimeSpan; exponential backoff 1s→30s cap
+- Windows target device persisted as target_device_id in config.json; ComboBox populated from GET /devices excluding self
+- GET /api/v1/clips/:id/raw is now an atomic consume: first caller wins, second gets 410 Gone; async goroutine cleans up files/DB after response
+- GET /api/v1/clips?device_id=XXX returns the queue view; GET /api/v1/clips/latest is deprecated (sends Deprecation header)
+- Device IDs are 8-char alphanumeric (vs 6-char for clip IDs); both use `generateRandomID(length)` in `db/db.go`
+- Device registration is idempotent on (name, platform) — re-registering returns the existing ID and bumps `last_seen_at`
+- DeviceHandler is a separate struct from ClipHandler/UploadHandler, wired in main.go
+- Device routes: POST /api/v1/devices/register, GET /api/v1/devices
+- Clip columns: target_device_id (*string), sender_device_id (*string), consumed_at (*time.Time) — all nullable
+- SQLite migration uses `ALTER TABLE ADD COLUMN` with errors ignored for idempotence (no IF NOT EXISTS syntax)
+- POST /clips takes device IDs as multipart form fields; POST /uploads/init takes them as JSON body fields
+- SSE broker lives in `server/sse/` with `NewBroker()`, `Subscribe(deviceID)`, `Unsubscribe(deviceID, ch)`, `Notify(deviceID, event)`
+- SSE subscriber channels have buffer size 16; overflow events are dropped (non-blocking send)
+- SSE stream handler sends `: connected\n\n` on open, then loops on event channel + 25s heartbeat ticker
+- SSE tests use `httptest.NewServer` (not `httptest.NewRecorder`) because SSE requires streaming response
+- Broker, ClipHandler, and UploadHandler all share the same `*sse.Broker` instance wired in main.go
+- MenuBarExtra replaced with manual NSStatusItem + NSPopover in AppDelegate for drag-and-drop support
+- Queue listing via GET /api/v1/clips?device_id=XXX; each item has {id, type, filename, size_bytes, created_at, expires_at}
+- Queue receive is atomic via GET /clips/:id/raw: first caller gets body (200), second gets 410 Gone; clip is auto-deleted after consume
+- QueueItem model and fetchQueue()/receiveQueueItem() live in ConfigStore (no separate ApiClient class)
+- MainPanelView uses Timer.scheduledTimer for 5s queue refresh while panel is open; invalidated on disappear
+- HistoryStore.swift deleted in US-027 — no local history; the server queue is the single source of truth
+- StatusItemDropView is an NSView overlay on NSStatusBarButton — hitTest returns nil so clicks pass through, drag destination still works (AppKit resolves via frame, not hitTest)
+- AppDelegate must be `@MainActor` to access `@MainActor`-isolated ConfigStore/HistoryStore properties synchronously
+- NSPopover with `.applicationDefined` behavior + global event monitor avoids the double-toggle issue with `.transient`
+- `sendText(_:)` is a fire-and-forget text send (returns tuple) that doesn't touch `sendStatus` — separate from `sendClipboardText()` which updates UI state
+- File drops reuse existing `sendFile(url:)` which handles both small (<50MB) and chunked (>=50MB) paths
+- `AppDelegate.sendNotification(body:)` is static; checks `Bundle.main.bundleIdentifier != nil` to avoid crashes in unbundled SPM builds
+- SSE client uses `URLSession.shared.bytes(for:)` + `bytes.lines` for async line-by-line streaming; set `timeoutInterval = .infinity` for long-lived connections
+- `appendDeviceFields(to:boundary:)` is a shared helper for adding sender/target device IDs to multipart POST bodies; chunked uploads add device IDs to the JSON init body instead
+- SSE reconnect with exponential backoff: 1s → 2s → 4s → capped at 30s; `startSSE()` is idempotent, call `stopSSE()` before `startSSE()` when credentials change
+- Target device selection stored in `ConfigStore.targetDeviceID` (*String? nil = queue/any device*); device list fetched from `GET /api/v1/devices` excluding self
+
+---
+
+## 2026-04-11 - US-002
+- What was implemented: SQLite database schema with clips table, Clip model struct, and all CRUD helper functions (CreateClip, GetClipByID, GetLatestClip, ListClips, DeleteClip) plus 6-char alphanumeric ID generation
+- Files changed:
+  - `server/db/db.go` (new) - Database initialization, schema migration, model, and helpers
+  - `server/db/db_test.go` (new) - 9 tests covering all helpers, ID generation, null fields, and DB creation
+  - `server/go.mod` / `server/go.sum` - Added modernc.org/sqlite dependency
+- **Learnings for future iterations:**
+  - `modernc.org/sqlite` is a pure Go SQLite driver, no CGO required - good for cross-compilation
+  - GetLatestClip filters by `status = 'ready'` AND `expires_at > now()` - important for future API endpoints
+  - Clip.Filename is `*string` (nullable) - text clips don't need a filename
+  - The `Open()` function auto-creates the storage directory and runs migrations with `IF NOT EXISTS`
+---
+
+## 2026-04-11 - US-003
+- What was implemented: Clips API with four endpoints - upload (POST /api/v1/clips), get metadata (GET /api/v1/clips/:id), get latest (GET /api/v1/clips/latest), and download raw content (GET /api/v1/clips/:id/raw)
+- Files changed:
+  - `server/handlers/clips.go` (new) - ClipHandler struct with Upload, GetByID, GetLatest, GetRaw methods
+  - `server/handlers/clips_test.go` (new) - 12 tests covering all endpoints, error cases, size limits, and round-trip
+  - `server/main.go` - Added DB initialization and route registration
+- **Learnings for future iterations:**
+  - Register `/clips/latest` before `/clips/:id` in Gin to avoid route param conflicts
+  - Use `clipResponse` struct to avoid leaking internal fields (StoragePath, Status) in API responses
+  - `c.File()` in Gin handles Content-Type detection and range requests automatically
+  - Handler tests use `httptest.NewRecorder()` + `gin.New()` without middleware for isolation
+---
+
+## 2026-04-11 - US-004
+- What was implemented: Chunked upload API with four endpoints - init upload (POST /api/v1/uploads/init), upload part (PUT /api/v1/uploads/:id/parts/:n), complete upload (POST /api/v1/uploads/:id/complete), and get status (GET /api/v1/uploads/:id/status)
+- Files changed:
+  - `server/handlers/uploads.go` (new) - UploadHandler struct with InitUpload, UploadPart, CompleteUpload, GetUploadStatus methods
+  - `server/handlers/uploads_test.go` (new) - 10 tests including full round-trip with chunk merge verification
+  - `server/db/db.go` - Added UpdateClip helper for updating status, size, and storage path
+  - `server/main.go` - Added UploadHandler initialization and route registration
+- **Learnings for future iterations:**
+  - Chunk parts stored as `part_N` files in `STORAGE_PATH/uploads/<upload_id>/` directory
+  - `getPartsInfo` infers total chunk count from first part's file size - works because all chunks except last are same size
+  - After complete, parts directory is cleaned up with `os.RemoveAll` and final file moved to `STORAGE_PATH/<clip_id>/`
+  - Upload clip record is created at init time with status=uploading, updated to ready on complete
+  - The `UpdateClip` DB helper updates status, size_bytes, and storage_path in one call
+---
+
+## 2026-04-11 - US-005
+- What was implemented: TTL cleanup background goroutine (every 10 minutes) that deletes expired clips from disk and DB, plus enhanced /health endpoint with storage_used_bytes and clip_count fields
+- Files changed:
+  - `server/cleanup/cleanup.go` (new) - Background cleanup goroutine with Start() entry point
+  - `server/db/db.go` - Added GetExpiredClips() and GetStorageStats() methods
+  - `server/db/db_test.go` - Added tests for GetExpiredClips and GetStorageStats
+  - `server/main.go` - Added cleanup.Start() call and storage stats to /health
+- **Learnings for future iterations:**
+  - Cleanup runs once immediately at startup then every ticker interval
+  - For uploading clips, cleanup removes both the upload parts dir and the DB record
+  - StorageStats uses COALESCE(SUM(size_bytes), 0) to handle empty table case
+  - /health endpoint gracefully degrades if stats query fails (still returns version/uptime)
+---
+
+## 2026-04-11 - US-006
+- What was implemented: Multi-stage Dockerfile (golang:1.26-alpine build, alpine:3.20 runtime), docker-compose.yml with relay service exposing port 8080 and volume mount, .dockerignore for excluding unnecessary files
+- Files changed:
+  - `server/Dockerfile` (new) - Multi-stage build with CGO_ENABLED=0 for static binary
+  - `server/docker-compose.yml` (new) - Single relay service with env vars and named volume
+  - `server/.dockerignore` (new) - Excludes .git, tests, docs, compose/dockerfile themselves
+- **Learnings for future iterations:**
+  - Docker not installed on dev machine, so `docker-compose up --build` could not be verified locally
+  - Used CGO_ENABLED=0 for static binary since modernc.org/sqlite is pure Go (no CGO needed)
+  - docker-compose uses env var substitution with defaults (e.g., `${ACCESS_TOKEN:-changeme}`)
+---
+
+## 2026-04-11 - US-007
+- What was implemented: macOS SwiftUI menu bar app with MenuBarExtra shell, server config UI with Keychain storage, and Test Connection functionality
+- Files changed:
+  - `macos/CopyEverywhere/Package.swift` (new) - SPM manifest targeting macOS 13+
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` (new) - App entry point with MenuBarExtra and AppDelegate for hiding dock icon
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` (new) - ObservableObject managing config, Keychain CRUD, and connection testing
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` (new) - Config UI with Host URL, Access Token, Test Connection, Save
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` (new) - Main panel with gear icon to toggle config, quit button
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` (new) - Root view routing between config and main panel
+  - `macos/CopyEverywhere/.gitignore` (new) - Excludes .build/ and .swiftpm/
+- **Learnings for future iterations:**
+  - SPM executable targets can create macOS menu bar apps without Xcode project files
+  - `NSApp.setActivationPolicy(.accessory)` is the programmatic way to hide dock icon (no Info.plist needed for SPM builds)
+  - MenuBarExtra `.window` style gives a proper popover panel vs `.menu` which gives a dropdown menu
+  - ConfigStore uses `@MainActor` annotation since it interacts with UI-bound state
+  - Keychain operations: delete-before-add pattern for updates (SecItemUpdate is more complex)
+  - URLError codes `.cannotConnectToHost`, `.timedOut` map well to user-friendly error messages
+---
+
+## 2026-04-11 - US-008
+- What was implemented: macOS send clipboard text feature - clipboard preview in main panel (max 500 chars truncated), Send Clipboard button that POSTs multipart/form-data to /api/v1/clips, success/error display with Retry button
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added SendStatus enum, ClipResult struct, getClipboardText() and sendClipboardText() methods with multipart upload
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Replaced "Ready" placeholder with clipboard preview, send button, and status display
+- **Learnings for future iterations:**
+  - Server upload API expects multipart/form-data with "type" field and "content" file part (filename required)
+  - For text clips, use filename "clipboard.txt" with Content-Type text/plain
+  - Build multipart body manually with UUID boundary - no built-in Swift multipart helper
+  - Clipboard refresh on `NSApplication.didBecomeActiveNotification` keeps preview current when user switches back to app
+  - `SendStatus` enum with associated values (clipID, expiresAt) works well for displaying contextual results
+---
+
+## 2026-04-11 - US-009
+- What was implemented: macOS receive clipboard text - Receive Latest button fetches latest text clip and copies to clipboard with notification, manual Clip ID input for fetching specific clips
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added ReceiveStatus enum, receiveLatest(), receiveByID(), fetchAndCopyText() methods, UNUserNotificationCenter for notifications
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added receive section with Receive Latest button, Clip ID text field + Fetch button, and status display
+- **Learnings for future iterations:**
+  - Use `UserNotifications` framework (`UNMutableNotificationContent` + `UNNotificationRequest`) instead of deprecated `NSUserNotification`
+  - Receive flow is two-step: GET /latest for metadata (to check type), then GET /:id/raw for content
+  - `ReceiveStatus` enum mirrors `SendStatus` pattern but adds `.noContent` case for 404/empty scenarios
+  - Manual Clip ID fetch reuses `fetchAndCopyText()` private method - good for code reuse across receive paths
+---
+
+## 2026-04-11 - US-010
+- What was implemented: macOS send small file feature - drop zone for drag-and-drop from Finder, Choose File button with NSOpenPanel, upload progress bar with percentage and speed, file size validation (< 50MB), and result display with Clip ID, filename, size, and expiry
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added FileUploadStatus enum, fileUploadProgress/fileUploadSpeed published properties, sendFile(url:) method, formatBytes() helper, and UploadProgressDelegate class for tracking upload progress
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added Send File section with drop zone (onDrop + .fileURL), Choose File button, upload progress view, and result display; added chooseFile() and handleFileDrop() helpers
+- **Learnings for future iterations:**
+  - Use `URLSession.upload(for:fromFile:)` with a custom `URLSessionTaskDelegate` to track upload progress via `didSendBodyData`
+  - `UploadProgressDelegate` uses `AsyncStream<Double>` to bridge delegate callbacks to async/await
+  - File drop uses `NSItemProvider.loadItem(forTypeIdentifier: "public.file-url")` to get file URLs from drag providers
+  - `ByteCountFormatter` provides clean human-readable file sizes (e.g., "12.3 MB")
+  - Image types are detected by extension for correct MIME type; everything else uses `application/octet-stream`
+  - 50MB threshold matches US-011 chunked upload boundary
+---
+
+## 2026-04-11 - US-011
+- What was implemented: macOS chunked upload for large files (>= 50MB) - automatic chunked upload with 10MB chunks, chunk-by-chunk progress display, pause/resume support with server-side status check
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added `chunkedUploading`/`chunkedPaused` enum cases, `sendFileChunked()`, `pauseChunkedUpload()`, `resumeChunkedUpload()`, `uploadChunks()` methods, chunked upload state properties
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added chunked upload progress UI with Pause/Resume buttons, updated `isFileUploading` and status switch to handle new cases
+- **Learnings for future iterations:**
+  - Chunked upload API: POST /uploads/init → PUT /uploads/:id/parts/:n → POST /uploads/:id/complete
+  - Server accepts both 200 and 201 for init/complete responses
+  - `FileHandle.seek(toOffset:)` + `read(upToCount:)` reads specific chunk ranges without loading entire file into memory
+  - Pause works by setting a flag and cancelling the current task; resume queries GET /uploads/:id/status for received_parts to skip already-uploaded chunks
+  - 409 from PUT parts endpoint means chunk already uploaded (safe to treat as success during resume)
+---
+
+## 2026-04-11 - US-012
+- What was implemented: macOS file download feature - Clip ID lookup shows file metadata (filename, type, size, upload time, expiry), Download button opens NSSavePanel, streaming download via URLSessionDownloadTask with progress bar (percentage + speed), Finder reveal on completion, 403 handling for incomplete uploads
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added ClipMetadata struct, FileDownloadStatus enum, fileDownloadProgress/fileDownloadSpeed properties, fetchClipMetadata() and downloadFile() methods, DownloadProgressDelegate class
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added Download File section with Clip ID lookup, metadata display, download progress, success/error/uploadIncomplete states, chooseDownloadLocation() helper
+- **Learnings for future iterations:**
+  - `URLSession.download(for:)` works with `URLSessionDownloadDelegate` for progress tracking - delegate receives `didWriteData` callbacks during download
+  - `DownloadProgressDelegate` uses `AsyncStream<(Int64, Int64)>` to bridge bytesWritten/totalExpected to async/await
+  - Clip metadata API does not expose `status` field - must handle 403 from `/raw` endpoint to detect failed uploads
+  - `NSSavePanel.nameFieldStringValue` sets the suggested filename; `NSWorkspace.shared.activateFileViewerSelecting([url])` reveals the file in Finder
+---
+
+## 2026-04-11 - US-013
+- What was implemented: macOS send history list and management - HistoryStore with UserDefaults persistence, HistoryRecord model (Codable), history section in MainPanelView with type icons/timestamps/expired+failed labels, click-to-copy Clip ID, delete button per entry, history recording on text send, file upload success, and file upload failure
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/HistoryStore.swift` (new) - HistoryRecord struct and HistoryStore ObservableObject with UserDefaults persistence
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` - Added historyStore property, recording history entries after text send, file upload success, and file upload failure
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` - Added History section with scrollable list, historyRow helper, formatTimestamp helper, delete button per row
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` - Added HistoryStore @EnvironmentObject and onAppear to wire it to ConfigStore
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` - Added HistoryStore @StateObject and environmentObject injection
+- **Learnings for future iterations:**
+  - HistoryStore uses UserDefaults with JSON encoding (Codable) — simpler than SQLite for small datasets
+  - ConfigStore can't take HistoryStore as init parameter when using @StateObject — use onAppear assignment instead
+  - HistoryRecord.isExpired computed property checks Date() > expiresAt for dynamic expired status display
+  - `contentShape(Rectangle())` on history rows ensures the entire row area is tappable, not just the text
+---
+
+## 2026-04-11 - US-014
+- What was implemented: Windows WPF (.NET 8) project with system tray (Hardcodet.NotifyIcon.Wpf), server config UI with Host URL and Access Token fields, Windows Credential Manager storage via CredentialManagement NuGet, Test Connection with specific error messages (connection refused, auth failed 401, timeout)
+- Files changed:
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` (new) - .NET 8 WPF project with NuGet dependencies
+  - `windows/CopyEverywhere/App.xaml` / `App.xaml.cs` (new) - App startup with TaskbarIcon system tray, left-click handler, context menu with Exit
+  - `windows/CopyEverywhere/MainWindow.xaml` / `MainWindow.xaml.cs` (new) - Config UI with save, test connection, minimize-to-tray on close
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` (new) - Config storage via Windows Credential Manager
+  - `windows/CopyEverywhere/Services/ApiClient.cs` (new) - HTTP client with TestConnectionAsync, specific error handling
+  - `windows/CopyEverywhere/.gitignore` (new) - Excludes bin/, obj/, .vs/
+- **Learnings for future iterations:**
+  - dotnet SDK not available on dev machine — build verification requires Windows environment
+  - WPF PasswordBox doesn't support two-way data binding — must use PasswordChanged event to sync value
+  - `ShutdownMode="OnExplicitShutdown"` prevents WPF app from shutting down when hiding main window to tray
+  - `Hardcodet.NotifyIcon.Wpf` v1.1.0 is the standard WPF system tray library for .NET 8
+  - CredentialManagement NuGet wraps Windows Credential Manager with simple Target/Password/Save/Load API
+  - Test Connection verifies both /health (no auth) and /api/v1/clips/latest (auth) to confirm full connectivity
+---
+
+## 2026-04-11 - US-015
+- What was implemented: Windows send and receive clipboard text — clipboard preview (max 500 chars truncated), Send Clipboard button with multipart POST to /api/v1/clips, Receive Latest button fetching latest text clip and writing to clipboard, manual Clip ID input with Fetch button, Windows toast notifications on receive, per-section status display
+- Files changed:
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` - Added Microsoft.Toolkit.Uwp.Notifications NuGet for toast notifications
+  - `windows/CopyEverywhere/Services/ApiClient.cs` - Added ClipResponse model, SendTextClipAsync, GetLatestClipAsync, GetClipMetadataAsync, GetClipRawTextAsync methods
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added Send Clipboard section (preview, send button), Receive section (Receive Latest, Clip ID input, Fetch), status borders, increased window height to 650
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added event handlers for send/receive/fetch, clipboard preview refresh on window activation, toast notification helper, separate status methods for send/receive sections
+- **Learnings for future iterations:**
+  - `Microsoft.Toolkit.Uwp.Notifications` v7.1.3 works with .NET 8 WPF for toast notifications (despite "Uwp" in name)
+  - `MultipartFormDataContent` in .NET handles boundary generation automatically
+  - `Clipboard.ContainsText()` check is needed before `GetText()` — clipboard may be empty or contain non-text
+  - Clipboard access can throw if locked by another process — wrap in try/catch
+  - OnActivated override refreshes clipboard preview when user switches back to the app
+  - ClipboardPanel visibility toggled based on IsConfigured — hides send/receive UI until server is configured
+---
+
+## 2026-04-11 - US-016
+- What was implemented: Windows send and receive files with chunked upload support — drop zone for drag-and-drop from Explorer, Choose File button with OpenFileDialog, small file upload (< 50MB) via single POST with ProgressStreamContent for progress tracking, large file upload (>= 50MB) via chunked upload with pause/resume, file download with streaming progress and Explorer reveal, metadata lookup before download
+- Files changed:
+  - `windows/CopyEverywhere/Services/ApiClient.cs` - Added SendFileAsync (with ProgressStreamContent), InitChunkedUploadAsync, UploadChunkAsync, CompleteChunkedUploadAsync, GetUploadStatusAsync, DownloadFileAsync methods; UploadInitResponse, UploadStatusResponse, ProgressStreamContent classes
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added Send File section (drop zone, Choose File button, progress bar, pause/resume buttons), Download File section (Clip ID lookup, metadata display, download button, progress bar), increased window height to 800
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added file upload/download event handlers, chunked upload state management, drag-and-drop handlers, FormatBytes/FormatSpeed helpers, ShowFileUploadStatus/ShowDownloadStatus helpers
+- **Learnings for future iterations:**
+  - `ProgressStreamContent` extends `HttpContent` to report upload progress via `IProgress<(long, long)>` — .NET has no built-in progress-tracking upload
+  - WPF drop zone uses `AllowDrop="True"` with `Drop`/`DragOver`/`DragLeave` events and `DataFormats.FileDrop`
+  - `OpenFileDialog` and `SaveFileDialog` are in `Microsoft.Win32` namespace (not `System.Windows.Forms`)
+  - `Process.Start("explorer.exe", "/select,\"path\"")` opens Explorer and selects the downloaded file
+  - Chunked upload pause works by cancelling CancellationTokenSource; resume queries server for received_parts
+  - 409 from chunk upload endpoint means already uploaded — safe to ignore during resume
+  - Download uses `HttpCompletionOption.ResponseHeadersRead` for streaming (doesn't buffer entire response)
+---
+
+## 2026-04-11 - US-017
+- What was implemented: Windows send history list and management — HistoryStore with JSON file persistence in AppData/Local/CopyEverywhere/, HistoryRecord model with type icons/expired/failed status, history section in MainWindow with scrollable list, click-to-copy Clip ID, delete button per entry, history recording on text send, file upload success, chunked upload success, and upload failure
+- Files changed:
+  - `windows/CopyEverywhere/Services/HistoryStore.cs` (new) - HistoryRecord class and HistoryStore with JSON file persistence
+  - `windows/CopyEverywhere/MainWindow.xaml` - Added History section with ScrollViewer and StackPanel, increased window height to 900
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` - Added HistoryStore integration, RefreshHistoryList/CreateHistoryRow builders, click-to-copy and delete handlers, history recording in all send/upload paths
+- **Learnings for future iterations:**
+  - JSON file in AppData is simpler than SQLite for small datasets (mirrors macOS UserDefaults approach)
+  - WPF programmatic UI: use DockPanel with Dock.Right for right-aligned elements in list rows
+  - Border.MouseLeftButtonUp works for clickable rows; Button.Tag stores the ClipId for delete handlers
+  - HistoryRecord.DisplayLabel computed property centralizes status text logic (Active/Expired/Upload Failed)
+  - Unicode emoji chars (\U0001F4DD etc.) work in WPF TextBlock for type icons
+---
+
+## 2026-04-12 - US-018
+- What was implemented: Device registration table and endpoints — devices table with 8-char alphanumeric IDs, POST /devices/register (idempotent on name+platform, bumps last_seen_at), GET /devices (returns devices seen in last 30 days)
+- Files changed:
+  - `server/db/db.go` — added Device struct, devices table migration, generateRandomID(length) refactor, RegisterDevice(), ListDevices(), GenerateDeviceID()
+  - `server/db/db_test.go` — added tests for device ID generation, registration, idempotence, different platforms, listing
+  - `server/handlers/devices.go` (new) — DeviceHandler with Register and List methods, platform validation
+  - `server/handlers/devices_test.go` (new) — handler-level tests for register, idempotence, validation, listing, response shape
+  - `server/main.go` — wired DeviceHandler and registered device routes
+- **Learnings for future iterations:**
+  - `generateRandomID(length)` is now the shared helper for both clip and device ID generation
+  - Platform validation in the handler enforces macos|windows|linux — update if new platforms are added
+  - ListDevices uses a 30-day cutoff on last_seen_at to avoid returning stale devices
+  - Device JSON uses `device_id` key (not `id`) to match the API contract
+---
+
+## 2026-04-12 - US-019
+- What was implemented: Added target_device_id, sender_device_id (TEXT nullable), and consumed_at (DATETIME nullable) columns to clips table. POST /clips and POST /uploads/init now accept and persist the optional device ID fields. In-place migration via ALTER TABLE ADD COLUMN (errors ignored for idempotence).
+- Files changed:
+  - `server/db/db.go` — Clip struct extended with 3 new fields, migration adds columns, CreateClip and all Scan queries updated
+  - `server/db/db_test.go` — Added TestCreateClipWithDeviceIDs and TestCreateClipNullDeviceIDs
+  - `server/handlers/clips.go` — Upload handler reads optional target_device_id and sender_device_id from multipart form
+  - `server/handlers/clips_test.go` — Added TestUploadWithDeviceIDs and TestUploadWithoutDeviceIDs
+  - `server/handlers/uploads.go` — initUploadRequest struct extended with optional device ID fields, persisted on clip creation
+  - `server/handlers/uploads_test.go` — Added TestInitUploadWithDeviceIDs and TestInitUploadWithoutDeviceIDs
+- **Learnings for future iterations:**
+  - SQLite has no `ADD COLUMN IF NOT EXISTS` — use `d.conn.Exec()` and ignore errors for idempotent migration
+  - `*string` for nullable TEXT columns, `*time.Time` for nullable DATETIME columns — consistent with existing Filename pattern
+  - POST /clips uses multipart form fields for device IDs; POST /uploads/init uses JSON body fields — different content types
+  - All Scan calls across the codebase must be updated when adding columns to avoid column count mismatch
+---
+
+## 2026-04-12 - US-020
+- What was implemented: Queue listing endpoint (GET /clips?device_id=XXX) returning unconsumed clips visible to a device, atomic consume-and-delete on GET /clips/:id/raw (first caller gets body, second gets 410 Gone), async cleanup of consumed clip files and DB records, deprecation header on GET /clips/latest
+- Files changed:
+  - `server/db/db.go` — Added ListQueueClips(deviceID) and ConsumeClip(id) methods
+  - `server/db/db_test.go` — Added TestListQueueClips, TestConsumeClip, TestConsumeClipNotFound
+  - `server/handlers/clips.go` — Added ListQueue handler, rewrote GetRaw with atomic consume + async cleanup, added Deprecation header to GetLatest
+  - `server/handlers/clips_test.go` — Added TestGetRawAtomicConsume, TestGetRawRaceCondition, TestListQueue, TestListQueueMissingDeviceID, TestGetLatestDeprecationHeader; registered /clips route in test setup
+  - `server/main.go` — Registered GET /clips route for ListQueue
+- **Learnings for future iterations:**
+  - ConsumeClip uses UPDATE WHERE consumed_at IS NULL + RowsAffected to implement atomic claim — SQLite single-writer guarantees exactly one winner
+  - Cleanup after consume uses a goroutine (async) so the response streams immediately; the cleanup loop in US-022 is the safety net
+  - GET /clips (no :id) is a separate Gin route from GET /clips/:id — no conflict because Gin matches exact paths before parameterized ones
+  - ListQueueClips filters on: consumed_at IS NULL, status='ready', expires_at > now, and (target_device_id IS NULL OR target_device_id = deviceID)
+---
+
+## 2026-04-12 - US-021
+- What was implemented: SSE push channel for targeted clips — in-memory fan-out broker in `server/sse/`, SSE stream endpoint at GET /api/v1/devices/:id/stream with 25s heartbeat, clip notification on single-shot upload and chunked upload complete for targeted clips only
+- Files changed:
+  - `server/sse/broker.go` (new) — Broker struct with Subscribe/Unsubscribe/Notify, sync.RWMutex-protected subscriber map, buffered channels with non-blocking send
+  - `server/sse/broker_test.go` (new) — Unit tests for subscribe, notify, unsubscribe cleanup, cross-device isolation, concurrent notify
+  - `server/handlers/devices.go` — Added Broker field to DeviceHandler, Stream handler with SSE headers/heartbeat/event loop
+  - `server/handlers/devices_test.go` — Added SSE tests: headers, event delivery, multiple subscribers fan-out, untargeted-does-not-push
+  - `server/handlers/clips.go` — Added Broker field to ClipHandler, SSE notification after targeted clip upload
+  - `server/handlers/uploads.go` — Added Broker field to UploadHandler, SSE notification after targeted chunked upload complete
+  - `server/main.go` — Created shared Broker, wired to all handlers, registered GET /devices/:id/stream route
+- **Learnings for future iterations:**
+  - `httptest.NewServer` is needed for SSE tests (not `httptest.NewRecorder`) because the recorder doesn't support streaming/flushing
+  - SSE format: `id: N\nevent: clip\ndata: {json}\n\n` — double newline terminates each message
+  - Heartbeat is a comment line (`: heartbeat\n\n`) per SSE spec — comments start with colon
+  - Broker uses buffered channels (size 16) with non-blocking send to prevent slow subscribers from blocking Notify
+  - `c.Request.Context()` in Gin gives the request cancellation context — use it to detect SSE client disconnect
+- Cleanup goroutine handles both expired (TTL) and consumed clips; `CLEANUP_INTERVAL_SECONDS` env configurable (default 30)
+- `GetConsumedClips(olderThan)` uses a duration threshold to avoid deleting clips that are still being streamed
+---
+
+## 2026-04-12 - US-022
+- What was implemented: Cleanup loop now deletes consumed clips (consumed_at IS NOT NULL and older than 60s) in addition to TTL-expired clips. Cleanup interval is configurable via CLEANUP_INTERVAL_SECONDS env (default 30s, was hardcoded to 10 minutes). Refactored cleanup into shared deleteClips helper.
+- Files changed:
+  - `server/config/config.go` — Added CleanupIntervalSeconds field with CLEANUP_INTERVAL_SECONDS env
+  - `server/db/db.go` — Added GetConsumedClips(olderThan) method
+  - `server/db/db_test.go` — Added TestGetConsumedClips and TestGetConsumedClipsEmpty
+  - `server/cleanup/cleanup.go` — Rewrote run() to handle both expired and consumed clips, extracted deleteClips helper
+  - `server/main.go` — Changed cleanup interval from hardcoded 10min to cfg.CleanupIntervalSeconds
+- **Learnings for future iterations:**
+  - GetConsumedClips uses a duration threshold (60s) to avoid racing with in-flight response streaming from US-020's atomic consume
+  - Cleanup refactored into deleteClips(database, storagePath, clips) helper to avoid duplicating the disk+DB deletion logic
+---
+
+## 2026-04-12 - US-023
+- What was implemented: macOS device registration on first launch — on save in ConfigView, the app calls POST /api/v1/devices/register with Host.current().localizedName and platform "macos". The returned device_id and name are persisted in UserDefaults and displayed read-only in ConfigView below the token field.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added deviceID/deviceName @Published properties (UserDefaults-backed), registerDevice() async method with JSON POST to /devices/register, save() triggers registration when configured
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` — Added "Registered Device" section showing device name and ID with desktop icon
+- **Learnings for future iterations:**
+  - Device ID is not a secret — UserDefaults is appropriate (not Keychain)
+  - `Host.current().localizedName` returns the user-visible computer name on macOS
+  - Registration is best-effort from save() — errors are silently ignored to not block config save
+  - Server-side idempotence on (name, platform) means re-registering on every save is safe
+---
+
+## 2026-04-12 - US-024
+- What was implemented: Drag-and-drop file or text onto menu bar icon for instant upload
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/StatusItemDropView.swift` (new) - NSView overlay for drag-and-drop on status item button
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` (rewritten) - Replaced MenuBarExtra with manual NSStatusItem + NSPopover + drag-and-drop support in AppDelegate
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` (modified) - Added `sendText(_:)` fire-and-forget method for drop-initiated text sends
+- **Learnings for future iterations:**
+  - MenuBarExtra does not expose its NSStatusItem, so drag-and-drop requires replacing it with a manually managed NSStatusItem + NSPopover
+  - StatusItemDropView overlay on NSStatusBarButton: hitTest returns nil for click pass-through, drag destination still works because AppKit resolves drop targets via frame rectangles not hitTest
+  - AppDelegate must be @MainActor when it holds references to @MainActor ObservableObjects (ConfigStore, HistoryStore)
+  - NSPopover.behavior = .applicationDefined + NSEvent.addGlobalMonitorForEvents avoids the double-toggle issue with .transient behavior
+  - File drops reuse existing sendFile(url:) which already handles both small (<50MB single POST) and large (>=50MB chunked) paths
+  - sendNotification(body:) must check Bundle.main.bundleIdentifier != nil to avoid crash in unbundled SPM builds
+---
+## 2026-04-12 - US-025
+- What was implemented: Full-panel drag-and-drop on MainPanelView — added .onDrop(of: [.fileURL, .plainText]) on the outermost VStack so the entire panel accepts dropped files and text. During drag hover, a dashed-border overlay with "Drop to send" appears. File drops trigger configStore.sendFile(url:), text drops trigger configStore.sendText(_:) — same paths as US-024's status item drop.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` — Added isFullPanelDragTargeted state, overlay with dashed border + "Drop to send" label, .onDrop modifier on body VStack, handlePanelDrop method handling both file URLs and plain text
+- **Learnings for future iterations:**
+  - SwiftUI .onDrop uses UTType identifiers: .fileURL for file drops, .plainText for text drops
+  - Overlay with allowsHitTesting(false) prevents the overlay from intercepting the drop gesture itself
+  - NSItemProvider.hasItemConformingToTypeIdentifier checks type before attempting to load — prioritize fileURL over plainText since files also carry text representations
+  - The existing small drop zone in the "Send File" section still works independently for file-only drops
+---
+## 2026-04-12 - US-026
+- What was implemented: ⌘V while panel open sends current clipboard — NSEvent.addLocalMonitorForEvents intercepts keyDown Cmd+V when popover is shown, sends clipboard with priority text → image → file URL. Toast banner shows "Sent: <preview>" on success or "Clipboard is empty" if nothing to send. Toast auto-dismisses after 3 seconds.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` — Added keyMonitor for local keyDown events, setupKeyMonitor(), handlePasteShortcut() with text/image/file priority, dismissToastAfterDelay()
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added toastMessage @Published property
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` — Added toast banner UI at top of panel with slide-in animation
+- **Learnings for future iterations:**
+  - NSEvent.addLocalMonitorForEvents(matching: .keyDown) intercepts events within the app's own windows — return nil to consume the event
+  - Returning nil from a local event monitor prevents the event from reaching any text fields in the popover — this is how Cmd+V hijack works
+  - NSPasteboard image data can be .png or .tiff — check both; save to temp file to reuse the sendFile path
+  - Toast pattern: @Published String? on ConfigStore + conditional view in MainPanelView + Task.sleep for auto-dismiss
+---
+
+## 2026-04-12 - US-027
+- What was implemented: macOS panel now shows live server queue instead of local history. HistoryStore deleted entirely.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added QueueItem model, queueItems/queueError published properties, fetchQueue() and receiveQueueItem() methods. Removed historyStore property and all addRecord calls.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift` — Replaced old Receive/Download File/History sections with a Queue section that polls every 5s. Each row shows type icon, preview, size, age, and Receive button. Receive handles text→clipboard, image→clipboard, file→~/Downloads.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/MenuBarView.swift` — Removed HistoryStore @EnvironmentObject and onAppear wiring.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` — Removed HistoryStore creation and .environmentObject injection.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/HistoryStore.swift` — Deleted.
+  - `prd.json` — Marked US-027 passes: true.
+- **Learnings for future iterations:**
+  - Queue receive is atomic (GET /clips/:id/raw returns 200 to first caller, 410 to subsequent). Handle 410 by removing the row from the local list.
+  - File receive saves to ~/Downloads with de-duplication (appends counter to filename if exists). Uses FileManager.homeDirectoryForCurrentUser.
+  - Timer.scheduledTimer in SwiftUI needs manual invalidation on view disappear to avoid leaks.
+  - Removing HistoryStore also left pre-existing `expiryDate` variables unused (were only consumed by addRecord calls). These are warnings, not errors.
+---
+
+## 2026-04-12 - US-028
+- What was implemented: macOS target-device selector and SSE auto-receive. Added a target device picker to ConfigView (populated from GET /devices, excluding self), wired target_device_id and sender_device_id into all send paths (sendClipboardText, sendText, sendFile, sendFileChunked), implemented a long-lived SSE connection to /devices/<self>/stream with auto-reconnect, and added auto-receive handling for text (→clipboard), image (→clipboard), and file (→~/Downloads) on SSE clip events.
+- Files changed:
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift` — Added DeviceInfo model, target device properties (targetDeviceID, availableDevices), fetchDevices(), SSE connection (startSSE/stopSSE/sseLoop/connectSSE), handleSSEClipEvent auto-receive, appendDeviceFields helper, device ID fields in all send multipart bodies and chunked init JSON.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift` — Added target device Picker populated from availableDevices, platformIcon helper.
+  - `macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift` — Start SSE on applicationDidFinishLaunching.
+  - `CLAUDE.md` — Added SSE client, appendDeviceFields, and SSE reconnect patterns.
+  - `prd.json` — Marked US-028 passes: true.
+- **Learnings for future iterations:**
+  - `URLSession.shared.bytes(for:)` with `bytes.lines` is the cleanest async way to consume SSE in Swift — no need for custom delegates or third-party libraries.
+  - Set `timeoutInterval = .infinity` on SSE requests to prevent URLSession from timing out the long-lived connection.
+  - SSE event parsing: empty line = event boundary; accumulate `event:` and `data:` lines, then dispatch on empty line.
+  - `startSSE()` must be idempotent — guard against `sseTask != nil` to avoid duplicate connections.
+  - Multipart sends use `appendDeviceFields` helper; chunked uploads use JSON body — two different patterns for the same device ID fields.
+---
+
+## 2026-04-12 - US-029
+- What was implemented: Windows device registration on first launch — when user saves config, the app calls POST /devices/register with Environment.MachineName and platform "windows"; device_id is persisted in %LOCALAPPDATA%\CopyEverywhere\config.json; config UI shows registered device name and ID read-only; re-registering is a no-op (server-side idempotence)
+- Files changed:
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` — Added DeviceId/DeviceName properties, SaveDeviceConfig/LoadDeviceConfig methods using JSON in %LOCALAPPDATA%\CopyEverywhere\config.json, added DeviceConfig internal class
+  - `windows/CopyEverywhere/Services/ApiClient.cs` — Added RegisterDeviceAsync(name, platform) method and DeviceRegisterResponse model
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added DeviceInfoPanel with device name and ID display (read-only)
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Made SaveButton_Click async, added RegisterDeviceAsync() and UpdateDeviceInfoDisplay() methods
+  - `prd.json` — Marked US-029 passes: true
+- **Learnings for future iterations:**
+  - Windows device config uses JSON file at %LOCALAPPDATA%\CopyEverywhere\config.json (not Credential Manager — device info is not a secret)
+  - Registration is best-effort in the save flow — catch all exceptions silently so save always succeeds
+  - Device info display panel is separate from status — shown when DeviceId is populated, hidden otherwise
+  - Environment.MachineName gives the Windows machine name (equivalent to macOS Host.current().localizedName)
+---
+
+## 2026-04-12 - US-030
+- What was implemented: Windows FloatingBallWindow — 64x64 borderless circular always-on-top drop target with drag-to-reposition, file and text drop handling (files via chunked/simple upload, text via text clip), position persistence in config.json, toggle in MainWindow config section, toast notifications for success/failure
+- Files changed:
+  - `windows/CopyEverywhere/FloatingBallWindow.xaml` (new) — 64x64 borderless circular Window with Topmost, AllowsTransparency, AllowDrop, blue ellipse with "CE" text
+  - `windows/CopyEverywhere/FloatingBallWindow.xaml.cs` (new) — Drop handler for files and text, DragMove for repositioning, position persistence, chunked/simple upload logic, toast notifications
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` — Added ShowFloatingBall, FloatingBallX, FloatingBallY properties; PersistConfig() public method; updated DeviceConfig class
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added "Show floating drop target" CheckBox
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added FloatingBallVisibilityChanged event, ConfigStore/ApiClient public accessors, FloatingBallCheckBox_Changed handler
+  - `windows/CopyEverywhere/App.xaml.cs` — Creates FloatingBallWindow sharing ConfigStore/ApiClient, manages visibility via event
+  - `prd.json` — Marked US-030 passes: true
+- **Learnings for future iterations:**
+  - WPF AllowsTransparency=True + WindowStyle=None + Background=Transparent creates a see-through borderless window suitable for floating drop targets
+  - DragMove() in MouseLeftButtonDown makes any borderless window draggable
+  - FloatingBallWindow shares ConfigStore/ApiClient from MainWindow via public properties — no separate DI container needed
+  - Position is saved on every DragMove end to config.json alongside device config
+  - DataFormats.UnicodeText with fallback to DataFormats.Text covers both Unicode and ASCII text drops
+---
+
+## 2026-04-12 - US-031
+- What was implemented: Windows MainWindow drag-and-drop for files and text, with shared SendService extracted from FloatingBallWindow, full-window "Drop to send" overlay on hover
+- Files changed:
+  - `windows/CopyEverywhere/Services/SendService.cs` (new) — Shared send logic for text clips and files (simple + chunked), with toast notifications
+  - `windows/CopyEverywhere/FloatingBallWindow.xaml.cs` — Refactored to use SendService instead of inline send logic
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added outer Grid with AllowDrop and drop event handlers, DropOverlay border with "Drop to send" text
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added SendService property, Window_DragEnter/DragOver/DragLeave/Drop handlers using shared SendService
+  - `windows/CopyEverywhere/App.xaml.cs` — Creates SendService and passes to both FloatingBallWindow and MainWindow
+  - `prd.json` — Marked US-031 passes: true
+- **Learnings for future iterations:**
+  - SendService in Services/ is the single shared entry point for drag-drop sends on Windows (both FloatingBallWindow and MainWindow use it)
+  - WPF drop overlay uses Panel.ZIndex=100 on a semi-transparent Border that appears on DragEnter and hides on DragLeave/Drop
+  - Outer Grid wraps ScrollViewer to intercept drops window-wide; inner controls still get their own drop zones (e.g., file upload DropZone)
+---
+
+## 2026-04-12 - US-032
+- What was implemented: Ctrl+V sends clipboard contents while MainWindow is focused — intercepts ApplicationCommands.Paste via Window.InputBindings/CommandBindings, sends text/image/file in priority order using SendService, shows in-window toast banner that auto-hides after 3s
+- Files changed:
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added Window.InputBindings (Ctrl+V → Paste) and CommandBindings (Paste → PasteCommand_Executed), ToastBanner border with ZIndex 200
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added PasteCommand_Executed handler (text → image → file priority), ShowInWindowToast with 3s auto-dismiss timer
+  - `prd.json` — Marked US-032 passes: true
+- **Learnings for future iterations:**
+  - Binding ApplicationCommands.Paste at the Window level via CommandBindings intercepts Ctrl+V globally, preventing it from reaching child TextBox/PasswordBox controls
+  - Clipboard image send: save BitmapSource to temp PNG via PngBitmapEncoder, send as file, then delete temp file
+  - DispatcherTimer with 3s interval provides a clean auto-dismiss toast that runs on the UI thread
+---
+
+## 2026-04-12 - US-033
+- What was implemented: Windows main window shows live server queue instead of local history; HistoryStore deleted; queue polls every 5s while window is visible; each row shows type icon, preview, size, age, and Receive button; Receive atomically consumes via GET /clips/:id/raw (200 or 410 Gone); text/image go to Clipboard, files to ~/Downloads
+- Files changed:
+  - `windows/CopyEverywhere/Services/HistoryStore.cs` (deleted) — no more local history
+  - `windows/CopyEverywhere/Services/ApiClient.cs` — Added GetQueueAsync(deviceId), ConsumeClipRawAsync(clipId), ConsumeClipToFileAsync(clipId, savePath)
+  - `windows/CopyEverywhere/MainWindow.xaml` — Replaced "Send History" section with "Server Queue" section (QueueListPanel, QueueEmptyText)
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Removed all HistoryStore references; added queue polling (StartQueuePolling/StopQueuePolling), RefreshQueueAsync, RenderQueueList, CreateQueueRow, QueueReceiveButton_Click; polling starts on config and OnActivated, stops on minimize/close
+  - `windows/CopyEverywhere/CopyEverywhere.csproj` — Removed Microsoft.Data.Sqlite NuGet reference
+  - `prd.json` — Marked US-033 passes: true
+- **Learnings for future iterations:**
+  - Queue polling uses DispatcherTimer (5s interval) started on window activate, stopped on minimize/close — lightweight and no background thread needed
+  - ConsumeClipRawAsync returns (byte[], contentType) tuple so caller can dispatch on media type; 410 Gone returns null
+  - ConsumeClipToFileAsync uses HttpCompletionOption.ResponseHeadersRead + CopyToAsync for streaming large files to disk
+  - Image clips received to clipboard: create BitmapImage from MemoryStream with CacheOption.OnLoad, then Clipboard.SetImage
+  - Microsoft.Data.Sqlite NuGet removed along with HistoryStore — no more SQLite dependency on Windows client
+---
+
+## 2026-04-12 - US-034
+- What was implemented: Windows target-device selector and SSE auto-receive — ComboBox populated from GET /devices (excluding self), all sends include target_device_id via SendService, background SSE reader with exponential backoff reconnect, auto-receive text/image to Clipboard and files to Downloads with toast notifications
+- Files changed:
+  - `windows/CopyEverywhere/Services/ApiClient.cs` — Added GetDevicesAsync, DeviceInfo model, SSEClipEvent model; added sender/target device ID params to SendTextClipAsync, SendFileAsync, InitChunkedUploadAsync
+  - `windows/CopyEverywhere/Services/SendService.cs` — Now takes ConfigStore; reads DeviceId/TargetDeviceId and passes them to all API calls
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` — Added TargetDeviceId property, persisted in config.json
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added Target Device ComboBox
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added TargetDeviceComboBox_SelectionChanged, LoadDeviceListAsync, StartSSE/StopSSE, SSELoopAsync with exponential backoff, HandleSSEClipEvent
+  - `windows/CopyEverywhere/App.xaml.cs` — SendService now takes ConfigStore
+  - `CLAUDE.md` — Added Windows SSE, SendService, FloatingBallWindow patterns
+  - `prd.json` — Marked US-034 passes: true
+- **Learnings for future iterations:**
+  - SSE on Windows uses HttpClient with HttpCompletionOption.ResponseHeadersRead + StreamReader line loop — no third-party library needed
+  - Set HttpClient.Timeout to Timeout.InfiniteTimeSpan for long-lived SSE connections
+  - SSE reconnect loop uses Task.Delay with exponential backoff (1s → 2s → 4s → 30s cap); reset backoff on successful connection
+  - SSE event parsing: same pattern as macOS — empty line = event boundary, accumulate event:/data: lines
+  - Dispatcher.Invoke required when touching Clipboard or UI from the SSE background task
+  - Device list refreshed after registration and on UpdateMainPanelState
+---

@@ -161,7 +161,32 @@ public class ApiClient : IDisposable
         }
     }
 
-    public async Task<ClipResponse?> SendTextClipAsync(string text, CancellationToken ct = default)
+    public async Task<List<DeviceInfo>> GetDevicesAsync(CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/devices", ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<List<DeviceInfo>>(json) ?? new List<DeviceInfo>();
+    }
+
+    public async Task<DeviceRegisterResponse?> RegisterDeviceAsync(string name, string platform, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var body = JsonSerializer.Serialize(new { name, platform });
+        var content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/devices/register", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<DeviceRegisterResponse>(json);
+    }
+
+    public async Task<ClipResponse?> SendTextClipAsync(string text, string? senderDeviceId = null, string? targetDeviceId = null, CancellationToken ct = default)
     {
         SetAuthHeader();
 
@@ -172,11 +197,74 @@ public class ApiClient : IDisposable
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("text/plain");
         content.Add(fileContent, "content", "clipboard.txt");
 
+        if (!string.IsNullOrEmpty(senderDeviceId))
+            content.Add(new StringContent(senderDeviceId), "sender_device_id");
+        if (!string.IsNullOrEmpty(targetDeviceId))
+            content.Add(new StringContent(targetDeviceId), "target_device_id");
+
         var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/clips", content, ct);
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(ct);
         return JsonSerializer.Deserialize<ClipResponse>(json);
+    }
+
+    public async Task<List<ClipResponse>> GetQueueAsync(string deviceId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips?device_id={deviceId}", ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        return JsonSerializer.Deserialize<List<ClipResponse>>(json) ?? new List<ClipResponse>();
+    }
+
+    /// <summary>
+    /// Atomically consume a clip via GET /clips/:id/raw.
+    /// Returns (bytes, contentType) on success, or null if 410 Gone (already consumed).
+    /// </summary>
+    public async Task<(byte[] data, string? contentType)?> ConsumeClipRawAsync(string clipId, CancellationToken ct = default)
+    {
+        SetAuthHeader();
+
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/{clipId}/raw", ct);
+        if (response.StatusCode == HttpStatusCode.Gone)
+            return null;
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        var data = await response.Content.ReadAsByteArrayAsync(ct);
+        var contentType = response.Content.Headers.ContentType?.MediaType;
+        return (data, contentType);
+    }
+
+    /// <summary>
+    /// Atomically consume a clip and save it to a file path (for large files).
+    /// Returns true on success, false if 410 Gone.
+    /// </summary>
+    public async Task<bool> ConsumeClipToFileAsync(string clipId, string savePath, CancellationToken ct = default)
+    {
+        using var downloadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        downloadClient.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+
+        using var response = await downloadClient.GetAsync(
+            $"{BaseUrl}/api/v1/clips/{clipId}/raw",
+            HttpCompletionOption.ResponseHeadersRead,
+            ct);
+
+        if (response.StatusCode == HttpStatusCode.Gone || response.StatusCode == HttpStatusCode.NotFound)
+            return false;
+
+        response.EnsureSuccessStatusCode();
+
+        using var contentStream = await response.Content.ReadAsStreamAsync(ct);
+        using var fileStream = new FileStream(savePath, FileMode.Create, FileAccess.Write, FileShare.None, 8192);
+
+        await contentStream.CopyToAsync(fileStream, ct);
+        return true;
     }
 
     public async Task<ClipResponse?> GetLatestClipAsync(CancellationToken ct = default)
@@ -217,7 +305,7 @@ public class ApiClient : IDisposable
         return await response.Content.ReadAsStringAsync(ct);
     }
 
-    public async Task<ClipResponse?> SendFileAsync(string filePath, IProgress<(long sent, long total)>? progress = null, CancellationToken ct = default)
+    public async Task<ClipResponse?> SendFileAsync(string filePath, IProgress<(long sent, long total)>? progress = null, string? senderDeviceId = null, string? targetDeviceId = null, CancellationToken ct = default)
     {
         SetAuthHeader();
 
@@ -230,6 +318,11 @@ public class ApiClient : IDisposable
         var streamContent = new ProgressStreamContent(fileStream, progress);
         streamContent.Headers.ContentType = new MediaTypeHeaderValue(GetMimeType(filePath));
         content.Add(streamContent, "content", fileInfo.Name);
+
+        if (!string.IsNullOrEmpty(senderDeviceId))
+            content.Add(new StringContent(senderDeviceId), "sender_device_id");
+        if (!string.IsNullOrEmpty(targetDeviceId))
+            content.Add(new StringContent(targetDeviceId), "target_device_id");
 
         using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/v1/clips");
         request.Content = content;
@@ -246,11 +339,20 @@ public class ApiClient : IDisposable
         return JsonSerializer.Deserialize<ClipResponse>(json);
     }
 
-    public async Task<UploadInitResponse?> InitChunkedUploadAsync(string filename, long sizeBytes, int chunkSize, CancellationToken ct = default)
+    public async Task<UploadInitResponse?> InitChunkedUploadAsync(string filename, long sizeBytes, int chunkSize, string? senderDeviceId = null, string? targetDeviceId = null, CancellationToken ct = default)
     {
         SetAuthHeader();
 
-        var body = JsonSerializer.Serialize(new { filename, size_bytes = sizeBytes, chunk_size = chunkSize });
+        var bodyObj = new Dictionary<string, object>
+        {
+            { "filename", filename },
+            { "size_bytes", sizeBytes },
+            { "chunk_size", chunkSize },
+        };
+        if (!string.IsNullOrEmpty(senderDeviceId)) bodyObj["sender_device_id"] = senderDeviceId;
+        if (!string.IsNullOrEmpty(targetDeviceId)) bodyObj["target_device_id"] = targetDeviceId;
+
+        var body = JsonSerializer.Serialize(bodyObj);
         var content = new StringContent(body, Encoding.UTF8, "application/json");
 
         var response = await _httpClient.PostAsync($"{BaseUrl}/api/v1/uploads/init", content, ct);
@@ -350,6 +452,42 @@ public class ApiClient : IDisposable
     {
         _httpClient.Dispose();
     }
+}
+
+public class DeviceRegisterResponse
+{
+    [JsonPropertyName("device_id")]
+    public string DeviceId { get; set; } = "";
+}
+
+public class DeviceInfo
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "";
+
+    [JsonPropertyName("last_seen_at")]
+    public DateTime LastSeenAt { get; set; }
+}
+
+public class SSEClipEvent
+{
+    [JsonPropertyName("clip_id")]
+    public string ClipId { get; set; } = "";
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "";
+
+    [JsonPropertyName("filename")]
+    public string? Filename { get; set; }
+
+    [JsonPropertyName("size_bytes")]
+    public long SizeBytes { get; set; }
 }
 
 public class UploadInitResponse
