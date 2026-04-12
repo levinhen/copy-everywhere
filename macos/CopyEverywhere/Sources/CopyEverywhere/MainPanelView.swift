@@ -335,6 +335,30 @@ struct MainPanelView: View {
                     }
                 }
 
+                // Bluetooth receive progress
+                if configStore.bluetoothReceiveProgress > 0, let filename = configStore.bluetoothReceiveFilename {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(.blue)
+                            Text("Receiving via Bluetooth")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        Text(filename)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        ProgressView(value: configStore.bluetoothReceiveProgress)
+                        Text("\(Int(configStore.bluetoothReceiveProgress * 100))%")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(8)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(6)
+                }
+
                 Divider()
 
                 // Server queue section

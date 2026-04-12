@@ -85,6 +85,8 @@ final class ConfigStore: ObservableObject {
     @Published var pairedDevices: [PairedBluetoothDevice] = []
     @Published var bluetoothConnectionStatus: BluetoothConnectionStatus = .disconnected
     @Published var bluetoothConnectedDeviceName: String?
+    @Published var bluetoothReceiveProgress: Double = 0
+    @Published var bluetoothReceiveFilename: String?
 
     let bonjourBrowser = BonjourBrowser()
     let bluetoothDiscovery = BluetoothDiscovery()
@@ -253,7 +255,10 @@ final class ConfigStore: ObservableObject {
 
     /// Auto-reconnect to the first paired device on launch (if in Bluetooth mode).
     func autoReconnectBluetooth() {
-        guard transferMode == .bluetooth, !pairedDevices.isEmpty else { return }
+        guard transferMode == .bluetooth else { return }
+        // Always start RFCOMM server in Bluetooth mode so we can receive inbound connections
+        startBluetoothServerIfNeeded()
+        guard !pairedDevices.isEmpty else { return }
         guard case .disconnected = bluetoothConnectionStatus else { return }
         reconnectBluetoothDevice(pairedDevices[0])
     }
@@ -286,6 +291,23 @@ final class ConfigStore: ObservableObject {
     func setTransferMode(_ mode: TransferMode) {
         transferMode = mode
         saveTransferMode()
+
+        // Start/stop RFCOMM server based on mode
+        if mode == .bluetooth {
+            startBluetoothServerIfNeeded()
+        } else {
+            bluetoothService.stopServer()
+        }
+    }
+
+    /// Start the RFCOMM server so this device can accept inbound Bluetooth connections.
+    private func startBluetoothServerIfNeeded() {
+        guard !bluetoothService.isServerRunning else { return }
+        do {
+            try bluetoothService.startServer()
+        } catch {
+            print("Failed to start Bluetooth RFCOMM server: \(error)")
+        }
     }
 
     /// Helper retained during pairing flow.
@@ -1886,6 +1908,76 @@ extension ConfigStore: BluetoothServiceDelegate {
     func bluetoothService(_ service: BluetoothService, sessionHandshakeFailed session: BluetoothSession, error: Error) {
         bluetoothConnectionStatus = .error("Handshake failed: \(error.localizedDescription)")
         currentPairHelper = nil
+    }
+
+    func bluetoothService(_ service: BluetoothService, receiveProgress progress: Double, header: BluetoothTransferHeader) {
+        bluetoothReceiveProgress = progress
+        bluetoothReceiveFilename = header.filename
+    }
+
+    func bluetoothService(_ service: BluetoothService, didReceive payload: BluetoothTransferPayload, from device: IOBluetoothDevice?) {
+        bluetoothReceiveProgress = 0
+        bluetoothReceiveFilename = nil
+        handleBluetoothReceive(payload: payload)
+    }
+
+    func bluetoothService(_ service: BluetoothService, didFailReceivingWithError error: Error) {
+        bluetoothReceiveProgress = 0
+        bluetoothReceiveFilename = nil
+        toastMessage = "Bluetooth receive failed: \(error.localizedDescription)"
+        dismissToastAfterDelay()
+        AppDelegate.sendNotification(body: "Bluetooth receive failed: \(error.localizedDescription)")
+    }
+
+    // MARK: - Bluetooth Receive Handling
+
+    private func handleBluetoothReceive(payload: BluetoothTransferPayload) {
+        switch payload.header.type {
+        case .text:
+            // Write received text to clipboard
+            if let text = String(data: payload.data, encoding: .utf8) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                toastMessage = "Received text (\(text.count) chars)"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Received text (\(text.count) chars)")
+            } else {
+                toastMessage = "Received invalid text data"
+                dismissToastAfterDelay()
+            }
+
+        case .file:
+            // Save received file to ~/Downloads
+            let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Downloads")
+            let filename = payload.header.filename
+            var destURL = downloadsURL.appendingPathComponent(filename)
+
+            // Avoid overwriting existing files
+            let fm = FileManager.default
+            if fm.fileExists(atPath: destURL.path) {
+                let base = destURL.deletingPathExtension().lastPathComponent
+                let ext = destURL.pathExtension
+                var counter = 1
+                repeat {
+                    let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+                    destURL = downloadsURL.appendingPathComponent(newName)
+                    counter += 1
+                } while fm.fileExists(atPath: destURL.path)
+            }
+
+            do {
+                try payload.data.write(to: destURL)
+                toastMessage = "Received \(destURL.lastPathComponent)"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Received \(destURL.lastPathComponent)")
+                NSWorkspace.shared.activateFileViewerSelecting([destURL])
+            } catch {
+                toastMessage = "Failed to save file: \(error.localizedDescription)"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Failed to save received file")
+            }
+        }
     }
 }
 

@@ -44,6 +44,8 @@ protocol BluetoothSessionDelegate: AnyObject {
     func session(_ session: BluetoothSession, handshakeFailedWithError error: Error)
     /// A complete transfer was received from the remote peer.
     func session(_ session: BluetoothSession, didReceive payload: BluetoothTransferPayload)
+    /// Receive progress updated (0.0 to 1.0).
+    func session(_ session: BluetoothSession, receiveProgress progress: Double, header: BluetoothTransferHeader)
     /// An error occurred during receive.
     func session(_ session: BluetoothSession, didFailReceivingWithError error: Error)
 }
@@ -56,6 +58,7 @@ enum BluetoothSessionError: LocalizedError {
     case invalidHeader
     case writeFailed(IOReturn)
     case channelClosed
+    case sizeMismatch(expected: Int, actual: Int)
 
     var errorDescription: String? {
         switch self {
@@ -64,6 +67,7 @@ enum BluetoothSessionError: LocalizedError {
         case .invalidHeader: return "Invalid transfer header"
         case .writeFailed(let code): return "RFCOMM write failed with code: \(code)"
         case .channelClosed: return "RFCOMM channel is closed"
+        case .sizeMismatch(let expected, let actual): return "Size mismatch: expected \(expected) bytes, received \(actual) bytes"
         }
     }
 }
@@ -345,12 +349,26 @@ final class BluetoothSession: NSObject, ObservableObject {
         // Collect content bytes
         guard let header = pendingHeader else { return }
 
+        // Report receive progress
+        let totalSize = header.size
+        if totalSize > 0 {
+            let received = totalSize - bytesRemaining + min(receiveBuffer.count, bytesRemaining)
+            let progress = min(Double(received) / Double(totalSize), 1.0)
+            delegate?.session(self, receiveProgress: progress, header: header)
+        }
+
         if receiveBuffer.count >= bytesRemaining {
             // We have all the content
             let contentData = Data(receiveBuffer[receiveBuffer.startIndex..<(receiveBuffer.startIndex + bytesRemaining)])
             receiveBuffer = Data(receiveBuffer[(receiveBuffer.startIndex + bytesRemaining)...])
             pendingHeader = nil
             bytesRemaining = 0
+
+            // Verify total bytes match header-declared size
+            guard contentData.count == header.size else {
+                delegate?.session(self, didFailReceivingWithError: BluetoothSessionError.sizeMismatch(expected: header.size, actual: contentData.count))
+                return
+            }
 
             let payload = BluetoothTransferPayload(header: header, data: contentData)
             delegate?.session(self, didReceive: payload)

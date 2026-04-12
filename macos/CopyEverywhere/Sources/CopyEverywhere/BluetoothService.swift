@@ -32,6 +32,12 @@ protocol BluetoothServiceDelegate: AnyObject {
     func bluetoothService(_ service: BluetoothService, sessionReady session: BluetoothSession, device: IOBluetoothDevice)
     /// A BluetoothSession handshake failed.
     func bluetoothService(_ service: BluetoothService, sessionHandshakeFailed session: BluetoothSession, error: Error)
+    /// A complete transfer was received from the remote peer via Bluetooth.
+    func bluetoothService(_ service: BluetoothService, didReceive payload: BluetoothTransferPayload, from device: IOBluetoothDevice?)
+    /// Receive progress updated (0.0 to 1.0).
+    func bluetoothService(_ service: BluetoothService, receiveProgress progress: Double, header: BluetoothTransferHeader)
+    /// Receive failed with an error.
+    func bluetoothService(_ service: BluetoothService, didFailReceivingWithError error: Error)
 }
 
 // MARK: - Errors
@@ -214,11 +220,15 @@ extension BluetoothService: BluetoothSessionDelegate {
     }
 
     func session(_ session: BluetoothSession, didReceive payload: BluetoothTransferPayload) {
-        // Forward to higher-level handler — will be wired in US-044 (receive content)
+        delegate?.bluetoothService(self, didReceive: payload, from: pendingDevice)
+    }
+
+    func session(_ session: BluetoothSession, receiveProgress progress: Double, header: BluetoothTransferHeader) {
+        delegate?.bluetoothService(self, receiveProgress: progress, header: header)
     }
 
     func session(_ session: BluetoothSession, didFailReceivingWithError error: Error) {
-        // Forward to higher-level handler — will be wired in US-044
+        delegate?.bluetoothService(self, didFailReceivingWithError: error)
     }
 }
 
