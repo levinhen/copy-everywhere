@@ -99,6 +99,7 @@ public partial class MainWindow : Window
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         InitializeTransferModeUI();
+        InitializeServerConfigUI();
 
         // Start mDNS discovery
         _mdnsService.ServersChanged += OnDiscoveredServersChanged;
@@ -2159,6 +2160,83 @@ public partial class MainWindow : Window
         }
         _configStore.Save();
         UpdateMainPanelState();
+    }
+
+    // ── Embedded server config UI handlers ──────────────────────────────
+
+    private void InitializeServerConfigUI()
+    {
+        ServerEnabledCheckBox.IsChecked = _serverConfig.ServerEnabled;
+        ServerPortBox.Text = _serverConfig.Port.ToString();
+        ServerBindAddressBox.Text = _serverConfig.BindAddress;
+        ServerStoragePathBox.Text = _serverConfig.StoragePath;
+        ServerTtlBox.Text = _serverConfig.TtlHours.ToString();
+        ServerMaxClipSizeBox.Text = _serverConfig.MaxClipSizeMB.ToString();
+        ServerAuthCheckBox.IsChecked = _serverConfig.AuthEnabled;
+        ServerAccessTokenBox.Password = _serverConfig.AccessToken;
+        ServerAutoStartCheckBox.IsChecked = _serverConfig.AutoStartServer;
+
+        ServerConfigSection.Visibility = _serverConfig.ServerEnabled ? Visibility.Visible : Visibility.Collapsed;
+        ServerTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        var enabled = ServerEnabledCheckBox.IsChecked == true;
+        ServerConfigSection.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        SetServerEnabled(enabled);
+    }
+
+    private void ServerAuthCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        ServerTokenPanel.Visibility = ServerAuthCheckBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ServerAccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        // No-op — value read on Apply
+    }
+
+    private void ServerStorageBrowseButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select server storage directory",
+            UseDescriptionForTitle = true,
+        };
+        if (!string.IsNullOrEmpty(ServerStoragePathBox.Text))
+        {
+            dialog.InitialDirectory = ServerStoragePathBox.Text;
+        }
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            ServerStoragePathBox.Text = dialog.SelectedPath;
+        }
+    }
+
+    private async void ServerApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Read values from UI into ServerConfig
+        if (int.TryParse(ServerPortBox.Text, out var port)) _serverConfig.Port = port;
+        _serverConfig.BindAddress = ServerBindAddressBox.Text;
+        _serverConfig.StoragePath = ServerStoragePathBox.Text;
+        if (int.TryParse(ServerTtlBox.Text, out var ttl)) _serverConfig.TtlHours = ttl;
+        if (int.TryParse(ServerMaxClipSizeBox.Text, out var maxSize)) _serverConfig.MaxClipSizeMB = maxSize;
+        _serverConfig.AuthEnabled = ServerAuthCheckBox.IsChecked == true;
+        _serverConfig.AccessToken = ServerAccessTokenBox.Password;
+        _serverConfig.AutoStartServer = ServerAutoStartCheckBox.IsChecked == true;
+        _serverConfig.Save();
+
+        // Restart if running
+        if (_serverProcess.IsRunning)
+        {
+            await _serverProcess.RestartAsync();
+            // Give the server a moment to start before auto-connecting
+            await System.Threading.Tasks.Task.Delay(1000);
+            AutoConnectToLocalServer();
+        }
+
+        ShowStatus("Server configuration saved", isError: false);
     }
 
     private void UpdateMainPanelState()

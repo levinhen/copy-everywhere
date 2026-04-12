@@ -159,3 +159,22 @@
   - `AutoConnectToLocalServer()` mirrors macOS `autoConnectToLocalServer()` — sets hostURL and copies auth token
 ---
 
+## 2026-04-13 - US-079
+- Added Embedded Server section to MainWindow.xaml between Bluetooth section and main content
+- CheckBox: Enable embedded server — toggles visibility of config fields and calls SetServerEnabled
+- Config fields: Port, Bind Address, Storage Path (with Browse button), TTL (hours), Max Clip Size (MB)
+- CheckBox: Require authentication — conditionally shows PasswordBox for server access token
+- CheckBox: Auto-start server on launch
+- Apply & Restart Server button — reads UI values into ServerConfig, saves, restarts if running, auto-connects after 1s delay
+- `InitializeServerConfigUI()` loads ServerConfig values into UI controls on startup
+- `FolderBrowserDialog` requires `System.Windows.Forms` — added `<UseWindowsForms>true</UseWindowsForms>` to csproj
+- Fields hidden (not disabled) when server not enabled — matches macOS pattern
+- Files changed:
+  - windows/CopyEverywhere/MainWindow.xaml (added Embedded Server section)
+  - windows/CopyEverywhere/MainWindow.xaml.cs (added InitializeServerConfigUI, event handlers for server config)
+  - windows/CopyEverywhere/CopyEverywhere.csproj (added UseWindowsForms for FolderBrowserDialog)
+- **Learnings for future iterations:**
+  - `FolderBrowserDialog` is in `System.Windows.Forms`, requires `<UseWindowsForms>true</UseWindowsForms>` in csproj
+  - Server config fields are shown/hidden via `Visibility.Visible`/`Collapsed`, matching the pattern used for Bluetooth section
+---
+

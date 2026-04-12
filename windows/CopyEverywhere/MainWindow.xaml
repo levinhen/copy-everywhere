@@ -232,6 +232,62 @@
                 </StackPanel>
             </StackPanel>
 
+            <!-- Embedded Server Section -->
+            <Separator Margin="0,4,0,16"/>
+            <TextBlock Text="Embedded Server" Style="{StaticResource SectionHeader}"/>
+
+            <CheckBox x:Name="ServerEnabledCheckBox"
+                      Content="Enable embedded server"
+                      Margin="0,0,0,8"
+                      Checked="ServerEnabledCheckBox_Changed"
+                      Unchecked="ServerEnabledCheckBox_Changed"/>
+
+            <StackPanel x:Name="ServerConfigSection" Visibility="Collapsed">
+                <TextBlock Text="Port" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerPortBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <TextBlock Text="Bind Address" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerBindAddressBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <TextBlock Text="Storage Path" Style="{StaticResource FieldLabel}"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ServerStoragePathBox" Grid.Column="0" Padding="6,4"/>
+                    <Button x:Name="ServerStorageBrowseButton" Grid.Column="1" Content="Browse"
+                            Width="60" Margin="4,0,0,0" Click="ServerStorageBrowseButton_Click"/>
+                </Grid>
+
+                <TextBlock Text="TTL (hours)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerTtlBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <TextBlock Text="Max Clip Size (MB)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerMaxClipSizeBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <CheckBox x:Name="ServerAuthCheckBox"
+                          Content="Require authentication"
+                          Margin="0,0,0,8"
+                          Checked="ServerAuthCheckBox_Changed"
+                          Unchecked="ServerAuthCheckBox_Changed"/>
+
+                <StackPanel x:Name="ServerTokenPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                    <TextBlock Text="Server Access Token" Style="{StaticResource FieldLabel}"/>
+                    <PasswordBox x:Name="ServerAccessTokenBox" Padding="6,4"
+                                 PasswordChanged="ServerAccessTokenBox_PasswordChanged"/>
+                </StackPanel>
+
+                <CheckBox x:Name="ServerAutoStartCheckBox"
+                          Content="Auto-start server on launch"
+                          Margin="0,0,0,12"/>
+
+                <Button x:Name="ServerApplyButton"
+                        Content="Apply &amp; Restart Server"
+                        Padding="8,4" Margin="0,0,0,8"
+                        Click="ServerApplyButton_Click"/>
+            </StackPanel>
+
             <!-- Separator before main content -->
             <Separator Margin="0,4,0,16"/>
 
