@@ -94,6 +94,10 @@ struct MenuBarView: View {
             }
 
             HStack {
+                Toggle("Launch at Login", isOn: $serverConfig.launchAtLogin)
+            }
+
+            HStack {
                 Toggle("Require auth", isOn: $serverConfig.authEnabled)
             }
 

@@ -77,7 +77,7 @@
         "swift build succeeds"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-037 — launch-at-login only"
     },
     {

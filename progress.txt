@@ -10,6 +10,7 @@
 - Server host app (`macos/CopyEverywhereServer/`) follows the same AppDelegate + NSStatusItem + NSPopover pattern as the client. `ServerProcess` is the subprocess manager (`@MainActor` ObservableObject).
 - Go binary path convention: sibling `copyeverywhere-server` next to the Swift executable. Build independently with `go build -o copyeverywhere-server .` in `server/`.
 - Server host app config persisted to `~/Library/Application Support/CopyEverywhereServer/config.json`. `ServerConfig.environment` provides the env dict for `ServerProcess`.
+- Launch at Login uses `SMAppService.mainApp` (ServiceManagement, macOS 13+). Sync actual status on init via `.status == .enabled` since users can toggle login items in System Settings independently.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -106,4 +107,22 @@
   - `@MainActor` classes can't call their own static methods from `Task.detached` — use `nonisolated static` for pure utility functions like directory size calculation.
   - SwiftUI `frame(width:maxHeight:)` doesn't exist as a combined overload — use `frame(width:height:)` with a `ScrollView` inside for flexible content.
   - `ServerConfig` default storage path uses Application Support, not the working directory, since the SPM executable doesn't have a stable working dir.
+---
+
+## 2026-04-12 - US-037C
+- What was implemented:
+  - Added `launchAtLogin` property to `ServerConfig` with persistence in config.json
+  - Uses `SMAppService.mainApp` (ServiceManagement framework, macOS 13+) to register/unregister launch at login
+  - `didSet` on the property calls register/unregister immediately when toggled
+  - `syncLaunchAtLoginStatus()` on init reads the actual SMAppService status to sync the published property
+  - Added "Launch at Login" toggle to MenuBarView config section
+  - `ConfigData` uses `launchAtLogin: Bool?` (optional) for backward-compatible deserialization of existing config files
+- Files changed:
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/ServerConfig.swift — launchAtLogin property, SMAppService register/unregister, sync on init
+  - macos/CopyEverywhereServer/Sources/CopyEverywhereServer/MenuBarView.swift — added Launch at Login toggle
+  - prd.json — US-037C passes: true
+- **Learnings for future iterations:**
+  - `SMAppService.mainApp` requires a proper app bundle with a bundle identifier to work at runtime. SPM executables lack this by default — the feature will build but won't function until the app is packaged as a .app bundle.
+  - Use `SMAppService.mainApp.status == .enabled` to read current state on launch rather than relying solely on persisted config, since the user can change login items in System Settings independently.
+  - Making `ConfigData.launchAtLogin` optional (`Bool?`) avoids breaking deserialization of existing config files that don't have the field.
 ---

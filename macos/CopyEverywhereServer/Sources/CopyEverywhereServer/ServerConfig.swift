@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 
 /// Persists server configuration to a JSON file in Application Support.
 @MainActor
@@ -8,6 +9,12 @@ final class ServerConfig: ObservableObject {
     @Published var ttlHours: Int = 1
     @Published var authEnabled: Bool = false
     @Published var accessToken: String = ""
+    @Published var launchAtLogin: Bool = false {
+        didSet {
+            guard oldValue != launchAtLogin else { return }
+            updateLaunchAtLogin()
+        }
+    }
 
     /// Computed status fields (updated by polling /health or filesystem)
     @Published var usedSpaceBytes: Int64 = 0
@@ -28,6 +35,29 @@ final class ServerConfig: ObservableObject {
         if storagePath.isEmpty {
             storagePath = Self.defaultStoragePath
         }
+        syncLaunchAtLoginStatus()
+    }
+
+    // MARK: - Launch at Login
+
+    private func updateLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if launchAtLogin {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+        } catch {
+            print("[ServerConfig] Failed to \(launchAtLogin ? "register" : "unregister") launch at login: \(error)")
+        }
+        save()
+    }
+
+    /// Sync the published property with the actual SMAppService status on launch.
+    private func syncLaunchAtLoginStatus() {
+        let status = SMAppService.mainApp.status
+        launchAtLogin = (status == .enabled)
     }
 
     /// Environment variables to forward to the Go server subprocess.
@@ -52,7 +82,8 @@ final class ServerConfig: ObservableObject {
             storagePath: storagePath,
             ttlHours: ttlHours,
             authEnabled: authEnabled,
-            accessToken: accessToken
+            accessToken: accessToken,
+            launchAtLogin: launchAtLogin
         )
         do {
             let json = try JSONEncoder().encode(data)
@@ -70,6 +101,7 @@ final class ServerConfig: ObservableObject {
         ttlHours = data.ttlHours
         authEnabled = data.authEnabled
         accessToken = data.accessToken
+        launchAtLogin = data.launchAtLogin ?? false
     }
 
     // MARK: - Storage usage
@@ -105,4 +137,5 @@ private struct ConfigData: Codable {
     var ttlHours: Int
     var authEnabled: Bool
     var accessToken: String
+    var launchAtLogin: Bool?
 }
