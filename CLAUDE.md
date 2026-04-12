@@ -160,6 +160,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Server platform value.** Device registration sends `platform = "android"` — the Go server's `/api/v1/devices/register` handler needs to accept `"android"` in its platform whitelist.
 - **mDNS discovery.** `MdnsDiscoveryService` (`data/MdnsDiscoveryService.kt`) wraps `NsdManager` to browse for `_copyeverywhere._tcp.` services. `DiscoveredServer` data class holds name, host, port, authRequired, version. TXT record attributes parsed from `NsdServiceInfo.attributes`. Discovery lifecycle tied to ConfigScreen via `DisposableEffect`. No extra permissions needed beyond `INTERNET`.
 - **Receive flow.** `fetchQueue()` lists unconsumed clips via `GET /clips?device_id=<self>`. `downloadClipRaw()` does a two-step fetch: metadata (`GET /clips/:id`) then raw content (`GET /clips/:id/raw`). Raw download atomically consumes the clip — 410 Gone means already consumed (`ClipAlreadyConsumedException`). Download progress via suspend callback using metadata `sizeBytes` as total.
+- **SSE client.** `SseClient` (`data/SseClient.kt`) uses OkHttp with `readTimeout(0)` for infinite timeout. Parses SSE events line-by-line via `BufferedReader`. Exponential backoff reconnect (1s → 2s → 4s → capped 30s). `connect()` suspends forever — cancel the coroutine to stop.
+- **Foreground service.** `CopyEverywhereService` (`service/CopyEverywhereService.kt`) hosts SSE client. Uses `foregroundServiceType="dataSync"`. Two notification channels: `copyeverywhere_service` (ongoing, low importance) and `copyeverywhere_transfers` (high importance). Static `start(context)`/`stop(context)` helpers. `startSse()`/`stopSse()` public for transfer mode switching.
+- **File save to Downloads.** Uses `MediaStore.Downloads.EXTERNAL_CONTENT_URI` — no storage permissions needed on API 29+.
+- **POST_NOTIFICATIONS permission.** Android 13+ requires runtime permission. Requested in `MainActivity` on launch via `ActivityResultContracts.RequestPermission()`. Service starts regardless of grant result.
 
 **Cross-platform:**
 

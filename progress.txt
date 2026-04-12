@@ -7,7 +7,7 @@ US-053: mDNS server discovery                               [x]
 US-054: API client — small clip send (text + file < 50 MB)  [x]
 US-055: API client — chunked upload (file >= 50 MB)         [x]
 US-056: API client — receive clip (metadata + download)     [x]
-US-057: SSE client and auto-receive                         [ ]
+US-057: SSE client and auto-receive                         [x]
 US-058: Foreground service and persistent notification      [ ]
 US-059: Main Activity — text input and file upload          [ ]
 US-060: Share sheet integration                             [ ]
@@ -35,6 +35,12 @@ US-068: Boot receiver and battery optimization              [ ]
 - `NsdServiceInfo.attributes` returns TXT record fields as `Map<String, ByteArray>` — decode with `String(bytes)`
 - Chunked uploads use separate OkHttpClient with 120s timeout; `ChunkedUploadState` holds progress as `MutableStateFlow<Double>`
 - `currentCoroutineContext().ensureActive()` for cooperative cancellation in coroutine loops
+- SSE client: OkHttp with `readTimeout(0)` for infinite timeout, `BufferedReader` line-by-line parsing
+- Foreground service: `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` permissions, `foregroundServiceType="dataSync"` in manifest
+- Notification channels: `CHANNEL_SERVICE` (low importance, ongoing) and `CHANNEL_TRANSFERS` (high importance, auto-cancel)
+- Android 13+ requires `POST_NOTIFICATIONS` runtime permission — request via `ActivityResultContracts.RequestPermission()`
+- `CopyEverywhereService.start(context)` / `.stop(context)` static helpers for service lifecycle
+- File save to Downloads: use `MediaStore.Downloads` (no storage permissions needed on API 29+)
 
 ---
 
@@ -149,4 +155,28 @@ US-068: Boot receiver and battery optimization              [ ]
   - `ClipResponse` from the list endpoint doesn't include `status` or `consumed_at` — server intentionally hides internal state
   - For progress tracking on downloads, use the metadata's `sizeBytes` as total since OkHttp response body `contentLength()` may be -1
   - `ByteArrayOutputStream` with capped initial capacity avoids OOM for large download buffers
+---
+
+## 2026-04-12 - US-057
+- Implemented SSE client (`SseClient.kt`) using OkHttp with infinite read timeout
+- SSE event parsing: line-by-line via BufferedReader, event/data fields, empty-line boundary
+- Exponential backoff reconnect: 1s → 2s → 4s → capped at 30s
+- Created `CopyEverywhereService` foreground service with persistent notification
+- On `clip` event: auto-downloads via `/clips/:id/raw`, processes text (clipboard) and files (Downloads + share notification)
+- Service started on app launch, survives backgrounding (START_STICKY)
+- Notification channels: Service (low importance) and Transfers (high importance)
+- Android 13+ POST_NOTIFICATIONS runtime permission requested on launch
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/SseClient.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
+- Files modified:
+  - `android/app/src/main/AndroidManifest.xml` — added FOREGROUND_SERVICE, FOREGROUND_SERVICE_DATA_SYNC, POST_NOTIFICATIONS permissions + service declaration
+  - `android/app/src/main/java/com/copyeverywhere/app/MainActivity.kt` — starts service on launch with notification permission request
+- **Learnings for future iterations:**
+  - OkHttp `readTimeout(0, TimeUnit.SECONDS)` = infinite timeout for long-lived SSE connections
+  - `withContext(Dispatchers.IO)` return type must be `Unit` not `Nothing` — Kotlin can't prove infinite loops inside `withContext`
+  - `foregroundServiceType="dataSync"` requires `FOREGROUND_SERVICE_DATA_SYNC` permission (Android 14+)
+  - `MediaStore.Downloads.EXTERNAL_CONTENT_URI` for saving files to Downloads without storage permission on API 29+
+  - `NotificationManagerCompat.notify()` throws `SecurityException` without POST_NOTIFICATIONS permission — catch and log
+  - Service `startSse()`/`stopSse()` are public so future transfer mode switching can control SSE lifecycle
 ---
