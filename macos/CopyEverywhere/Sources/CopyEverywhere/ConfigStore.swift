@@ -148,7 +148,7 @@ final class ConfigStore: ObservableObject {
     func save() {
         saveToKeychain(account: hostKey, value: hostURL)
         saveToKeychain(account: tokenKey, value: accessToken)
-        isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
+        isConfigured = !hostURL.isEmpty
         if isConfigured {
             Task {
                 await registerDevice()
@@ -170,7 +170,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         request.timeoutInterval = 15
@@ -202,7 +202,13 @@ final class ConfigStore: ObservableObject {
     private func loadFromKeychain() {
         hostURL = readFromKeychain(account: hostKey) ?? ""
         accessToken = readFromKeychain(account: tokenKey) ?? ""
-        isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
+        isConfigured = !hostURL.isEmpty
+    }
+
+    private func setAuthHeader(_ request: inout URLRequest) {
+        if !accessToken.isEmpty {
+            setAuthHeader(&request)
+        }
     }
 
     private func saveToKeychain(account: String, value: String) {
@@ -265,7 +271,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         let start = Date()
@@ -329,7 +335,7 @@ final class ConfigStore: ObservableObject {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
@@ -422,7 +428,7 @@ final class ConfigStore: ObservableObject {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
@@ -474,7 +480,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: metaURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -610,7 +616,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 300
 
@@ -713,7 +719,7 @@ final class ConfigStore: ObservableObject {
 
         var initRequest = URLRequest(url: initURL)
         initRequest.httpMethod = "POST"
-        initRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&initRequest)
         initRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         initRequest.timeoutInterval = 30
 
@@ -793,7 +799,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: statusURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -869,7 +875,7 @@ final class ConfigStore: ObservableObject {
 
             var request = URLRequest(url: partURL)
             request.httpMethod = "PUT"
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            setAuthHeader(&request)
             request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
             request.timeoutInterval = 120
             request.httpBody = chunkData
@@ -913,7 +919,7 @@ final class ConfigStore: ObservableObject {
 
         var completeRequest = URLRequest(url: completeURL)
         completeRequest.httpMethod = "POST"
-        completeRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&completeRequest)
         completeRequest.timeoutInterval = 60
 
         do {
@@ -980,7 +986,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: metaURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -1070,7 +1076,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 300
 
         let delegate = DownloadProgressDelegate()
@@ -1157,7 +1163,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -1213,7 +1219,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 60
 
         do {
@@ -1313,7 +1319,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -1381,7 +1387,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = .infinity
 
@@ -1432,7 +1438,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 60
 
         do {
@@ -1528,7 +1534,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 30
 
         do {

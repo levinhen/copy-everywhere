@@ -62,6 +62,7 @@ func main() {
 		resp := gin.H{
 			"version": "0.1.0",
 			"uptime":  time.Since(startTime).String(),
+			"auth":    cfg.AuthEnabled,
 		}
 		stats, err := database.GetStorageStats()
 		if err != nil {
@@ -73,9 +74,11 @@ func main() {
 		c.JSON(200, resp)
 	})
 
-	// API routes with auth
+	// API routes — auth is opt-in via AUTH_ENABLED
 	api := r.Group("/api/v1")
-	api.Use(middleware.AuthRequired(cfg.AccessToken))
+	if cfg.AuthEnabled {
+		api.Use(middleware.AuthRequired(cfg.AccessToken))
+	}
 	{
 		api.POST("/clips", clipHandler.Upload)
 		api.GET("/clips", clipHandler.ListQueue)

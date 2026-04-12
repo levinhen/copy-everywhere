@@ -17,10 +17,10 @@ struct ConfigView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Access Token")
+                Text("Access Token (optional)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
-                SecureField("Enter access token", text: $configStore.accessToken)
+                SecureField("Leave empty if server auth is disabled", text: $configStore.accessToken)
                     .textFieldStyle(.roundedBorder)
             }
 
@@ -70,14 +70,14 @@ struct ConfigView: View {
                         await configStore.testConnection()
                     }
                 }
-                .disabled(configStore.hostURL.isEmpty || configStore.accessToken.isEmpty)
+                .disabled(configStore.hostURL.isEmpty)
 
                 Spacer()
 
                 Button("Save") {
                     configStore.save()
                 }
-                .disabled(configStore.hostURL.isEmpty || configStore.accessToken.isEmpty)
+                .disabled(configStore.hostURL.isEmpty)
                 .buttonStyle(.borderedProminent)
             }
 

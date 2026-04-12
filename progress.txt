@@ -1,0 +1,37 @@
+# Ralph Progress — LAN & Bluetooth iteration
+# Auto-updated by ralph.sh — do not edit manually
+
+## Codebase Patterns
+- Auth is opt-in: `AUTH_ENABLED` env var (default false). `/health` endpoint exposes `"auth": true|false` for client discovery.
+- macOS client uses `setAuthHeader(&request)` helper to conditionally add Bearer token. Windows uses `SetAuthHeader(client)` overload.
+- `isConfigured` only requires `hostURL`/`HostUrl` — token is optional for LAN-only deployments.
+- Branch `ralph/lan-and-bluetooth` is based on `ralph/copy-everywhere-queue-ux` (not `main`), since `main` only has 2 initial commits.
+
+## 2026-04-12 - US-035
+- What was implemented:
+  - Added `AUTH_ENABLED` env var (default false) to server config
+  - `getEnvBool()` helper in config/config.go
+  - main.go conditionally applies auth middleware only when `AUTH_ENABLED=true`
+  - `/health` endpoint now returns `"auth": true|false`
+  - macOS: `setAuthHeader(&request)` helper skips header when token is empty; `isConfigured` no longer requires token
+  - macOS: ConfigView shows token as optional with updated placeholder
+  - Windows: `SetAuthHeader(HttpClient)` overload conditionally sets header; `IsConfigured` no longer requires token
+  - Windows: MainWindow save flow no longer blocks on empty token; SSE client conditionally sets auth
+  - docker-compose.yml updated with `AUTH_ENABLED` env var
+  - New middleware/auth_test.go with 5 test cases
+- Files changed:
+  - server/config/config.go — added AuthEnabled field, getEnvBool helper
+  - server/main.go — conditional auth middleware, auth field in /health
+  - server/middleware/auth_test.go — new test file
+  - server/docker-compose.yml — AUTH_ENABLED env var
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift — setAuthHeader helper, isConfigured relaxed
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift — token optional, save/test enabled without token
+  - windows/CopyEverywhere/Services/ConfigStore.cs — IsConfigured relaxed
+  - windows/CopyEverywhere/Services/ApiClient.cs — SetAuthHeader(HttpClient) overload, conditional auth
+  - windows/CopyEverywhere/MainWindow.xaml.cs — removed token requirement for save, conditional SSE auth
+  - CLAUDE.md — updated commands and conventions
+- **Learnings for future iterations:**
+  - The main branch only has initial setup commits; all code lives on `ralph/copy-everywhere-queue-ux`. New feature branches should fork from there.
+  - macOS ConfigStore has ~15 places setting the auth header — centralizing into a helper was essential.
+  - Windows ApiClient already had a `SetAuthHeader()` but only for the default `_httpClient`. An overload accepting `HttpClient` was needed for the one-off clients (download, upload).
+---

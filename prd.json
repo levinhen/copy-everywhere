@@ -1,0 +1,320 @@
+{
+  "project": "CopyEverywhere",
+  "branchName": "ralph/lan-and-bluetooth",
+  "description": "LAN self-hosted server (no auth, mDNS discovery, MenuBarExtra host app) and Bluetooth RFCOMM peer-to-peer mode for macOS and Windows clients",
+  "userStories": [
+    {
+      "id": "US-035",
+      "title": "Server: Remove Bearer Token auth middleware by default",
+      "description": "As a LAN user, I don't want to configure tokens because the server is only reachable on the home network.",
+      "acceptanceCriteria": [
+        "middleware/auth.go Bearer auth middleware is preserved but disabled by default",
+        "New env var AUTH_ENABLED (default false); when true, Token auth is restored",
+        "AUTH_ENABLED=false means all /api/v1/* routes skip Authorization header check",
+        "Client does not send Authorization header when server does not require auth",
+        "go test ./... passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-036",
+      "title": "Server: mDNS/Bonjour service broadcast",
+      "description": "As a client, I want to auto-discover the CopyEverywhere server on the LAN without manually entering IP and port.",
+      "acceptanceCriteria": [
+        "Server registers mDNS service on startup, type _copyeverywhere._tcp, port matches actual listen port",
+        "TXT record contains version=<server_version> and auth=<true|false>",
+        "Uses a pure-Go mDNS library (no CGO dependency)",
+        "mDNS record is deregistered on server shutdown",
+        "dns-sd -B _copyeverywhere._tcp discovers the service on the same LAN",
+        "go test ./... passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-037A",
+      "title": "Server: MenuBarExtra host app scaffold and Go subprocess management",
+      "description": "As a Mac Mini user, I want the server to run as a MenuBarExtra app that manages the Go server binary as a child process.",
+      "acceptanceCriteria": [
+        "New macos/CopyEverywhereServer/ SPM project, macOS 13+ MenuBarExtra app",
+        "Menu bar icon shows server status: running (green) / stopped (gray)",
+        "Go server binary is compiled independently; Swift app launches it via Process",
+        "Process stdout/stderr captured via Pipe for log display",
+        "App uses NSApp.setActivationPolicy(.accessory) to hide Dock icon",
+        "Start/Stop button controls the Go subprocess lifecycle (launch, SIGTERM, restart)",
+        "swift build succeeds"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "Split from original US-037 — scaffold + process management only"
+    },
+    {
+      "id": "US-037B",
+      "title": "Server: MenuBarExtra config panel and status display",
+      "description": "As a Mac Mini user, I want the MenuBarExtra panel to show server status and let me configure port, storage path, and TTL.",
+      "acceptanceCriteria": [
+        "Clicking menu bar icon opens a panel showing: listen address/port, connected device count, storage path, used space",
+        "Panel provides config fields: port (default 8080), storage path (default ~/Library/Application Support/CopyEverywhereServer/data), TTL hours",
+        "Panel shows recent log lines captured from the Go subprocess",
+        "Config changes are persisted and applied on next server restart",
+        "swift build succeeds"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Split from original US-037 — config panel and status display"
+    },
+    {
+      "id": "US-037C",
+      "title": "Server: MenuBarExtra launch-at-login support",
+      "description": "As a Mac Mini user, I want the server app to optionally start at login.",
+      "acceptanceCriteria": [
+        "Panel provides a 'Launch at Login' toggle",
+        "Toggle uses SMAppService or Login Items to register/unregister",
+        "Setting is persisted across app restarts",
+        "swift build succeeds"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Split from original US-037 — launch-at-login only"
+    },
+    {
+      "id": "US-038",
+      "title": "Server: BIND_ADDRESS environment variable",
+      "description": "As a user, I want the server to only listen on LAN interfaces, not expose to the internet.",
+      "acceptanceCriteria": [
+        "New env var BIND_ADDRESS (default 0.0.0.0); MenuBarExtra config panel can set it",
+        "Server startup log prints the actual listen address",
+        "go test ./... passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-039",
+      "title": "macOS client: mDNS auto-discovery of server",
+      "description": "As a macOS user, I want the client to auto-discover the CopyEverywhere server on my LAN without manual config.",
+      "acceptanceCriteria": [
+        "Uses NWBrowser (Network.framework) to browse _copyeverywhere._tcp services",
+        "Discovered service IP and port are resolved and written to ConfigStore",
+        "ConfigView shows 'Discovered Servers' list; user clicks to select",
+        "Manual server address input is preserved as fallback",
+        "When server TXT auth=true, Token input field is shown; auth=false hides it",
+        "swift build succeeds"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-040",
+      "title": "Windows client: mDNS auto-discovery of server",
+      "description": "As a Windows user, I want the client to auto-discover the CopyEverywhere server on my LAN.",
+      "acceptanceCriteria": [
+        "Uses Makaretu.Dns.Multicast or similar .NET mDNS library to browse _copyeverywhere._tcp",
+        "Discovered service IP and port written to ConfigStore",
+        "Config UI shows 'Discovered Servers' list; user clicks to select",
+        "Manual server address input preserved as fallback",
+        "When server TXT auth=true, Token input shown; auth=false hides it",
+        "dotnet build succeeds"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-041A",
+      "title": "macOS: Bluetooth RFCOMM service foundation (SDP + server/client connection)",
+      "description": "As a macOS developer, I need a BluetoothService class that can publish an RFCOMM SDP record, accept inbound connections, and connect to a remote RFCOMM service.",
+      "acceptanceCriteria": [
+        "New BluetoothService class wrapping IOBluetoothRFCOMMChannel",
+        "Defines CopyEverywhere RFCOMM Service UUID (CE000001-...), shared across platforms",
+        "Server mode: publishes SDP service record, waits for inbound RFCOMM connections",
+        "Client mode: SDP query discovers peer CopyEverywhere service, establishes RFCOMM connection",
+        "swift build succeeds"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "Split from original US-041 — connection layer only, no data protocol yet"
+    },
+    {
+      "id": "US-041B",
+      "title": "macOS: Bluetooth RFCOMM transfer protocol and app-layer handshake",
+      "description": "As a macOS developer, I need the RFCOMM channel to support a message protocol (JSON header + streamed content) and an app-layer handshake.",
+      "acceptanceCriteria": [
+        "After RFCOMM connection, both sides exchange {\"app\":\"CopyEverywhere\",\"version\":\"3.0\"} handshake; 5s timeout disconnects",
+        "Transfer protocol: sender writes JSON message header (type text/file, filename, total size) then streams content bytes",
+        "Receiver reads header, then reads exactly the declared number of bytes",
+        "Protocol works for both text and file payloads",
+        "swift build succeeds"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "Split from original US-041 — protocol layer on top of US-041A connection"
+    },
+    {
+      "id": "US-042",
+      "title": "macOS: Bluetooth device discovery and pairing UI",
+      "description": "As a macOS user, I want to scan for nearby Bluetooth devices running CopyEverywhere and pair with them.",
+      "acceptanceCriteria": [
+        "ConfigView has a 'Bluetooth Direct' section with a mode toggle (LAN Server / Bluetooth Direct)",
+        "Bluetooth mode shows 'Scan Nearby Devices' button using IOBluetoothDeviceInquiry",
+        "Scan results filtered to devices publishing CopyEverywhere RFCOMM UUID via SDP",
+        "Clicking a device triggers system-level Bluetooth pairing (macOS system dialog)",
+        "After system pairing, RFCOMM connection + app handshake runs automatically",
+        "Paired device info saved to ConfigStore; auto-reconnect on next launch",
+        "Paired device list supports 'Disconnect' and 'Forget Device' actions",
+        "swift build succeeds"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-043",
+      "title": "macOS: Bluetooth mode send content",
+      "description": "As a macOS user in Bluetooth mode, all send actions (drag, Cmd+V, panel send) should push content directly to the paired device via Bluetooth.",
+      "acceptanceCriteria": [
+        "ConfigStore has transferMode property: .lanServer or .bluetooth",
+        "All send entry points (drag to menu bar, drag to panel, Cmd+V) route through ApiClient (LAN) or BluetoothService (BT) based on transferMode",
+        "Bluetooth text send: RFCOMM header + text content",
+        "Bluetooth file send: FileHandle chunk-reads streamed over RFCOMM (no full-file memory load)",
+        "Send progress exposed via AsyncStream<Double>, reuses existing progress UI",
+        "Send success/failure shows UserNotifications notification",
+        "swift build succeeds"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-044",
+      "title": "macOS: Bluetooth mode receive content",
+      "description": "As a macOS user, when the paired device sends content via Bluetooth, I should auto-receive and process it.",
+      "acceptanceCriteria": [
+        "In Bluetooth mode, device acts as RFCOMM server listening for inbound connections",
+        "Received text is auto-written to clipboard with notification 'Received text (N chars)'",
+        "Received file is saved to Downloads folder with notification 'Received <filename>'",
+        "Receive progress shown in panel (reuses existing progress UI)",
+        "Total bytes verified against header-declared size on completion",
+        "swift build succeeds"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-045A",
+      "title": "Windows: Bluetooth RFCOMM service foundation (SDP + server/client connection)",
+      "description": "As a Windows developer, I need a BluetoothService class using Windows.Devices.Bluetooth.Rfcomm that can publish/discover RFCOMM services and establish connections.",
+      "acceptanceCriteria": [
+        "New BluetoothService class wrapping RfcommDeviceService and RfcommServiceProvider",
+        "Uses the same RFCOMM Service UUID as macOS",
+        "Server mode: RfcommServiceProvider publishes SDP record, StreamSocketListener accepts inbound connections",
+        "Client mode: DeviceInformation.FindAllAsync discovers peer service, StreamSocket connects",
+        "dotnet build succeeds"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "Split from original US-045 — connection layer only"
+    },
+    {
+      "id": "US-045B",
+      "title": "Windows: Bluetooth RFCOMM transfer protocol and app-layer handshake",
+      "description": "As a Windows developer, I need the RFCOMM StreamSocket to support the same message protocol and handshake as macOS for cross-platform interop.",
+      "acceptanceCriteria": [
+        "Handshake identical to macOS: exchange {\"app\":\"CopyEverywhere\",\"version\":\"3.0\"}, 5s timeout",
+        "Transfer protocol identical to macOS: JSON header + streamed content",
+        "Cross-platform interop: Windows can send to macOS and vice versa",
+        "dotnet build succeeds"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "Split from original US-045 — protocol layer on top of US-045A"
+    },
+    {
+      "id": "US-046",
+      "title": "Windows: Bluetooth device discovery and pairing UI",
+      "description": "As a Windows user, I want to scan for nearby Bluetooth devices running CopyEverywhere and pair with them.",
+      "acceptanceCriteria": [
+        "Main window config area has 'Bluetooth Direct' section with mode toggle (LAN Server / Bluetooth Direct)",
+        "Bluetooth mode shows 'Scan Nearby Devices' button using DeviceInformation.FindAllAsync + RFCOMM UUID filter",
+        "Clicking a device triggers system-level Bluetooth pairing (Windows system dialog)",
+        "After pairing, app handshake verifies peer CopyEverywhere is running",
+        "Pairing info persisted to config.json",
+        "Paired device list supports 'Disconnect' and 'Forget Device'",
+        "dotnet build succeeds"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-047",
+      "title": "Windows: Bluetooth mode send content",
+      "description": "As a Windows user in Bluetooth mode, all send actions should push content via Bluetooth to the paired device.",
+      "acceptanceCriteria": [
+        "ConfigStore has TransferMode property: LanServer or Bluetooth",
+        "SendService dispatches to ApiClient or BluetoothService based on TransferMode",
+        "Bluetooth text and file send behavior matches macOS (RFCOMM streaming)",
+        "Send progress exposed via IProgress<double>, reuses existing progress UI",
+        "Send success/failure shows Windows Toast notification",
+        "dotnet build succeeds"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-048",
+      "title": "Windows: Bluetooth mode receive content",
+      "description": "As a Windows user, when the paired device sends content via Bluetooth, I should auto-receive and process it.",
+      "acceptanceCriteria": [
+        "In Bluetooth mode, device acts as RFCOMM server listening for connections",
+        "Received text auto-written to clipboard with Toast notification",
+        "Received file saved to Downloads folder with Toast notification",
+        "Receive progress shown in main window",
+        "Byte count verification matches macOS behavior",
+        "dotnet build succeeds"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-049",
+      "title": "macOS: Mode switch UI and service lifecycle",
+      "description": "As a macOS user, I want to switch between LAN Server and Bluetooth Direct modes in settings, with the UI adapting to the active mode.",
+      "acceptanceCriteria": [
+        "ConfigView top has a Picker: 'LAN Server' / 'Bluetooth Direct'",
+        "LAN mode shows: server address (mDNS or manual), target device selector",
+        "Bluetooth mode shows: paired devices, scan button, BT connection status",
+        "Switching mode stops current background service (SSE / BT listener) and starts the new one",
+        "Panel main view hides server queue in BT mode, shows BT status and recent transfers",
+        "swift build succeeds"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-050",
+      "title": "Windows: Mode switch UI and service lifecycle",
+      "description": "As a Windows user, I want to switch between LAN Server and Bluetooth Direct modes in settings, with the UI adapting.",
+      "acceptanceCriteria": [
+        "Main window config area has ComboBox: 'LAN Server' / 'Bluetooth Direct'",
+        "LAN mode shows server address and target device selector",
+        "Bluetooth mode shows paired devices and BT connection status",
+        "Switching mode correctly stops/starts corresponding background services",
+        "Main window queue area adapts display for Bluetooth mode",
+        "dotnet build succeeds"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

@@ -77,7 +77,7 @@ public class ConfigStore : INotifyPropertyChanged
         set { _floatingBallY = value; OnPropertyChanged(); }
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl) && !string.IsNullOrWhiteSpace(AccessToken);
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl);
 
     public ConfigStore()
     {

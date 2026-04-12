@@ -73,12 +73,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_configStore.AccessToken))
-        {
-            ShowStatus("Please enter an Access Token", isError: true);
-            return;
-        }
-
         _configStore.Save();
         ShowStatus("Configuration saved", isError: false);
         UpdateMainPanelState();
@@ -1085,8 +1079,11 @@ public partial class MainWindow : Window
                 var url = $"{baseUrl}/api/v1/devices/{_configStore.DeviceId}/stream";
 
                 using var client = new System.Net.Http.HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _configStore.AccessToken);
+                if (!string.IsNullOrWhiteSpace(_configStore.AccessToken))
+                {
+                    client.DefaultRequestHeaders.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _configStore.AccessToken);
+                }
 
                 using var response = await client.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct);
                 response.EnsureSuccessStatusCode();
