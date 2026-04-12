@@ -196,3 +196,16 @@
   - `ScrollViewer.ScrollToEnd()` is the WPF equivalent of SwiftUI's `ScrollViewReader` for auto-scrolling logs
 ---
 
+## 2026-04-13 - US-081
+- Verified mDNS broadcast works via the Go binary's built-in `discovery.Start()` (server/main.go)
+- Go server registers `_copyeverywhere._tcp` mDNS service on startup with TXT records (version, auth)
+- On Windows, `ServerProcess.Stop()` uses `Process.Kill()` (hard kill) — Go process doesn't get SIGTERM for graceful mDNS deregistration, but mDNS records expire via TTL and the multicast socket closure
+- `RestartAsync()` polls `IsRunning` for up to 5s before starting new instance — prevents duplicate mDNS registrations
+- Cross-device discovery relies on existing client mDNS browsers (macOS, Windows Zeroconf, Android NsdManager)
+- No code changes needed — mDNS is fully handled by the Go binary
+- Files changed: (none — verification only)
+- **Learnings for future iterations:**
+  - Windows `Process.Kill()` is SIGKILL equivalent — no graceful shutdown. mDNS TTL handles stale records
+  - Cross-device mDNS verification requires manual testing with multiple devices on the same network
+---
+
