@@ -5,6 +5,7 @@
 - ServerProcess depends on ServerConfig for its `environment` property — need at least a stub for compilation.
 - AppDelegate owns top-level singletons (configStore, serverConfig, serverProcess) and injects them via `@EnvironmentObject`.
 - New ConfigData fields must be `Optional` with defaults in `load()` for backward compat with older config files.
+- When restarting the Go subprocess, poll `isRunning` instead of fixed delay — mDNS needs the old process fully exited before the new one starts.
 
 ---
 
@@ -66,5 +67,49 @@
   - ConfigView accesses AppDelegate via `NSApp.delegate as? AppDelegate` for actions that need all three singletons (toggle server, auto-connect) — matches the pattern established in US-071
   - Server config fields are shown/hidden (not disabled) when server is toggled — consistent with how LAN/Bluetooth sections work
   - Apply & Restart needs a delay before auto-connect because the Go binary needs time to start listening
+---
+
+## 2026-04-13 - US-073
+- Added server management section to MainPanelView, visible only when `serverConfig.serverEnabled` is true
+- Server status indicator (green/red/gray dot) in the header next to "CopyEverywhere" title
+- Contextual Start/Stop/Restart buttons based on `serverProcess.isRunning`
+- Storage stats: used space (via `refreshUsedSpace()`) and storage path displayed
+- Connected devices list fetched via `GET /api/v1/devices` from local server (with auth header when enabled)
+- Expandable log viewer via `DisclosureGroup` with auto-scrolling `ScrollViewReader`, capped at 150px height
+- Added `ConnectedDevice` Decodable model struct at top of MainPanelView.swift (maps `device_id` JSON key to `id`)
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift (added server management section, ConnectedDevice model, status indicators)
+- **Learnings for future iterations:**
+  - Go server's `/api/v1/devices` returns `device_id` (not `id`) — need CodingKeys mapping in the Swift model
+  - `DisclosureGroup` works well for collapsible log viewers in the popover — keeps the panel compact by default
+  - `ScrollViewReader` + `onChange(of: logLines.count)` is the pattern for auto-scrolling log views
+  - MainPanelView now requires `serverConfig` and `serverProcess` as `@EnvironmentObject` — already injected in US-071
+---
+
+## 2026-04-13 - US-074
+- Verified that mDNS broadcast works automatically via the Go binary's built-in `discovery.Start()` (server/main.go:108-122)
+- Verified that SIGTERM from `ServerProcess.stop()` triggers mDNS deregistration via the Go signal handler
+- Improved `ServerProcess.restart()` to poll for actual process exit (up to 5s) instead of a fixed 0.5s delay, preventing duplicate mDNS registrations
+- Cross-device mDNS discovery relies on the existing `_copyeverywhere._tcp` service type — no client changes needed
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerProcess.swift (improved restart() to wait for process exit)
+- **Learnings for future iterations:**
+  - The Go server's SIGTERM handler calls `mdnsSrv.Shutdown()` then `os.Exit(0)` — exits very quickly, but a fixed delay in restart() is still fragile
+  - `restart()` should poll `isRunning` rather than use a fixed sleep — the terminationHandler sets `isRunning = false` when the process actually exits
+  - Cross-device mDNS verification requires manual testing — can't be done programmatically in the build
+---
+
+## 2026-04-13 - US-075
+- Deleted `macos/CopyEverywhereServer/` directory (Package.swift, Sources, .gitignore)
+- Updated CLAUDE.md architecture section: removed CopyEverywhereServer bullet, updated macOS bullet to mention embedded server
+- Replaced "macOS Server Host App" conventions section with "Embedded Server (macOS)" section documenting the new architecture
+- Resolved all merge conflict markers in CLAUDE.md (4 conflict blocks from ralph/android-client merge), keeping Android content
+- swift build succeeds
+- Files changed:
+  - macos/CopyEverywhereServer/ (deleted — all files)
+  - CLAUDE.md (architecture rewrite, conventions rewrite, merge conflict resolution)
+- **Learnings for future iterations:**
+  - CLAUDE.md had unresolved merge conflict markers from the android-client branch merge — always check for and resolve these
+  - The standalone server host app was never counted as a separate "codebase" in the architecture section (it was a sub-bullet under macOS), so the "Four independent codebases" count remains correct
 ---
 
