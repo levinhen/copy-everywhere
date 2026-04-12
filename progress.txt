@@ -5,7 +5,7 @@ US-051: Android project scaffold and build pipeline         [x]
 US-052: Configuration screen and persistence                [x]
 US-053: mDNS server discovery                               [x]
 US-054: API client — small clip send (text + file < 50 MB)  [x]
-US-055: API client — chunked upload (file >= 50 MB)         [ ]
+US-055: API client — chunked upload (file >= 50 MB)         [x]
 US-056: API client — receive clip (metadata + download)     [ ]
 US-057: SSE client and auto-receive                         [ ]
 US-058: Foreground service and persistent notification      [ ]
@@ -33,6 +33,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - Server `/api/v1/devices/register` currently only accepts macos/windows/linux — Android client sends "android", server needs update
 - mDNS discovery via `NsdManager` in `MdnsDiscoveryService` — use `DisposableEffect` for start/stop lifecycle in Compose
 - `NsdServiceInfo.attributes` returns TXT record fields as `Map<String, ByteArray>` — decode with `String(bytes)`
+- Chunked uploads use separate OkHttpClient with 120s timeout; `ChunkedUploadState` holds progress as `MutableStateFlow<Double>`
+- `currentCoroutineContext().ensureActive()` for cooperative cancellation in coroutine loops
 
 ---
 
@@ -110,4 +112,24 @@ US-068: Boot receiver and battery optimization              [ ]
   - `MimeTypeMap.getSingleton().getMimeTypeFromExtension()` for MIME type guessing from filename extension
   - Image clips use type="image", regular files use type="file" — matches server expectations
   - `getFileName()`, `getFileSize()`, `guessMimeType()` placed in companion object for reuse in chunked upload (US-055)
+---
+
+## 2026-04-12 - US-055
+- Implemented chunked upload for files >= 50 MB in ApiClient
+- `initChunkedUpload()`: POST /uploads/init with filename, size_bytes, chunk_size, device IDs
+- `uploadChunks()`: streams each chunk via PUT /uploads/:id/parts/:n with 16 KB read buffer
+- `completeChunkedUpload()`: POST /uploads/:id/complete returns clip ID
+- `getUploadStatus()` + `resumeChunkedUpload()`: query server for completed parts to resume
+- `ChunkedUploadState` class holds upload state, progress (Flow<Double>), speed (Flow<Double> MB/s)
+- 409 response treated as success (chunk already uploaded)
+- Pause = cancel coroutine Job; resume = query status + re-call uploadChunks
+- Separate `uploadClient` with 120s read/write timeout for chunk transfers
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`
+- **Learnings for future iterations:**
+  - Chunk uploads need longer timeouts than regular API calls — use separate OkHttpClient
+  - `InputStream.skip()` may not skip the full amount in one call — loop until offset reached
+  - `currentCoroutineContext().ensureActive()` is the pattern for cooperative cancellation in loops
+  - `ChunkedUploadState` uses MutableStateFlow for progress/speed so Compose can collect them
+  - Default chunk size 5 MB balances between too many HTTP requests and memory usage
 ---

@@ -7,6 +7,12 @@ import android.webkit.MimeTypeMap
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -55,12 +61,66 @@ data class ClipResponse(
     @SerializedName("target_device_id") val targetDeviceId: String? = null
 )
 
+data class UploadInitRequest(
+    val filename: String,
+    @SerializedName("size_bytes") val sizeBytes: Long,
+    @SerializedName("chunk_size") val chunkSize: Long,
+    @SerializedName("sender_device_id") val senderDeviceId: String? = null,
+    @SerializedName("target_device_id") val targetDeviceId: String? = null
+)
+
+data class UploadInitResponse(
+    @SerializedName("upload_id") val uploadId: String,
+    @SerializedName("chunk_count") val chunkCount: Int
+)
+
+data class UploadStatusResponse(
+    @SerializedName("received_parts") val receivedParts: List<Int>,
+    @SerializedName("total_parts") val totalParts: Int,
+    val status: String
+)
+
+data class UploadCompleteResponse(
+    @SerializedName("clip_id") val clipId: String
+)
+
+class ChunkedUploadState(
+    val uploadId: String,
+    val chunkCount: Int,
+    val chunkSize: Long,
+    val fileSize: Long,
+    val completedParts: MutableSet<Int> = mutableSetOf()
+) {
+    private val _progress = MutableStateFlow(0.0)
+    val progress: Flow<Double> = _progress.asStateFlow()
+
+    private val _speedMbps = MutableStateFlow(0.0)
+    val speedMbps: Flow<Double> = _speedMbps.asStateFlow()
+
+    var job: Job? = null
+
+    fun updateProgress(partsUploaded: Int) {
+        _progress.value = partsUploaded.toDouble() / chunkCount
+    }
+
+    fun updateSpeed(bytesPerSecond: Double) {
+        _speedMbps.value = bytesPerSecond / (1024.0 * 1024.0)
+    }
+}
+
 class ApiClient {
 
     private val gson = Gson()
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    // Longer timeout for chunk uploads
+    private val uploadClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
         .build()
 
     private fun buildRequest(url: String, accessToken: String): Request.Builder {
@@ -197,7 +257,177 @@ class ApiClient {
         gson.fromJson(body, ClipResponse::class.java)
     }
 
+    /**
+     * Initialize a chunked upload for a file >= 50 MB.
+     */
+    suspend fun initChunkedUpload(
+        hostUrl: String,
+        accessToken: String,
+        contentResolver: ContentResolver,
+        fileUri: Uri,
+        senderDeviceId: String,
+        targetDeviceId: String,
+        chunkSize: Long = DEFAULT_CHUNK_SIZE
+    ): ChunkedUploadState = withContext(Dispatchers.IO) {
+        val url = "${hostUrl.trimEnd('/')}/api/v1/uploads/init"
+        val filename = getFileName(contentResolver, fileUri)
+        val fileSize = getFileSize(contentResolver, fileUri)
+        if (fileSize <= 0) throw IOException("Cannot determine file size for: $fileUri")
+
+        val initReq = UploadInitRequest(
+            filename = filename,
+            sizeBytes = fileSize,
+            chunkSize = chunkSize,
+            senderDeviceId = senderDeviceId.ifEmpty { null },
+            targetDeviceId = targetDeviceId.ifEmpty { null }
+        )
+        val json = gson.toJson(initReq)
+        val body = json.toRequestBody("application/json".toMediaType())
+        val request = buildRequest(url, accessToken).post(body).build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IOException("Upload init failed: ${response.code}")
+        }
+        val respBody = response.body?.string() ?: throw IOException("Empty response")
+        val initResp = gson.fromJson(respBody, UploadInitResponse::class.java)
+
+        ChunkedUploadState(
+            uploadId = initResp.uploadId,
+            chunkCount = initResp.chunkCount,
+            chunkSize = chunkSize,
+            fileSize = fileSize
+        )
+    }
+
+    /**
+     * Upload all remaining chunks for a chunked upload.
+     * Supports pause (cancel coroutine job) and resume (call again with same state).
+     */
+    suspend fun uploadChunks(
+        hostUrl: String,
+        accessToken: String,
+        contentResolver: ContentResolver,
+        fileUri: Uri,
+        state: ChunkedUploadState
+    ): Unit = withContext(Dispatchers.IO) {
+        val baseUrl = hostUrl.trimEnd('/')
+        val buffer = ByteArray(READ_BUFFER_SIZE)
+
+        for (partNumber in 1..state.chunkCount) {
+            currentCoroutineContext().ensureActive()
+
+            if (partNumber in state.completedParts) {
+                continue
+            }
+
+            val offset = (partNumber - 1).toLong() * state.chunkSize
+            val remaining = state.fileSize - offset
+            val thisChunkSize = minOf(state.chunkSize, remaining)
+
+            val startTime = System.nanoTime()
+
+            val chunkBody = object : RequestBody() {
+                override fun contentType() = "application/octet-stream".toMediaType()
+                override fun contentLength() = thisChunkSize
+                override fun writeTo(sink: BufferedSink) {
+                    contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                        // Skip to the offset for this chunk
+                        var skipped = 0L
+                        while (skipped < offset) {
+                            val s = inputStream.skip(offset - skipped)
+                            if (s <= 0) break
+                            skipped += s
+                        }
+                        // Write this chunk's bytes
+                        var written = 0L
+                        while (written < thisChunkSize) {
+                            val toRead = minOf(buffer.size.toLong(), thisChunkSize - written).toInt()
+                            val read = inputStream.read(buffer, 0, toRead)
+                            if (read == -1) break
+                            sink.write(buffer, 0, read)
+                            written += read
+                        }
+                    } ?: throw IOException("Cannot open file URI: $fileUri")
+                }
+            }
+
+            val url = "$baseUrl/api/v1/uploads/${state.uploadId}/parts/$partNumber"
+            val request = buildRequest(url, accessToken).put(chunkBody).build()
+            val response = uploadClient.newCall(request).execute()
+
+            if (response.code == 409) {
+                // Chunk already uploaded — treat as success
+            } else if (!response.isSuccessful) {
+                throw IOException("Upload chunk $partNumber failed: ${response.code}")
+            }
+            response.close()
+
+            state.completedParts.add(partNumber)
+            state.updateProgress(state.completedParts.size)
+
+            val elapsed = (System.nanoTime() - startTime) / 1_000_000_000.0
+            if (elapsed > 0) {
+                state.updateSpeed(thisChunkSize / elapsed)
+            }
+        }
+    }
+
+    /**
+     * Complete a chunked upload. Returns the clip ID.
+     */
+    suspend fun completeChunkedUpload(
+        hostUrl: String,
+        accessToken: String,
+        uploadId: String
+    ): String = withContext(Dispatchers.IO) {
+        val url = "${hostUrl.trimEnd('/')}/api/v1/uploads/$uploadId/complete"
+        val body = "".toRequestBody("application/json".toMediaType())
+        val request = buildRequest(url, accessToken).post(body).build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IOException("Upload complete failed: ${response.code}")
+        }
+        val respBody = response.body?.string() ?: throw IOException("Empty response")
+        val completeResp = gson.fromJson(respBody, UploadCompleteResponse::class.java)
+        completeResp.clipId
+    }
+
+    /**
+     * Query upload status for resume support.
+     * Returns the set of already-uploaded part numbers.
+     */
+    suspend fun getUploadStatus(
+        hostUrl: String,
+        accessToken: String,
+        uploadId: String
+    ): UploadStatusResponse = withContext(Dispatchers.IO) {
+        val url = "${hostUrl.trimEnd('/')}/api/v1/uploads/$uploadId/status"
+        val request = buildRequest(url, accessToken).get().build()
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            throw IOException("Upload status failed: ${response.code}")
+        }
+        val body = response.body?.string() ?: throw IOException("Empty response")
+        gson.fromJson(body, UploadStatusResponse::class.java)
+    }
+
+    /**
+     * Resume a chunked upload by querying completed parts from the server.
+     */
+    suspend fun resumeChunkedUpload(
+        hostUrl: String,
+        accessToken: String,
+        state: ChunkedUploadState
+    ) {
+        val status = getUploadStatus(hostUrl, accessToken, state.uploadId)
+        state.completedParts.clear()
+        state.completedParts.addAll(status.receivedParts)
+        state.updateProgress(state.completedParts.size)
+    }
+
     companion object {
+        const val DEFAULT_CHUNK_SIZE = 5L * 1024 * 1024 // 5 MB chunks
+        private const val READ_BUFFER_SIZE = 16 * 1024 // 16 KB read buffer
         fun getFileName(contentResolver: ContentResolver, uri: Uri): String {
             contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
