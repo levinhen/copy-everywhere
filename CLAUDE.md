@@ -154,6 +154,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Gradle wrapper (8.9)** — always use `./gradlew`, never bare `gradle`. AGP 8.7.3 + Kotlin 2.0.21 + Compose compiler via `kotlin-compose` plugin.
 - **Adaptive launcher icon** uses vector drawables (`ic_launcher_foreground.xml` + `ic_launcher_background.xml`) via `mipmap-anydpi-v26/ic_launcher.xml`. No raster PNGs needed.
 - **Theme** uses Material 3 dynamic color (Android 12+ `dynamicLightColorScheme`/`dynamicDarkColorScheme`) with fallback to default light/dark schemes.
+- **Config persistence.** `ConfigStore` (`data/ConfigStore.kt`) uses DataStore Preferences for non-secret config (host URL, device name, device ID, target device ID) and `EncryptedSharedPreferences` (Keystore-backed) for the access token. Access token API is synchronous; wrap in `MutableStateFlow` for Compose observation.
+- **API client.** `ApiClient` (`data/ApiClient.kt`) uses OkHttp + Gson. Bearer auth header skipped when token is empty. All network calls are `suspend` functions dispatched to `Dispatchers.IO`.
+- **Navigation.** `NavHost` in `MainActivity` with string routes (`"main"`, `"config"`). `ConfigScreen` gets its own `ConfigViewModel` (`AndroidViewModel` for app context access).
+- **Server platform value.** Device registration sends `platform = "android"` — the Go server's `/api/v1/devices/register` handler needs to accept `"android"` in its platform whitelist.
 
 **Cross-platform:**
 

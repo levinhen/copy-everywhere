@@ -1,0 +1,73 @@
+Android Client — Progress Tracker
+==================================
+
+US-051: Android project scaffold and build pipeline         [x]
+US-052: Configuration screen and persistence                [x]
+US-053: mDNS server discovery                               [ ]
+US-054: API client — small clip send (text + file < 50 MB)  [ ]
+US-055: API client — chunked upload (file >= 50 MB)         [ ]
+US-056: API client — receive clip (metadata + download)     [ ]
+US-057: SSE client and auto-receive                         [ ]
+US-058: Foreground service and persistent notification      [ ]
+US-059: Main Activity — text input and file upload          [ ]
+US-060: Share sheet integration                             [ ]
+US-061: Transfer mode switch (LAN <-> Bluetooth)            [ ]
+US-062: Bluetooth RFCOMM service and session protocol       [ ]
+US-063: Bluetooth device scanning and pairing               [ ]
+US-064: Bluetooth auto-reconnect and RFCOMM server          [ ]
+US-065: Bluetooth send — text and files                     [ ]
+US-066: Bluetooth receive — text and files                  [ ]
+US-067: Notifications and user feedback                     [ ]
+US-068: Boot receiver and battery optimization              [ ]
+
+## Codebase Patterns
+- Gradle version catalog at `android/gradle/libs.versions.toml` — always use `libs.` references
+- `./gradlew assembleDebug` from `android/` is the build check command
+- Android package is `com.copyeverywhere.app`
+- Adaptive icons via vector drawables in `mipmap-anydpi-v26/` — no raster PNGs needed
+- `dependencyResolutionManagement` in settings.gradle.kts (not `dependencyResolution` — that's Gradle 9+ only)
+- DataStore Preferences for non-secret config, EncryptedSharedPreferences (Keystore-backed) for access token
+- OkHttp + Gson for API calls; ApiClient class in `data/` package
+- Navigation Compose for screen navigation (`NavHost` + `composable()` routes)
+- `ExposedDropdownMenuBox` with `MenuAnchorType.PrimaryNotEditable` for read-only dropdowns in Material 3
+- Server `/api/v1/devices/register` currently only accepts macos/windows/linux — Android client sends "android", server needs update
+
+---
+
+## 2026-04-12 - US-051
+- Created Android project scaffold: Kotlin + Jetpack Compose, minSdk 29, targetSdk 35
+- Single-module Gradle (Kotlin DSL) with Material 3, version catalog, Gradle wrapper 8.9
+- Empty MainActivity with Compose `setContent {}` + CopyEverywhereTheme (dynamic color)
+- Files created: android/ directory with full project structure
+- Updated CLAUDE.md with Android architecture, commands, and conventions
+- **Learnings for future iterations:**
+  - Use `dependencyResolutionManagement` (not `dependencyResolution`) in settings.gradle.kts — Gradle 8.x compatibility
+  - AGP 8.7.3 works with Kotlin 2.0.21 and Gradle 8.9
+  - Need `.gitignore` in android/ to exclude `.gradle/`, `build/`, `.idea/`, etc.
+  - Adaptive icon requires `mipmap-anydpi-v26/ic_launcher.xml` pointing to foreground/background drawables
+---
+
+## 2026-04-12 - US-052
+- Implemented configuration screen with Host URL, Access Token (masked), Device Name, Target Device dropdown
+- Config persisted via DataStore (Preferences); access token in EncryptedSharedPreferences (Keystore-backed)
+- Test Connection button calls /health, shows latency and auth requirement
+- Access token field hidden when server reports auth: false
+- Device auto-registers on first Test Connection via POST /api/v1/devices/register
+- Target device dropdown populated from GET /api/v1/devices (filtered to exclude self)
+- Navigation between main screen and config screen via Navigation Compose
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ConfigStore.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt`
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt`
+- Files modified:
+  - `android/gradle/libs.versions.toml` — added DataStore, security-crypto, navigation, OkHttp, Gson, lifecycle-viewmodel-compose, material-icons-extended
+  - `android/app/build.gradle.kts` — added new dependencies
+  - `android/app/src/main/AndroidManifest.xml` — added INTERNET permission
+  - `android/app/src/main/java/com/copyeverywhere/app/MainActivity.kt` — added NavHost with main/config routes
+- **Learnings for future iterations:**
+  - `ExposedDropdownMenuBox` in Material 3 requires `menuAnchor(MenuAnchorType.PrimaryNotEditable)` on the TextField
+  - Server device registration endpoint needs "android" added to allowed platforms
+  - `EncryptedSharedPreferences` uses synchronous API — access token stored/retrieved synchronously, wrapped in MutableStateFlow for Compose
+  - ConfigViewModel uses `AndroidViewModel` to access application context for ConfigStore
+---
