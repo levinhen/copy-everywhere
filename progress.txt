@@ -8,7 +8,7 @@ US-054: API client — small clip send (text + file < 50 MB)  [x]
 US-055: API client — chunked upload (file >= 50 MB)         [x]
 US-056: API client — receive clip (metadata + download)     [x]
 US-057: SSE client and auto-receive                         [x]
-US-058: Foreground service and persistent notification      [ ]
+US-058: Foreground service and persistent notification      [x]
 US-059: Main Activity — text input and file upload          [ ]
 US-060: Share sheet integration                             [ ]
 US-061: Transfer mode switch (LAN <-> Bluetooth)            [ ]
@@ -41,6 +41,8 @@ US-068: Boot receiver and battery optimization              [ ]
 - Android 13+ requires `POST_NOTIFICATIONS` runtime permission — request via `ActivityResultContracts.RequestPermission()`
 - `CopyEverywhereService.start(context)` / `.stop(context)` static helpers for service lifecycle
 - File save to Downloads: use `MediaStore.Downloads` (no storage permissions needed on API 29+)
+- Android 10+ clipboard restriction: use transparent `ClipboardTrampolineActivity` to read clipboard from notification actions (background services can't read clipboard)
+- `buildServiceNotificationStatic()` on `CopyEverywhereService.Companion` for updating the service notification from outside the service
 
 ---
 
@@ -179,4 +181,25 @@ US-068: Boot receiver and battery optimization              [ ]
   - `MediaStore.Downloads.EXTERNAL_CONTENT_URI` for saving files to Downloads without storage permission on API 29+
   - `NotificationManagerCompat.notify()` throws `SecurityException` without POST_NOTIFICATIONS permission — catch and log
   - Service `startSse()`/`stopSse()` are public so future transfer mode switching can control SSE lifecycle
+---
+
+## 2026-04-12 - US-058
+- Added "Send clipboard" action to the persistent foreground service notification
+- Created `ClipboardTrampolineActivity` — transparent activity trampoline for clipboard reads (Android 10+ restriction)
+- Tapping the action: launches trampoline → reads clipboard → sends via ApiClient → shows "Sent!" toast + notification update → auto-finishes
+- Notification updates briefly to "Sent!" or error message, then resets after 2-3 seconds
+- Added transparent theme (`Theme.CopyEverywhere.Transparent`) for the trampoline activity
+- Refactored notification building into static `buildServiceNotificationStatic()` for reuse from trampoline
+- Files created:
+  - `android/app/src/main/java/com/copyeverywhere/app/service/ClipboardTrampolineActivity.kt`
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt` — static notification builder, "Send clipboard" action
+  - `android/app/src/main/AndroidManifest.xml` — registered ClipboardTrampolineActivity with transparent theme
+  - `android/app/src/main/res/values/themes.xml` — added transparent theme style
+- **Learnings for future iterations:**
+  - Android 10+ restricts `ClipboardManager.primaryClip` reads to foreground activities — background services get null. Use a transparent Activity trampoline pattern.
+  - Trampoline activity: `android:excludeFromRecents="true"`, `android:noHistory="true"`, `android:taskAffinity=""` keeps it invisible to the user
+  - `PendingIntent.getActivity()` with unique request codes (0 for open, 1 for send) to avoid intent collision
+  - `buildServiceNotificationStatic()` exposed on companion object so trampoline can update the notification without a service reference
+  - Transparent theme needs `windowIsTranslucent=true`, `windowBackground=@android:color/transparent`, `backgroundDimEnabled=false`
 ---

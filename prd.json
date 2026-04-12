@@ -131,7 +131,7 @@
         "./gradlew assembleDebug succeeds"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "Android 10+ restricts clipboard read to foreground — may need transparent Activity trampoline"
     },
     {

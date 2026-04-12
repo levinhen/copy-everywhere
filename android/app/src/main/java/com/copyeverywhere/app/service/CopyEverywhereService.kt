@@ -82,20 +82,7 @@ class CopyEverywhereService : Service() {
     }
 
     private fun buildServiceNotification(text: String): Notification {
-        val openIntent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        return NotificationCompat.Builder(this, CHANNEL_SERVICE)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("CopyEverywhere")
-            .setContentText(text)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
+        return buildServiceNotificationStatic(this, text)
     }
 
     private fun updateServiceNotification(text: String) {
@@ -250,6 +237,36 @@ class CopyEverywhereService : Service() {
         fun stop(context: Context) {
             val intent = Intent(context, CopyEverywhereService::class.java)
             context.stopService(intent)
+        }
+
+        /**
+         * Build the ongoing service notification. Exposed as static so the
+         * ClipboardTrampolineActivity can update the notification after sending.
+         */
+        fun buildServiceNotificationStatic(context: Context, text: String): Notification {
+            val openIntent = Intent(context, MainActivity::class.java)
+            val openPendingIntent = PendingIntent.getActivity(
+                context, 0, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            // "Tap to send clipboard" action launches the trampoline activity
+            // (Android 10+ restricts clipboard read to foreground activities)
+            val sendIntent = Intent(context, ClipboardTrampolineActivity::class.java)
+            val sendPendingIntent = PendingIntent.getActivity(
+                context, 1, sendIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            return NotificationCompat.Builder(context, CHANNEL_SERVICE)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("CopyEverywhere")
+                .setContentText(text)
+                .setContentIntent(openPendingIntent)
+                .addAction(0, "Send clipboard", sendPendingIntent)
+                .setOngoing(true)
+                .setSilent(true)
+                .build()
         }
     }
 }
