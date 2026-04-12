@@ -22,6 +22,7 @@ public class ConfigStore : INotifyPropertyChanged
     private string _accessToken = "";
     private string _deviceId = "";
     private string _deviceName = "";
+    private string _targetDeviceId = "";
     private bool _showFloatingBall = true;
     private double _floatingBallX = double.NaN;
     private double _floatingBallY = double.NaN;
@@ -50,6 +51,12 @@ public class ConfigStore : INotifyPropertyChanged
     {
         get => _deviceName;
         set { _deviceName = value; OnPropertyChanged(); }
+    }
+
+    public string TargetDeviceId
+    {
+        get => _targetDeviceId;
+        set { _targetDeviceId = value; OnPropertyChanged(); }
     }
 
     public bool ShowFloatingBall
@@ -104,6 +111,7 @@ public class ConfigStore : INotifyPropertyChanged
         {
             DeviceId = DeviceId,
             DeviceName = DeviceName,
+            TargetDeviceId = TargetDeviceId,
             ShowFloatingBall = ShowFloatingBall,
             FloatingBallX = FloatingBallX,
             FloatingBallY = FloatingBallY,
@@ -124,6 +132,7 @@ public class ConfigStore : INotifyPropertyChanged
             {
                 DeviceId = config.DeviceId;
                 DeviceName = config.DeviceName;
+                TargetDeviceId = config.TargetDeviceId;
                 ShowFloatingBall = config.ShowFloatingBall;
                 if (!double.IsNaN(config.FloatingBallX)) FloatingBallX = config.FloatingBallX;
                 if (!double.IsNaN(config.FloatingBallY)) FloatingBallY = config.FloatingBallY;
@@ -176,6 +185,9 @@ internal class DeviceConfig
 
     [JsonPropertyName("device_name")]
     public string DeviceName { get; set; } = "";
+
+    [JsonPropertyName("target_device_id")]
+    public string TargetDeviceId { get; set; } = "";
 
     [JsonPropertyName("show_floating_ball")]
     public bool ShowFloatingBall { get; set; } = true;

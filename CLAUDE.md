@@ -95,6 +95,9 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - There is no built-in progress-tracking `HttpContent` in .NET — use the in-repo `ProgressStreamContent` (lives in `Services/ApiClient.cs`).
 - `OpenFileDialog`/`SaveFileDialog` are in `Microsoft.Win32`, not `System.Windows.Forms`.
 - **`MultipartFormDataContent`** in `ApiClient` is what the server's `multipart/form-data` parsing expects — use it, don't hand-roll boundaries like the macOS client does.
+- **`SendService`** is the shared send helper used by `FloatingBallWindow`, `MainWindow` (drop + Ctrl+V), and any future send paths. It reads `ConfigStore.DeviceId` / `ConfigStore.TargetDeviceId` and passes them to all API calls.
+- **SSE client** uses `HttpClient` with `HttpCompletionOption.ResponseHeadersRead` + `StreamReader.ReadLineAsync()` loop. `Timeout` set to `Timeout.InfiniteTimeSpan` for the long-lived connection. Reconnect with exponential backoff (1s → 2s → 4s → capped at 30s). `StartSSE()` is idempotent (checks `_sseTask != null`).
+- **FloatingBallWindow** is a 64x64 borderless, transparent, always-on-top WPF window that accepts file and text drops. Position persisted in `config.json`. Toggle in MainWindow config section.
 
 **Cross-platform:**
 

@@ -8,18 +8,23 @@ namespace CopyEverywhere.Services;
 public class SendService
 {
     private readonly ApiClient _apiClient;
+    private readonly ConfigStore _configStore;
 
     private const long ChunkedThreshold = 50L * 1024 * 1024; // 50MB
     private const int ChunkSize = 10 * 1024 * 1024; // 10MB
 
-    public SendService(ApiClient apiClient)
+    public SendService(ApiClient apiClient, ConfigStore configStore)
     {
         _apiClient = apiClient;
+        _configStore = configStore;
     }
+
+    private string? SenderDeviceId => string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId;
+    private string? TargetDeviceId => string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId;
 
     public async Task SendTextAsync(string text)
     {
-        var clip = await _apiClient.SendTextClipAsync(text);
+        var clip = await _apiClient.SendTextClipAsync(text, SenderDeviceId, TargetDeviceId);
         if (clip != null)
         {
             ShowToast("Sent text", $"Sent text ({text.Length} chars)");
@@ -37,7 +42,7 @@ public class SendService
 
         if (fileInfo.Length >= ChunkedThreshold)
         {
-            var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileInfo.Length, ChunkSize);
+            var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileInfo.Length, ChunkSize, SenderDeviceId, TargetDeviceId);
             if (initResult == null)
             {
                 ShowToast("Send failed", $"Failed to send: could not initialize upload for {filename}");
@@ -69,7 +74,7 @@ public class SendService
         }
         else
         {
-            var clip = await _apiClient.SendFileAsync(filePath);
+            var clip = await _apiClient.SendFileAsync(filePath, senderDeviceId: SenderDeviceId, targetDeviceId: TargetDeviceId);
             if (clip != null)
             {
                 ShowToast("Sent file", $"Sent {filename}");

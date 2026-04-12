@@ -38,6 +38,10 @@ public partial class MainWindow : Window
     // Queue polling timer
     private System.Windows.Threading.DispatcherTimer? _queueTimer;
 
+    // SSE state
+    private CancellationTokenSource? _sseCts;
+    private System.Threading.Tasks.Task? _sseTask;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -93,6 +97,10 @@ public partial class MainWindow : Window
             {
                 _configStore.SaveDeviceConfig(result.DeviceId, name);
                 UpdateDeviceInfoDisplay();
+                // Restart SSE with new credentials
+                StopSSE();
+                StartSSE();
+                _ = LoadDeviceListAsync();
             }
         }
         catch
@@ -995,6 +1003,203 @@ public partial class MainWindow : Window
         await RefreshQueueAsync();
     }
 
+    // --- Target Device & SSE ---
+
+    private async void TargetDeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (TargetDeviceComboBox.SelectedIndex <= 0)
+        {
+            _configStore.TargetDeviceId = "";
+        }
+        else if (TargetDeviceComboBox.SelectedItem is ComboBoxItem item && item.Tag is string deviceId)
+        {
+            _configStore.TargetDeviceId = deviceId;
+        }
+        _configStore.PersistConfig();
+    }
+
+    private async System.Threading.Tasks.Task LoadDeviceListAsync()
+    {
+        if (!_configStore.IsConfigured) return;
+
+        try
+        {
+            var devices = await _apiClient.GetDevicesAsync();
+            TargetDeviceComboBox.Items.Clear();
+            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue \u2014 any device)", Tag = "" });
+
+            var selectedIndex = 0;
+            var index = 1;
+            foreach (var device in devices)
+            {
+                if (device.Id == _configStore.DeviceId) continue; // Exclude self
+                var platformIcon = device.Platform switch
+                {
+                    "macos" => "\U0001F34E",
+                    "windows" => "\U0001FA9F",
+                    _ => "\U0001F4BB",
+                };
+                var item = new ComboBoxItem
+                {
+                    Content = $"{platformIcon} {device.Name} ({device.Id})",
+                    Tag = device.Id,
+                };
+                TargetDeviceComboBox.Items.Add(item);
+                if (device.Id == _configStore.TargetDeviceId)
+                    selectedIndex = index;
+                index++;
+            }
+            TargetDeviceComboBox.SelectedIndex = selectedIndex;
+        }
+        catch
+        {
+            // Best effort
+        }
+    }
+
+    public void StartSSE()
+    {
+        if (_sseTask != null) return; // Already running
+        if (!_configStore.IsConfigured || string.IsNullOrEmpty(_configStore.DeviceId)) return;
+
+        _sseCts = new CancellationTokenSource();
+        _sseTask = SSELoopAsync(_sseCts.Token);
+    }
+
+    public void StopSSE()
+    {
+        _sseCts?.Cancel();
+        _sseTask = null;
+    }
+
+    private async System.Threading.Tasks.Task SSELoopAsync(CancellationToken ct)
+    {
+        var backoff = TimeSpan.FromSeconds(1);
+        var maxBackoff = TimeSpan.FromSeconds(30);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var baseUrl = _configStore.HostUrl.TrimEnd('/');
+                var url = $"{baseUrl}/api/v1/devices/{_configStore.DeviceId}/stream";
+
+                using var client = new System.Net.Http.HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _configStore.AccessToken);
+
+                using var response = await client.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct);
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync(ct);
+                using var reader = new StreamReader(stream);
+
+                backoff = TimeSpan.FromSeconds(1); // Reset on successful connection
+                var eventType = "";
+                var eventData = "";
+
+                while (!ct.IsCancellationRequested)
+                {
+                    var line = await reader.ReadLineAsync();
+                    if (line == null) break; // Connection closed
+
+                    if (line.StartsWith("event:"))
+                    {
+                        eventType = line[6..].Trim();
+                    }
+                    else if (line.StartsWith("data:"))
+                    {
+                        eventData = line[5..].Trim();
+                    }
+                    else if (line == "" && !string.IsNullOrEmpty(eventType))
+                    {
+                        if (eventType == "clip" && !string.IsNullOrEmpty(eventData))
+                        {
+                            _ = HandleSSEClipEvent(eventData);
+                        }
+                        eventType = "";
+                        eventData = "";
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // Reconnect with exponential backoff
+            }
+
+            if (ct.IsCancellationRequested) break;
+
+            await System.Threading.Tasks.Task.Delay(backoff, ct).ContinueWith(_ => { });
+            backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, maxBackoff.TotalSeconds));
+        }
+    }
+
+    private async System.Threading.Tasks.Task HandleSSEClipEvent(string jsonData)
+    {
+        try
+        {
+            var clipEvent = System.Text.Json.JsonSerializer.Deserialize<SSEClipEvent>(jsonData);
+            if (clipEvent == null) return;
+
+            var clipId = clipEvent.ClipId;
+            var type = clipEvent.Type;
+            var filename = clipEvent.Filename;
+
+            if (type == "file")
+            {
+                var downloadsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                var savePath = Path.Combine(downloadsPath, filename ?? $"clip_{clipId}");
+
+                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath);
+                if (success)
+                {
+                    Dispatcher.Invoke(() =>
+                        ShowToastNotification("File received", $"Saved {Path.GetFileName(savePath)} to Downloads"));
+                }
+            }
+            else
+            {
+                var result = await _apiClient.ConsumeClipRawAsync(clipId);
+                if (result != null)
+                {
+                    var (data, contentType) = result.Value;
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (contentType != null && contentType.StartsWith("image/"))
+                        {
+                            using var ms = new System.IO.MemoryStream(data);
+                            var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                            bitmap.BeginInit();
+                            bitmap.StreamSource = ms;
+                            bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                            bitmap.EndInit();
+                            Clipboard.SetImage(bitmap);
+                            ShowToastNotification("Image received", "Image copied to clipboard");
+                        }
+                        else
+                        {
+                            var text = System.Text.Encoding.UTF8.GetString(data);
+                            Clipboard.SetText(text);
+                            ShowToastNotification("Text received", "Text copied to clipboard");
+                        }
+                    });
+                }
+            }
+
+            // Refresh queue after receiving
+            Dispatcher.Invoke(() => _ = RefreshQueueAsync());
+        }
+        catch
+        {
+            // Best effort
+        }
+    }
+
     // --- Helpers ---
 
     private static string FormatBytes(long bytes)
@@ -1159,12 +1364,15 @@ public partial class MainWindow : Window
             ClipboardPanel.Visibility = Visibility.Visible;
             RefreshClipboardPreview();
             StartQueuePolling();
+            _ = LoadDeviceListAsync();
+            StartSSE();
         }
         else
         {
             MainPanelPlaceholder.Visibility = Visibility.Visible;
             ClipboardPanel.Visibility = Visibility.Collapsed;
             StopQueuePolling();
+            StopSSE();
         }
     }
 

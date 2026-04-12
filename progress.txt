@@ -49,6 +49,9 @@
 - WPF history list built programmatically with DockPanel rows, Border.MouseLeftButtonUp for click-to-copy, Button.Tag for passing ClipId
 - Windows device config (device_id, device_name) persisted as JSON in %LOCALAPPDATA%\CopyEverywhere\config.json — not in Credential Manager (not a secret)
 - Windows device registration on save: best-effort POST /devices/register in SaveButton_Click, exceptions swallowed
+- Windows SendService is shared by FloatingBallWindow, MainWindow drops, and Ctrl+V — reads ConfigStore for device IDs
+- Windows SSE uses HttpClient with ResponseHeadersRead + StreamReader line loop; Timeout.InfiniteTimeSpan; exponential backoff 1s→30s cap
+- Windows target device persisted as target_device_id in config.json; ComboBox populated from GET /devices excluding self
 - GET /api/v1/clips/:id/raw is now an atomic consume: first caller wins, second gets 410 Gone; async goroutine cleans up files/DB after response
 - GET /api/v1/clips?device_id=XXX returns the queue view; GET /api/v1/clips/latest is deprecated (sends Deprecation header)
 - Device IDs are 8-char alphanumeric (vs 6-char for clip IDs); both use `generateRandomID(length)` in `db/db.go`
@@ -546,4 +549,24 @@
   - ConsumeClipToFileAsync uses HttpCompletionOption.ResponseHeadersRead + CopyToAsync for streaming large files to disk
   - Image clips received to clipboard: create BitmapImage from MemoryStream with CacheOption.OnLoad, then Clipboard.SetImage
   - Microsoft.Data.Sqlite NuGet removed along with HistoryStore — no more SQLite dependency on Windows client
+---
+
+## 2026-04-12 - US-034
+- What was implemented: Windows target-device selector and SSE auto-receive — ComboBox populated from GET /devices (excluding self), all sends include target_device_id via SendService, background SSE reader with exponential backoff reconnect, auto-receive text/image to Clipboard and files to Downloads with toast notifications
+- Files changed:
+  - `windows/CopyEverywhere/Services/ApiClient.cs` — Added GetDevicesAsync, DeviceInfo model, SSEClipEvent model; added sender/target device ID params to SendTextClipAsync, SendFileAsync, InitChunkedUploadAsync
+  - `windows/CopyEverywhere/Services/SendService.cs` — Now takes ConfigStore; reads DeviceId/TargetDeviceId and passes them to all API calls
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` — Added TargetDeviceId property, persisted in config.json
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added Target Device ComboBox
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added TargetDeviceComboBox_SelectionChanged, LoadDeviceListAsync, StartSSE/StopSSE, SSELoopAsync with exponential backoff, HandleSSEClipEvent
+  - `windows/CopyEverywhere/App.xaml.cs` — SendService now takes ConfigStore
+  - `CLAUDE.md` — Added Windows SSE, SendService, FloatingBallWindow patterns
+  - `prd.json` — Marked US-034 passes: true
+- **Learnings for future iterations:**
+  - SSE on Windows uses HttpClient with HttpCompletionOption.ResponseHeadersRead + StreamReader line loop — no third-party library needed
+  - Set HttpClient.Timeout to Timeout.InfiniteTimeSpan for long-lived SSE connections
+  - SSE reconnect loop uses Task.Delay with exponential backoff (1s → 2s → 4s → 30s cap); reset backoff on successful connection
+  - SSE event parsing: same pattern as macOS — empty line = event boundary, accumulate event:/data: lines
+  - Dispatcher.Invoke required when touching Clipboard or UI from the SSE background task
+  - Device list refreshed after registration and on UpdateMainPanelState
 ---

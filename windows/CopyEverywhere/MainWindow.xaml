@@ -126,6 +126,13 @@
                 </Border>
             </StackPanel>
 
+            <!-- Target Device Selector -->
+            <TextBlock Text="Target Device" Style="{StaticResource FieldLabel}"/>
+            <ComboBox x:Name="TargetDeviceComboBox"
+                      Margin="0,0,0,12"
+                      Padding="6,4"
+                      SelectionChanged="TargetDeviceComboBox_SelectionChanged"/>
+
             <!-- Floating Ball Toggle -->
             <CheckBox x:Name="FloatingBallCheckBox"
                       Content="Show floating drop target"
