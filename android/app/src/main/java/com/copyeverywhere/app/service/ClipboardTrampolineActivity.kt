@@ -94,6 +94,9 @@ class ClipboardTrampolineActivity : ComponentActivity() {
                 Log.e(TAG, "Failed to send clipboard", e)
                 val msg = "Send failed: ${e.message}"
                 Toast.makeText(this@ClipboardTrampolineActivity, msg, Toast.LENGTH_SHORT).show()
+                CopyEverywhereService.showTransferNotificationStatic(
+                    this@ClipboardTrampolineActivity, "Send failed", e.message ?: "Unknown error"
+                )
                 updateServiceNotification(msg)
 
                 kotlinx.coroutines.delay(3000)

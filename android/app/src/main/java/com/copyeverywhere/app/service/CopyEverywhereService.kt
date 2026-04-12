@@ -294,22 +294,6 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     private fun handleFileClip(filename: String, contentType: String, bytes: ByteArray) {
         val savedUri = saveToDownloads(filename, contentType, bytes)
 
-        val shareIntent = if (savedUri != null) {
-            Intent(Intent.ACTION_SEND).apply {
-                type = contentType
-                putExtra(Intent.EXTRA_STREAM, savedUri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-        } else null
-
-        val pendingShare = if (shareIntent != null) {
-            val chooser = Intent.createChooser(shareIntent, "Share $filename")
-            PendingIntent.getActivity(
-                this, filename.hashCode(), chooser,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        } else null
-
         val builder = NotificationCompat.Builder(this, CHANNEL_TRANSFERS)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle("File received")
@@ -317,7 +301,30 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
 
-        if (pendingShare != null) {
+        if (savedUri != null) {
+            // Open action — tapping the notification opens the file
+            val openIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(savedUri, contentType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val pendingOpen = PendingIntent.getActivity(
+                this, filename.hashCode(), openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.setContentIntent(pendingOpen)
+            builder.addAction(0, "Open", pendingOpen)
+
+            // Share action
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = contentType
+                putExtra(Intent.EXTRA_STREAM, savedUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(shareIntent, "Share $filename")
+            val pendingShare = PendingIntent.getActivity(
+                this, filename.hashCode() + 1, chooser,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
             builder.addAction(0, "Share", pendingShare)
         }
 
@@ -347,22 +354,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     }
 
     private fun showTransferNotification(title: String, text: String) {
-        val notification = NotificationCompat.Builder(this, CHANNEL_TRANSFERS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
-
-        try {
-            NotificationManagerCompat.from(this).notify(
-                System.currentTimeMillis().toInt(),
-                notification
-            )
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Cannot post notification — permission not granted", e)
-        }
+        showTransferNotificationStatic(this, title, text)
     }
 
     companion object {
@@ -414,5 +406,30 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
                 .setSilent(true)
                 .build()
         }
+
+        /**
+         * Post a transfer notification (send success, send error, receive error).
+         * Exposed as static so activities and view models can post transfer
+         * notifications without a service reference.
+         */
+        fun showTransferNotificationStatic(context: Context, title: String, text: String) {
+            val notification = NotificationCompat.Builder(context, CHANNEL_TRANSFERS)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build()
+
+            try {
+                NotificationManagerCompat.from(context).notify(
+                    System.currentTimeMillis().toInt(),
+                    notification
+                )
+            } catch (e: SecurityException) {
+                Log.w(TAG, "Cannot post notification — permission not granted", e)
+            }
+        }
     }
+
 }

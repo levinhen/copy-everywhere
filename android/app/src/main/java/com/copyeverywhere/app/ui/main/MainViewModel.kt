@@ -85,6 +85,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
                     if (session == null || !session.isHandshakeComplete) {
                         _sendStatus.value = SendStatus.Error("No Bluetooth device connected")
+                        showErrorNotification("No Bluetooth device connected")
                         delay(3000)
                         _sendStatus.value = SendStatus.Idle
                         return@launch
@@ -99,10 +100,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _textInput.value = ""
                 _sendStatus.value = SendStatus.Success
+                Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
                 delay(2000)
                 _sendStatus.value = SendStatus.Idle
             } catch (e: Exception) {
                 _sendStatus.value = SendStatus.Error(e.message ?: "Send failed")
+                showErrorNotification(e.message ?: "Send failed")
                 delay(3000)
                 _sendStatus.value = SendStatus.Idle
             }
@@ -131,6 +134,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
         if (session == null || !session.isHandshakeComplete) {
             _sendStatus.value = SendStatus.Error("No Bluetooth device connected")
+            showErrorNotification("No Bluetooth device connected")
             delay(3000)
             _sendStatus.value = SendStatus.Idle
             return
@@ -157,11 +161,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uploadProgress.value = null
             _sendStatus.value = SendStatus.Success
+            Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
             _uploadProgress.value = null
             _sendStatus.value = SendStatus.Error(e.message ?: "Bluetooth send failed")
+            showErrorNotification(e.message ?: "Bluetooth send failed")
             delay(3000)
             _sendStatus.value = SendStatus.Idle
         }
@@ -177,10 +183,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val target = targetDeviceId.value
             apiClient.sendFileClip(host, token, contentResolver, uri, sender, target)
             _sendStatus.value = SendStatus.Success
+            Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
             _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
+            showErrorNotification(e.message ?: "Upload failed")
             delay(3000)
             _sendStatus.value = SendStatus.Idle
         }
@@ -219,6 +227,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     chunkedUploadState = null
                     chunkedUploadUri = null
                     _sendStatus.value = SendStatus.Success
+                    Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
                     delay(2000)
                     _sendStatus.value = SendStatus.Idle
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -229,6 +238,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     chunkedUploadState = null
                     chunkedUploadUri = null
                     _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
+                    showErrorNotification(e.message ?: "Upload failed")
                     delay(3000)
                     _sendStatus.value = SendStatus.Idle
                 }
@@ -236,6 +246,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } catch (e: Exception) {
             _uploadProgress.value = null
             _sendStatus.value = SendStatus.Error(e.message ?: "Upload init failed")
+            showErrorNotification(e.message ?: "Upload init failed")
             delay(3000)
             _sendStatus.value = SendStatus.Idle
         }
@@ -270,6 +281,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chunkedUploadState = null
                         chunkedUploadUri = null
                         _sendStatus.value = SendStatus.Success
+                        Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
                         delay(2000)
                         _sendStatus.value = SendStatus.Idle
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -279,12 +291,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chunkedUploadState = null
                         chunkedUploadUri = null
                         _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
+                        showErrorNotification(e.message ?: "Upload failed")
                         delay(3000)
                         _sendStatus.value = SendStatus.Idle
                     }
                 }
             } catch (e: Exception) {
                 _sendStatus.value = SendStatus.Error(e.message ?: "Resume failed")
+                showErrorNotification(e.message ?: "Resume failed")
             }
         }
     }
@@ -367,10 +381,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 Toast.makeText(getApplication(), "Already consumed", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 _receiveStatus.value = ReceiveStatus.Error(e.message ?: "Receive failed")
+                showErrorNotification(e.message ?: "Receive failed")
                 delay(3000)
                 _receiveStatus.value = ReceiveStatus.Idle
             }
         }
+    }
+
+    private fun showErrorNotification(message: String) {
+        CopyEverywhereService.showTransferNotificationStatic(
+            getApplication(), "Transfer error", message
+        )
     }
 
     private fun saveToDownloads(filename: String, mimeType: String, bytes: ByteArray) {
