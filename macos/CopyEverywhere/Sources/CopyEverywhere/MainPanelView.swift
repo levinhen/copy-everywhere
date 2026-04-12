@@ -11,6 +11,7 @@ struct MainPanelView: View {
     @State private var queueRefreshTimer: Timer?
 
     var body: some View {
+        ScrollView(.vertical, showsIndicators: true) {
         VStack(spacing: 12) {
             // Toast banner for ⌘V send feedback
             if let toast = configStore.toastMessage {
@@ -393,6 +394,7 @@ struct MainPanelView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding()
+        }
         .overlay(
             Group {
                 if isFullPanelDragTargeted {
