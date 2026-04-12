@@ -13,7 +13,7 @@ US-059: Main Activity — text input and file upload          [x]
 US-060: Share sheet integration                             [x]
 US-061: Transfer mode switch (LAN <-> Bluetooth)            [x]
 US-062: Bluetooth RFCOMM service and session protocol       [x]
-US-063: Bluetooth device scanning and pairing               [ ]
+US-063: Bluetooth device scanning and pairing               [x]
 US-064: Bluetooth auto-reconnect and RFCOMM server          [ ]
 US-065: Bluetooth send — text and files                     [ ]
 US-066: Bluetooth receive — text and files                  [ ]
@@ -54,6 +54,10 @@ US-068: Boot receiver and battery optimization              [ ]
 - `@SuppressLint("MissingPermission")` on BluetoothService — runtime permission checks done in UI layer
 - `CopyEverywhereService.bluetoothService` is the live instance; `startBluetoothServer()`/`stopBluetoothServer()` in `switchMode()`
 - Bluetooth permissions: `BLUETOOTH`+`BLUETOOTH_ADMIN` (maxSdkVersion 30), `BLUETOOTH_CONNECT`+`BLUETOOTH_SCAN` (API 31+)
+- Paired Bluetooth devices persisted in DataStore as JSON via Gson (`PairedBluetoothDevice` data class in ConfigStore)
+- `BluetoothAdapter.startDiscovery()` + `BroadcastReceiver(ACTION_FOUND)` for device scanning — register with `RECEIVER_EXPORTED` on API 33+
+- `Icons.AutoMirrored.Filled.BluetoothSearching` (not `Icons.Default.BluetoothSearching` — deprecated)
+- `BluetoothService.listener` shared between ConfigViewModel and Service — null in `onCleared()` to avoid leaks
 
 ---
 
@@ -301,4 +305,28 @@ US-068: Boot receiver and battery optimization              [ ]
   - `@SuppressLint("MissingPermission")` on BluetoothService methods — actual permission checks belong in the UI layer (US-063)
   - RFCOMM server socket must be closed to break the `accept()` loop on shutdown
   - `BluetoothSocket.inputStream` is blocking — wrap in `BufferedInputStream` for efficient `readLine()` implementation
+---
+
+## 2026-04-12 - US-063
+- Implemented Bluetooth device scanning using BluetoothAdapter.startDiscovery() + BroadcastReceiver for ACTION_FOUND
+- Discovered devices shown in a list on the Bluetooth config section; tapping a device initiates RFCOMM connection
+- Paired devices persisted in DataStore as JSON list (PairedBluetoothDevice with name + address)
+- Paired device list with Connect / Disconnect / Forget actions
+- Connection status indicator: colored dot (green=connected, yellow=connecting, gray=disconnected) in status card + per-device
+- Runtime permission requests for BLUETOOTH_CONNECT + BLUETOOTH_SCAN (Android 12+) via ActivityResultContracts.RequestMultiplePermissions
+- Added neverForLocation flag to BLUETOOTH_SCAN permission in manifest
+- BluetoothService.Listener wired in ConfigViewModel for real-time connection status updates
+- Files modified:
+  - `android/app/src/main/java/com/copyeverywhere/app/data/ConfigStore.kt` — PairedBluetoothDevice model, paired devices flow, add/remove/lastConnected persistence
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt` — BluetoothConnectionStatus enum, scan/connect/disconnect/forget logic, BroadcastReceiver management
+  - `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt` — BluetoothStatusCard, PairedDeviceCard, discovered devices list, scan button, permission launcher
+  - `android/app/src/main/AndroidManifest.xml` — neverForLocation on BLUETOOTH_SCAN
+- **Learnings for future iterations:**
+  - `BluetoothAdapter.startDiscovery()` requires BLUETOOTH_SCAN permission on Android 12+ — request via `ActivityResultContracts.RequestMultiplePermissions`
+  - `BluetoothDevice.ACTION_FOUND` BroadcastReceiver: on API 33+ use typed `getParcelableExtra(key, Class)`, pre-33 use deprecated version with `@Suppress`
+  - `Icons.Default.BluetoothSearching` is deprecated — use `Icons.AutoMirrored.Filled.BluetoothSearching`
+  - `registerReceiver()` on API 33+ requires `Context.RECEIVER_EXPORTED` flag for broadcast receivers listening to system broadcasts
+  - `BluetoothService.listener` is shared between ViewModel and Service — restore/null it in `onCleared()` to avoid leaks
+  - `neverForLocation` on `BLUETOOTH_SCAN` avoids requiring ACCESS_FINE_LOCATION for device discovery
+  - `BluetoothDevice.name` can throw SecurityException without BLUETOOTH_CONNECT permission — catch and skip unnamed devices
 ---

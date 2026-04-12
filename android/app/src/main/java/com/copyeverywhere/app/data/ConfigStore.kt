@@ -9,8 +9,15 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+
+data class PairedBluetoothDevice(
+    val name: String,
+    val address: String
+)
 
 enum class TransferMode {
     LanServer,
@@ -27,7 +34,11 @@ class ConfigStore(private val context: Context) {
         val DEVICE_ID = stringPreferencesKey("device_id")
         val TARGET_DEVICE_ID = stringPreferencesKey("target_device_id")
         val TRANSFER_MODE = stringPreferencesKey("transfer_mode")
+        val PAIRED_BLUETOOTH_DEVICES = stringPreferencesKey("paired_bluetooth_devices")
+        val LAST_CONNECTED_BT_ADDRESS = stringPreferencesKey("last_connected_bt_address")
     }
+
+    private val gson = Gson()
 
     private val encryptedPrefs: SharedPreferences by lazy {
         val masterKey = MasterKey.Builder(context)
@@ -71,6 +82,54 @@ class ConfigStore(private val context: Context) {
 
     suspend fun setTransferMode(mode: TransferMode) {
         context.dataStore.edit { it[Keys.TRANSFER_MODE] = mode.name }
+    }
+
+    val pairedBluetoothDevices: Flow<List<PairedBluetoothDevice>> = context.dataStore.data.map {
+        val json = it[Keys.PAIRED_BLUETOOTH_DEVICES] ?: "[]"
+        try {
+            val type = object : TypeToken<List<PairedBluetoothDevice>>() {}.type
+            gson.fromJson<List<PairedBluetoothDevice>>(json, type) ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    val lastConnectedBtAddress: Flow<String> = context.dataStore.data.map {
+        it[Keys.LAST_CONNECTED_BT_ADDRESS] ?: ""
+    }
+
+    suspend fun addPairedDevice(device: PairedBluetoothDevice) {
+        context.dataStore.edit { prefs ->
+            val json = prefs[Keys.PAIRED_BLUETOOTH_DEVICES] ?: "[]"
+            val type = object : TypeToken<MutableList<PairedBluetoothDevice>>() {}.type
+            val list: MutableList<PairedBluetoothDevice> = try {
+                gson.fromJson(json, type) ?: mutableListOf()
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            // Replace existing by address or add new
+            list.removeAll { it.address == device.address }
+            list.add(device)
+            prefs[Keys.PAIRED_BLUETOOTH_DEVICES] = gson.toJson(list)
+        }
+    }
+
+    suspend fun removePairedDevice(address: String) {
+        context.dataStore.edit { prefs ->
+            val json = prefs[Keys.PAIRED_BLUETOOTH_DEVICES] ?: "[]"
+            val type = object : TypeToken<MutableList<PairedBluetoothDevice>>() {}.type
+            val list: MutableList<PairedBluetoothDevice> = try {
+                gson.fromJson(json, type) ?: mutableListOf()
+            } catch (_: Exception) {
+                mutableListOf()
+            }
+            list.removeAll { it.address == address }
+            prefs[Keys.PAIRED_BLUETOOTH_DEVICES] = gson.toJson(list)
+        }
+    }
+
+    suspend fun setLastConnectedBtAddress(address: String) {
+        context.dataStore.edit { it[Keys.LAST_CONNECTED_BT_ADDRESS] = address }
     }
 
     fun getAccessToken(): String {

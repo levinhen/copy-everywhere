@@ -177,6 +177,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **RFCOMM Service UUID** is `CE000001-1000-1000-8000-00805F9B34FB` — defined in `BluetoothProtocol.SERVICE_UUID`. Must match macOS `kCopyEverywhereServiceUUID` and Windows `BluetoothService.CopyEverywhereServiceUuid` exactly.
 - **Bluetooth permissions (Android 12+).** `BLUETOOTH` + `BLUETOOTH_ADMIN` (maxSdkVersion 30) for pre-12, `BLUETOOTH_CONNECT` + `BLUETOOTH_SCAN` for 12+. Runtime permissions requested in US-063.
 - **`@SuppressLint("MissingPermission")`** on `BluetoothService` methods that use Bluetooth APIs. Actual runtime permission checks happen in the UI layer (US-063).
+- **Bluetooth device scanning.** `ConfigViewModel` manages `BluetoothAdapter.startDiscovery()` + `BroadcastReceiver(ACTION_FOUND)`. On API 33+ register with `Context.RECEIVER_EXPORTED`. `BluetoothDevice.name` can throw `SecurityException` — catch and skip unnamed devices. Stop scanning in `onCleared()`.
+- **Paired device persistence.** `PairedBluetoothDevice(name, address)` stored as JSON list in DataStore via Gson. `ConfigStore.addPairedDevice()`/`removePairedDevice()` manage the list. `lastConnectedBtAddress` tracks the most recently connected device for auto-reconnect (US-064).
+- **`BluetoothService.listener` ownership.** `ConfigViewModel` sets itself as listener in `init` and nulls it in `onCleared()`. When ViewModel is not active, the service listener may be null — future stories (US-064+) should set the listener on the service side too.
+- **Bluetooth runtime permissions (Android 12+).** `BLUETOOTH_CONNECT` + `BLUETOOTH_SCAN` requested via `ActivityResultContracts.RequestMultiplePermissions` in ConfigScreen before scanning. `BLUETOOTH_SCAN` has `neverForLocation` flag to avoid location permission requirement.
 
 **Cross-platform:**
 
