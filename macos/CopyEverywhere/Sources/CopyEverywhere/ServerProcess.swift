@@ -80,9 +80,13 @@ final class ServerProcess: ObservableObject {
 
     func restart() {
         stop()
-        // Wait briefly for the process to exit, then start again
+        // Wait for the process to actually exit before starting again,
+        // so the old mDNS registration is fully deregistered first.
         Task {
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+            for _ in 0..<50 {
+                if !isRunning { break }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
+            }
             start()
         }
     }
