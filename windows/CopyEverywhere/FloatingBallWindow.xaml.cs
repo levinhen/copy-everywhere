@@ -84,9 +84,12 @@ public partial class FloatingBallWindow : Window
     {
         BallEllipse.Fill = new SolidColorBrush(Color.FromRgb(59, 130, 246)); // restore blue
 
-        if (!_configStore.IsConfigured)
+        if (!_configStore.IsSendReady)
         {
-            SendService.ShowToast("Not Configured", "Please configure the server connection first.");
+            SendService.ShowToast("Not Configured",
+                _configStore.TransferMode == Services.TransferMode.Bluetooth
+                    ? "Bluetooth is not connected"
+                    : "Please configure the server connection first.");
             return;
         }
 

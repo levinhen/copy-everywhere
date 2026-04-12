@@ -335,53 +335,119 @@ struct MainPanelView: View {
                     }
                 }
 
+                // Bluetooth receive progress
+                if configStore.bluetoothReceiveProgress > 0, let filename = configStore.bluetoothReceiveFilename {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundColor(.blue)
+                            Text("Receiving via Bluetooth")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        Text(filename)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        ProgressView(value: configStore.bluetoothReceiveProgress)
+                        Text("\(Int(configStore.bluetoothReceiveProgress * 100))%")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(8)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(6)
+                }
+
                 Divider()
 
-                // Server queue section
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Queue")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Button(action: {
-                            Task { await configStore.fetchQueue() }
-                        }) {
-                            Image(systemName: "arrow.clockwise")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    if let error = configStore.queueError {
+                if configStore.transferMode == .bluetooth {
+                    // Bluetooth status section
+                    VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundColor(.orange)
-                            Text(error)
-                                .foregroundColor(.orange)
+                            Text("Bluetooth")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
                         }
-                        .font(.caption)
-                        .padding(8)
-                        .background(Color.orange.opacity(0.1))
-                        .cornerRadius(6)
-                    }
 
-                    if configStore.queueItems.isEmpty && configStore.queueError == nil {
-                        Text("Queue is empty \u{2014} copy something and click the icon.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .italic()
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(8)
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 4) {
-                                ForEach(configStore.queueItems) { item in
-                                    queueRow(item)
-                                }
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(bluetoothStatusColor(configStore.bluetoothConnectionStatus))
+                                .frame(width: 8, height: 8)
+                            Text(bluetoothStatusText(configStore.bluetoothConnectionStatus))
+                                .font(.caption)
+                            Spacer()
+                        }
+                        .padding(8)
+                        .background(bluetoothStatusColor(configStore.bluetoothConnectionStatus).opacity(0.1))
+                        .cornerRadius(6)
+
+                        if let name = configStore.bluetoothConnectedDeviceName {
+                            HStack(spacing: 6) {
+                                Image(systemName: "link")
+                                    .foregroundColor(.blue)
+                                Text("Connected to \(name)")
+                                    .font(.caption)
                             }
                         }
-                        .frame(maxHeight: 200)
+
+                        if !configStore.isSendReady {
+                            Text("Pair a device in Settings to send and receive.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .italic()
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(8)
+                        }
+                    }
+                } else {
+                    // Server queue section
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Queue")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button(action: {
+                                Task { await configStore.fetchQueue() }
+                            }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if let error = configStore.queueError {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                                Text(error)
+                                    .foregroundColor(.orange)
+                            }
+                            .font(.caption)
+                            .padding(8)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(6)
+                        }
+
+                        if configStore.queueItems.isEmpty && configStore.queueError == nil {
+                            Text("Queue is empty \u{2014} copy something and click the icon.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .italic()
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(8)
+                        } else {
+                            ScrollView {
+                                LazyVStack(spacing: 4) {
+                                    ForEach(configStore.queueItems) { item in
+                                        queueRow(item)
+                                    }
+                                }
+                            }
+                            .frame(maxHeight: 200)
+                        }
                     }
                 }
             }
@@ -424,8 +490,10 @@ struct MainPanelView: View {
         }
         .onAppear {
             refreshClipboard()
-            Task { await configStore.fetchQueue() }
-            startQueueRefresh()
+            if configStore.transferMode == .lanServer {
+                Task { await configStore.fetchQueue() }
+                startQueueRefresh()
+            }
         }
         .onDisappear {
             stopQueueRefresh()
@@ -471,6 +539,24 @@ struct MainPanelView: View {
             Task {
                 await configStore.sendFile(url: url)
             }
+        }
+    }
+
+    private func bluetoothStatusColor(_ status: ConfigStore.BluetoothConnectionStatus) -> Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .disconnected: return .gray
+        case .error: return .red
+        }
+    }
+
+    private func bluetoothStatusText(_ status: ConfigStore.BluetoothConnectionStatus) -> String {
+        switch status {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting…"
+        case .disconnected: return "Disconnected"
+        case .error(let msg): return "Error: \(msg)"
         }
     }
 

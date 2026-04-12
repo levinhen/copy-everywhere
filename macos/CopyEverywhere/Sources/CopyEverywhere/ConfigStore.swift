@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import IOBluetooth
+import Network
 import Security
 import UserNotifications
 
@@ -48,6 +50,13 @@ struct QueueItem: Identifiable, Equatable {
     }
 }
 
+// MARK: - Transfer Mode
+
+enum TransferMode: String, CaseIterable {
+    case lanServer = "LAN Server"
+    case bluetooth = "Bluetooth Direct"
+}
+
 @MainActor
 final class ConfigStore: ObservableObject {
     @Published var hostURL: String = ""
@@ -69,6 +78,37 @@ final class ConfigStore: ObservableObject {
     @Published var queueError: String? = nil
     @Published var availableDevices: [DeviceInfo] = []
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
+    @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
+
+    // Bluetooth state
+    @Published var transferMode: TransferMode = .lanServer
+    @Published var pairedDevices: [PairedBluetoothDevice] = []
+    @Published var bluetoothConnectionStatus: BluetoothConnectionStatus = .disconnected
+    @Published var bluetoothConnectedDeviceName: String?
+    @Published var bluetoothReceiveProgress: Double = 0
+    @Published var bluetoothReceiveFilename: String?
+
+    let bonjourBrowser = BonjourBrowser()
+    let bluetoothDiscovery = BluetoothDiscovery()
+    let bluetoothService = BluetoothService()
+
+    /// Whether the app is ready to send content (LAN configured or Bluetooth connected).
+    var isSendReady: Bool {
+        switch transferMode {
+        case .lanServer:
+            return isConfigured
+        case .bluetooth:
+            return bluetoothConnectionStatus == .connected
+                && bluetoothService.activeSession?.isHandshakeComplete == true
+        }
+    }
+
+    enum BluetoothConnectionStatus: Equatable {
+        case disconnected
+        case connecting
+        case connected
+        case error(String)
+    }
 
     // SSE state
     private var sseTask: Task<Void, Never>?
@@ -137,18 +177,153 @@ final class ConfigStore: ObservableObject {
         case error(String)
     }
 
+    private let pairedDevicesKey = "com.copyeverywhere.pairedBluetoothDevices"
+    private let transferModeKey = "com.copyeverywhere.transferMode"
+
     init() {
         loadFromKeychain()
         deviceID = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceID") ?? ""
         deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
+        loadPairedDevices()
+        loadTransferMode()
+        bonjourBrowser.startBrowsing()
+        bluetoothService.delegate = self
     }
+
+    func selectDiscoveredServer(_ server: DiscoveredServer) {
+        hostURL = "http://\(server.host):\(server.port)"
+        serverAuthRequired = server.authRequired
+        if !server.authRequired {
+            accessToken = ""
+        }
+    }
+
+    // MARK: - Bluetooth Pairing & Connection
+
+    /// Pair with a discovered Bluetooth device. Triggers system pairing dialog if needed.
+    func pairBluetoothDevice(_ discovered: DiscoveredBluetoothDevice) {
+        bluetoothConnectionStatus = .connecting
+
+        let device = discovered.device
+
+        // IOBluetoothDevice.openConnection triggers system-level pairing if not already paired
+        let pairHelper = BluetoothPairHelper(configStore: self, device: device, discoveredDevice: discovered)
+        currentPairHelper = pairHelper
+        pairHelper.startPairing()
+    }
+
+    /// Called after system pairing + RFCOMM connection + handshake succeeds.
+    fileprivate func bluetoothPairingSucceeded(device: IOBluetoothDevice, discovered: DiscoveredBluetoothDevice) {
+        let paired = PairedBluetoothDevice(
+            id: discovered.id,
+            name: discovered.name,
+            address: discovered.address
+        )
+        if !pairedDevices.contains(where: { $0.id == paired.id }) {
+            pairedDevices.append(paired)
+            savePairedDevices()
+        }
+        bluetoothConnectionStatus = .connected
+        bluetoothConnectedDeviceName = discovered.name
+    }
+
+    /// Disconnect from the active Bluetooth session.
+    func disconnectBluetooth() {
+        bluetoothService.disconnectSession()
+        bluetoothConnectionStatus = .disconnected
+        bluetoothConnectedDeviceName = nil
+    }
+
+    /// Forget a paired device (remove from saved list and disconnect if active).
+    func forgetBluetoothDevice(_ device: PairedBluetoothDevice) {
+        if bluetoothConnectedDeviceName == device.name {
+            disconnectBluetooth()
+        }
+        pairedDevices.removeAll { $0.id == device.id }
+        savePairedDevices()
+    }
+
+    /// Reconnect to a previously paired device.
+    func reconnectBluetoothDevice(_ paired: PairedBluetoothDevice) {
+        guard let device = IOBluetoothDevice(addressString: paired.address) else {
+            bluetoothConnectionStatus = .error("Could not find device: \(paired.name)")
+            return
+        }
+        bluetoothConnectionStatus = .connecting
+        bluetoothService.connect(to: device)
+    }
+
+    /// Auto-reconnect to the first paired device on launch (if in Bluetooth mode).
+    func autoReconnectBluetooth() {
+        guard transferMode == .bluetooth else { return }
+        // Always start RFCOMM server in Bluetooth mode so we can receive inbound connections
+        startBluetoothServerIfNeeded()
+        guard !pairedDevices.isEmpty else { return }
+        guard case .disconnected = bluetoothConnectionStatus else { return }
+        reconnectBluetoothDevice(pairedDevices[0])
+    }
+
+    // MARK: - Bluetooth Persistence
+
+    private func savePairedDevices() {
+        if let data = try? JSONEncoder().encode(pairedDevices) {
+            UserDefaults.standard.set(data, forKey: pairedDevicesKey)
+        }
+    }
+
+    private func loadPairedDevices() {
+        guard let data = UserDefaults.standard.data(forKey: pairedDevicesKey),
+              let devices = try? JSONDecoder().decode([PairedBluetoothDevice].self, from: data) else { return }
+        pairedDevices = devices
+    }
+
+    private func saveTransferMode() {
+        UserDefaults.standard.set(transferMode.rawValue, forKey: transferModeKey)
+    }
+
+    private func loadTransferMode() {
+        if let raw = UserDefaults.standard.string(forKey: transferModeKey),
+           let mode = TransferMode(rawValue: raw) {
+            transferMode = mode
+        }
+    }
+
+    func setTransferMode(_ mode: TransferMode) {
+        transferMode = mode
+        saveTransferMode()
+
+        if mode == .bluetooth {
+            // Stop LAN services, start Bluetooth
+            stopSSE()
+            startBluetoothServerIfNeeded()
+        } else {
+            // Stop Bluetooth, restart LAN services
+            bluetoothService.stopServer()
+            startSSE()
+            // Resume queue polling if panel is open
+            Task { await fetchQueue() }
+        }
+    }
+
+    /// Start the RFCOMM server so this device can accept inbound Bluetooth connections.
+    private func startBluetoothServerIfNeeded() {
+        guard !bluetoothService.isServerRunning else { return }
+        do {
+            try bluetoothService.startServer()
+        } catch {
+            print("Failed to start Bluetooth RFCOMM server: \(error)")
+        }
+    }
+
+    /// Helper retained during pairing flow.
+    fileprivate var currentPairHelper: BluetoothPairHelper?
 
     // MARK: - Keychain Operations
 
     func save() {
         saveToKeychain(account: hostKey, value: hostURL)
         saveToKeychain(account: tokenKey, value: accessToken)
-        isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
+        isConfigured = !hostURL.isEmpty
         if isConfigured {
             Task {
                 await registerDevice()
@@ -170,7 +345,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         request.timeoutInterval = 15
@@ -202,7 +377,13 @@ final class ConfigStore: ObservableObject {
     private func loadFromKeychain() {
         hostURL = readFromKeychain(account: hostKey) ?? ""
         accessToken = readFromKeychain(account: tokenKey) ?? ""
-        isConfigured = !hostURL.isEmpty && !accessToken.isEmpty
+        isConfigured = !hostURL.isEmpty
+    }
+
+    private func setAuthHeader(_ request: inout URLRequest) {
+        if !accessToken.isEmpty {
+            setAuthHeader(&request)
+        }
     }
 
     private func saveToKeychain(account: String, value: String) {
@@ -265,13 +446,13 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         let start = Date()
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 connectionStatus = .error("Invalid response")
@@ -283,6 +464,11 @@ final class ConfigStore: ObservableObject {
             switch httpResponse.statusCode {
             case 200:
                 connectionStatus = .success(latencyMs: latencyMs)
+                // Read auth requirement from /health response
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let auth = json["auth"] as? Bool {
+                    serverAuthRequired = auth
+                }
             case 401:
                 connectionStatus = .error("Authentication failed (401) - check your access token")
             default:
@@ -304,6 +490,103 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // MARK: - Bluetooth Send
+
+    /// Send clipboard text via Bluetooth RFCOMM.
+    private func sendClipboardTextBluetooth() async {
+        guard let text = getClipboardText(), !text.isEmpty else {
+            sendStatus = .error("Clipboard is empty")
+            return
+        }
+        guard let session = bluetoothService.activeSession, session.isHandshakeComplete else {
+            sendStatus = .error("Bluetooth not connected")
+            return
+        }
+
+        sendStatus = .sending
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let progressStream = session.sendText(text) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    self.sendStatus = .error("Bluetooth send failed: \(error.localizedDescription)")
+                } else {
+                    self.sendStatus = .success(clipID: "BT", expiresAt: "N/A")
+                }
+                continuation.resume()
+            }
+            // Track progress on file upload progress (reuse existing UI)
+            Task {
+                for await progress in progressStream {
+                    self.fileUploadProgress = progress
+                }
+            }
+        }
+    }
+
+    /// Fire-and-forget text send via Bluetooth.
+    private func sendTextBluetooth(_ text: String) async -> (success: Bool, message: String) {
+        guard let session = bluetoothService.activeSession, session.isHandshakeComplete else {
+            return (false, "Bluetooth not connected")
+        }
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<(Bool, String), Never>) in
+            let _ = session.sendText(text) { error in
+                if let error {
+                    continuation.resume(returning: (false, "Bluetooth: \(error.localizedDescription)"))
+                } else {
+                    continuation.resume(returning: (true, "text (\(text.count) chars)"))
+                }
+            }
+        }
+    }
+
+    /// Send a file via Bluetooth RFCOMM with progress.
+    private func sendFileBluetooth(url fileURL: URL) async {
+        guard let session = bluetoothService.activeSession, session.isHandshakeComplete else {
+            fileUploadStatus = .error("Bluetooth not connected")
+            return
+        }
+
+        let filename = fileURL.lastPathComponent
+        fileUploadStatus = .uploading(filename: filename)
+        fileUploadProgress = 0
+        fileUploadSpeed = ""
+
+        let startTime = Date()
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let fileSize = attrs[.size] as? Int64 else {
+            fileUploadStatus = .error("Cannot read file")
+            return
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let progressStream = session.sendFile(url: fileURL) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    self.fileUploadStatus = .error("Bluetooth send failed: \(error.localizedDescription)")
+                } else {
+                    self.fileUploadProgress = 1.0
+                    self.fileUploadStatus = .success(
+                        clipID: "BT",
+                        filename: filename,
+                        fileSize: self.formatBytes(fileSize),
+                        expiresAt: "N/A"
+                    )
+                }
+                continuation.resume()
+            }
+            Task {
+                for await progress in progressStream {
+                    self.fileUploadProgress = progress
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    let bytesSent = Int64(Double(fileSize) * progress)
+                    let speed = elapsed > 0 ? Double(bytesSent) / elapsed : 0
+                    self.fileUploadSpeed = "\(self.formatBytes(Int64(speed)))/s"
+                }
+            }
+        }
+    }
+
     // MARK: - Clipboard Operations
 
     func getClipboardText() -> String? {
@@ -311,6 +594,11 @@ final class ConfigStore: ObservableObject {
     }
 
     func sendClipboardText() async {
+        if transferMode == .bluetooth {
+            await sendClipboardTextBluetooth()
+            return
+        }
+
         guard let text = getClipboardText(), !text.isEmpty else {
             sendStatus = .error("Clipboard is empty")
             return
@@ -329,7 +617,7 @@ final class ConfigStore: ObservableObject {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
@@ -411,6 +699,9 @@ final class ConfigStore: ObservableObject {
 
     /// Fire-and-forget text send for drag-and-drop (does not touch sendStatus).
     func sendText(_ text: String) async -> (success: Bool, message: String) {
+        if transferMode == .bluetooth {
+            return await sendTextBluetooth(text)
+        }
         guard isConfigured else { return (false, "Not configured") }
 
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -422,7 +713,7 @@ final class ConfigStore: ObservableObject {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
 
@@ -474,7 +765,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: metaURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -535,6 +826,11 @@ final class ConfigStore: ObservableObject {
     // MARK: - File Upload
 
     func sendFile(url fileURL: URL) async {
+        if transferMode == .bluetooth {
+            await sendFileBluetooth(url: fileURL)
+            return
+        }
+
         let filename = fileURL.lastPathComponent
 
         // Check file size
@@ -610,7 +906,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: uploadURL)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 300
 
@@ -713,7 +1009,7 @@ final class ConfigStore: ObservableObject {
 
         var initRequest = URLRequest(url: initURL)
         initRequest.httpMethod = "POST"
-        initRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&initRequest)
         initRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         initRequest.timeoutInterval = 30
 
@@ -793,7 +1089,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: statusURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -869,7 +1165,7 @@ final class ConfigStore: ObservableObject {
 
             var request = URLRequest(url: partURL)
             request.httpMethod = "PUT"
-            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+            setAuthHeader(&request)
             request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
             request.timeoutInterval = 120
             request.httpBody = chunkData
@@ -913,7 +1209,7 @@ final class ConfigStore: ObservableObject {
 
         var completeRequest = URLRequest(url: completeURL)
         completeRequest.httpMethod = "POST"
-        completeRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&completeRequest)
         completeRequest.timeoutInterval = 60
 
         do {
@@ -980,7 +1276,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: metaURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -1070,7 +1366,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 300
 
         let delegate = DownloadProgressDelegate()
@@ -1157,7 +1453,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -1213,7 +1509,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 60
 
         do {
@@ -1313,7 +1609,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 10
 
         do {
@@ -1381,7 +1677,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = .infinity
 
@@ -1432,7 +1728,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 60
 
         do {
@@ -1528,7 +1824,7 @@ final class ConfigStore: ObservableObject {
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        setAuthHeader(&request)
         request.timeoutInterval = 30
 
         do {
@@ -1580,6 +1876,161 @@ final class ConfigStore: ObservableObject {
             }
         } catch {
             receiveStatus = .error("Error: \(error.localizedDescription)")
+        }
+    }
+}
+
+// MARK: - BluetoothServiceDelegate
+
+extension ConfigStore: BluetoothServiceDelegate {
+
+    func bluetoothService(_ service: BluetoothService, didAcceptConnection channel: IOBluetoothRFCOMMChannel, from device: IOBluetoothDevice) {
+        bluetoothConnectionStatus = .connecting
+        bluetoothConnectedDeviceName = device.name
+    }
+
+    func bluetoothService(_ service: BluetoothService, didConnectTo channel: IOBluetoothRFCOMMChannel, device: IOBluetoothDevice) {
+        // Connection established, handshake in progress
+    }
+
+    func bluetoothService(_ service: BluetoothService, didFailWithError error: Error) {
+        bluetoothConnectionStatus = .error(error.localizedDescription)
+        currentPairHelper = nil
+    }
+
+    func bluetoothService(_ service: BluetoothService, sessionReady session: BluetoothSession, device: IOBluetoothDevice) {
+        bluetoothConnectionStatus = .connected
+        bluetoothConnectedDeviceName = device.name
+
+        // If this was a pairing flow, complete it
+        if let helper = currentPairHelper {
+            let discovered = helper.discoveredDevice
+            bluetoothPairingSucceeded(device: device, discovered: discovered)
+            currentPairHelper = nil
+        }
+    }
+
+    func bluetoothService(_ service: BluetoothService, sessionHandshakeFailed session: BluetoothSession, error: Error) {
+        bluetoothConnectionStatus = .error("Handshake failed: \(error.localizedDescription)")
+        currentPairHelper = nil
+    }
+
+    func bluetoothService(_ service: BluetoothService, receiveProgress progress: Double, header: BluetoothTransferHeader) {
+        bluetoothReceiveProgress = progress
+        bluetoothReceiveFilename = header.filename
+    }
+
+    func bluetoothService(_ service: BluetoothService, didReceive payload: BluetoothTransferPayload, from device: IOBluetoothDevice?) {
+        bluetoothReceiveProgress = 0
+        bluetoothReceiveFilename = nil
+        handleBluetoothReceive(payload: payload)
+    }
+
+    func bluetoothService(_ service: BluetoothService, didFailReceivingWithError error: Error) {
+        bluetoothReceiveProgress = 0
+        bluetoothReceiveFilename = nil
+        toastMessage = "Bluetooth receive failed: \(error.localizedDescription)"
+        dismissToastAfterDelay()
+        AppDelegate.sendNotification(body: "Bluetooth receive failed: \(error.localizedDescription)")
+    }
+
+    // MARK: - Bluetooth Receive Handling
+
+    private func handleBluetoothReceive(payload: BluetoothTransferPayload) {
+        switch payload.header.type {
+        case .text:
+            // Write received text to clipboard
+            if let text = String(data: payload.data, encoding: .utf8) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                toastMessage = "Received text (\(text.count) chars)"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Received text (\(text.count) chars)")
+            } else {
+                toastMessage = "Received invalid text data"
+                dismissToastAfterDelay()
+            }
+
+        case .file:
+            // Save received file to ~/Downloads
+            let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Downloads")
+            let filename = payload.header.filename
+            var destURL = downloadsURL.appendingPathComponent(filename)
+
+            // Avoid overwriting existing files
+            let fm = FileManager.default
+            if fm.fileExists(atPath: destURL.path) {
+                let base = destURL.deletingPathExtension().lastPathComponent
+                let ext = destURL.pathExtension
+                var counter = 1
+                repeat {
+                    let newName = ext.isEmpty ? "\(base) (\(counter))" : "\(base) (\(counter)).\(ext)"
+                    destURL = downloadsURL.appendingPathComponent(newName)
+                    counter += 1
+                } while fm.fileExists(atPath: destURL.path)
+            }
+
+            do {
+                try payload.data.write(to: destURL)
+                toastMessage = "Received \(destURL.lastPathComponent)"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Received \(destURL.lastPathComponent)")
+                NSWorkspace.shared.activateFileViewerSelecting([destURL])
+            } catch {
+                toastMessage = "Failed to save file: \(error.localizedDescription)"
+                dismissToastAfterDelay()
+                AppDelegate.sendNotification(body: "Failed to save received file")
+            }
+        }
+    }
+}
+
+// MARK: - Bluetooth Pair Helper
+
+/// Manages the system-level Bluetooth pairing flow + RFCOMM connection for a discovered device.
+class BluetoothPairHelper: NSObject {
+    private let configStore: ConfigStore
+    private let device: IOBluetoothDevice
+    let discoveredDevice: DiscoveredBluetoothDevice
+
+    init(configStore: ConfigStore, device: IOBluetoothDevice, discoveredDevice: DiscoveredBluetoothDevice) {
+        self.configStore = configStore
+        self.device = device
+        self.discoveredDevice = discoveredDevice
+    }
+
+    func startPairing() {
+        // If the device is already paired, skip straight to RFCOMM connection
+        if device.isPaired() {
+            connectRFCOMM()
+            return
+        }
+
+        // openConnection triggers the macOS system Bluetooth pairing dialog
+        let status = device.openConnection(self)
+        if status != kIOReturnSuccess {
+            Task { @MainActor in
+                self.configStore.bluetoothConnectionStatus = .error("Failed to initiate pairing (code: \(status))")
+                self.configStore.currentPairHelper = nil
+            }
+        }
+    }
+
+    @objc func connectionComplete(_ device: IOBluetoothDevice, status: IOReturn) {
+        if status == kIOReturnSuccess {
+            connectRFCOMM()
+        } else {
+            Task { @MainActor in
+                self.configStore.bluetoothConnectionStatus = .error("Pairing failed (code: \(status))")
+                self.configStore.currentPairHelper = nil
+            }
+        }
+    }
+
+    private func connectRFCOMM() {
+        Task { @MainActor in
+            self.configStore.bluetoothService.connect(to: self.device)
         }
     }
 }

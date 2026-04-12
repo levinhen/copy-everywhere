@@ -4,8 +4,10 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - ACCESS_TOKEN=${ACCESS_TOKEN:-changeme}
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - ACCESS_TOKEN=${ACCESS_TOKEN:-}
       - PORT=8080
+      - BIND_ADDRESS=${BIND_ADDRESS:-0.0.0.0}
       - STORAGE_PATH=/data
       - MAX_CLIP_SIZE_MB=${MAX_CLIP_SIZE_MB:-500}
       - TTL_HOURS=${TTL_HOURS:-1}

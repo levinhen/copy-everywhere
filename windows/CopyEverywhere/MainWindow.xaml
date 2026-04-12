@@ -73,17 +73,34 @@
             <!-- Server Configuration -->
             <TextBlock Text="Server Configuration" Style="{StaticResource SectionHeader}"/>
 
-            <TextBlock Text="Host URL" Style="{StaticResource FieldLabel}"/>
+            <!-- Discovered Servers -->
+            <TextBlock Text="Discovered Servers" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
+            <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
+                    MinHeight="40" MaxHeight="160">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="DiscoveredServersPanel">
+                        <TextBlock Text="Scanning for servers on LAN..."
+                                   Foreground="Gray"
+                                   FontSize="11"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,10,0,10"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <TextBlock Text="Host URL (manual)" Style="{StaticResource FieldLabel}"/>
             <TextBox x:Name="HostUrlTextBox"
                      Margin="0,0,0,12"
                      Padding="6,4"
                      Text="{Binding HostUrl, UpdateSourceTrigger=PropertyChanged}"/>
 
-            <TextBlock Text="Access Token" Style="{StaticResource FieldLabel}"/>
-            <PasswordBox x:Name="AccessTokenBox"
-                         Margin="0,0,0,16"
-                         Padding="6,4"
-                         PasswordChanged="AccessTokenBox_PasswordChanged"/>
+            <StackPanel x:Name="AccessTokenPanel">
+                <TextBlock x:Name="AccessTokenLabel" Text="Access Token" Style="{StaticResource FieldLabel}"/>
+                <PasswordBox x:Name="AccessTokenBox"
+                             Margin="0,0,0,16"
+                             Padding="6,4"
+                             PasswordChanged="AccessTokenBox_PasswordChanged"/>
+            </StackPanel>
 
             <!-- Buttons -->
             <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
@@ -142,6 +159,80 @@
                       Unchecked="FloatingBallCheckBox_Changed"/>
 
             <!-- Separator -->
+            <Separator Margin="0,4,0,16"/>
+
+            <!-- Transfer Mode -->
+            <TextBlock Text="Transfer Mode" Style="{StaticResource SectionHeader}"/>
+            <ComboBox x:Name="TransferModeComboBox"
+                      Margin="0,0,0,12"
+                      Padding="6,4"
+                      SelectionChanged="TransferModeComboBox_SelectionChanged">
+                <ComboBoxItem Content="LAN Server" Tag="LanServer"/>
+                <ComboBoxItem Content="Bluetooth Direct" Tag="Bluetooth"/>
+            </ComboBox>
+
+            <!-- Bluetooth Section (hidden by default) -->
+            <StackPanel x:Name="BluetoothSection" Visibility="Collapsed">
+                <!-- Connection Status -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock x:Name="BtStatusIcon" Text="&#x25CF;" FontSize="14" VerticalAlignment="Center"
+                               Foreground="Gray" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="BtStatusText" Text="Disconnected" FontSize="12" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Bluetooth Error -->
+                <Border x:Name="BtErrorBorder" Visibility="Collapsed" CornerRadius="4" Padding="10,8" Margin="0,0,0,8"
+                        Background="#FEE2E2">
+                    <TextBlock x:Name="BtErrorText" TextWrapping="Wrap" FontSize="12" Foreground="#B91C1C"/>
+                </Border>
+
+                <!-- Paired Devices -->
+                <TextBlock Text="Paired Devices" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
+                        MinHeight="40" MaxHeight="200">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="PairedDevicesPanel">
+                            <TextBlock x:Name="NoPairedDevicesText"
+                                       Text="No paired devices. Scan to find nearby devices."
+                                       Foreground="Gray" FontSize="11"
+                                       HorizontalAlignment="Center" Margin="0,10,0,10"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Scan Section -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock Text="Scan Nearby Devices" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <Button x:Name="BtScanButton" Content="Scan" Width="70" Height="26" FontSize="11"
+                            Click="BtScanButton_Click"/>
+                </StackPanel>
+
+                <!-- Scanning indicator -->
+                <StackPanel x:Name="BtScanningPanel" Orientation="Horizontal" Visibility="Collapsed" Margin="0,0,0,8">
+                    <TextBlock Text="Scanning for CopyEverywhere devices..." FontSize="11" Foreground="Gray"/>
+                </StackPanel>
+
+                <!-- Scan Error -->
+                <TextBlock x:Name="BtScanErrorText" Visibility="Collapsed" FontSize="11" Foreground="#B91C1C" Margin="0,0,0,8"/>
+
+                <!-- Discovered Devices -->
+                <Border x:Name="BtDiscoveredBorder" Visibility="Collapsed"
+                        BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
+                        MaxHeight="200">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="BtDiscoveredPanel"/>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Bluetooth Receive Progress -->
+                <StackPanel x:Name="BtReceiveProgressPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                    <ProgressBar x:Name="BtReceiveProgressBar" Height="20" Minimum="0" Maximum="100" Value="0"/>
+                    <TextBlock x:Name="BtReceiveProgressText" FontSize="11" Foreground="Gray" Margin="0,4,0,0"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Separator before main content -->
             <Separator Margin="0,4,0,16"/>
 
             <!-- Send Clipboard Section -->
@@ -311,19 +402,51 @@
 
                 <Separator Margin="0,4,0,16"/>
 
-                <!-- Server Queue Section -->
-                <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
+                <!-- Server Queue Section (LAN mode) -->
+                <StackPanel x:Name="LanQueueSection">
+                    <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
 
-                <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
-                    <StackPanel x:Name="QueueListPanel">
-                        <TextBlock x:Name="QueueEmptyText"
-                                   Text="Queue is empty — copy something and click the icon."
-                                   Foreground="Gray"
-                                   FontSize="12"
-                                   HorizontalAlignment="Center"
-                                   Margin="0,8,0,8"/>
-                    </StackPanel>
-                </ScrollViewer>
+                    <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
+                        <StackPanel x:Name="QueueListPanel">
+                            <TextBlock x:Name="QueueEmptyText"
+                                       Text="Queue is empty — copy something and click the icon."
+                                       Foreground="Gray"
+                                       FontSize="12"
+                                       HorizontalAlignment="Center"
+                                       Margin="0,8,0,8"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </StackPanel>
+
+                <!-- Bluetooth Status Section (BT mode) -->
+                <StackPanel x:Name="BtStatusSection" Visibility="Collapsed">
+                    <TextBlock Text="Bluetooth" Style="{StaticResource SectionHeader}"/>
+
+                    <Border x:Name="BtStatusBadge"
+                            Background="#F0F0F0"
+                            CornerRadius="4"
+                            Padding="8"
+                            Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="BtStatusDot" Width="8" Height="8" Fill="Gray" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="BtStatusLabel" Text="Disconnected" FontSize="12" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="BtConnectedDeviceText"
+                               FontSize="12"
+                               Foreground="#0066CC"
+                               Margin="0,0,0,8"
+                               Visibility="Collapsed"/>
+
+                    <TextBlock x:Name="BtPairHintText"
+                               Text="Pair a device in the Bluetooth section above to send and receive."
+                               Foreground="Gray"
+                               FontSize="12"
+                               HorizontalAlignment="Center"
+                               Margin="0,8,0,8"
+                               Visibility="Collapsed"/>
+                </StackPanel>
             </StackPanel>
 
             <!-- Not configured placeholder -->

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -9,6 +10,7 @@ using System.Windows.Media;
 using CopyEverywhere.Services;
 using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Win32;
+using Windows.Devices.Enumeration;
 
 namespace CopyEverywhere;
 
@@ -16,10 +18,25 @@ public partial class MainWindow : Window
 {
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
+    private readonly MdnsDiscoveryService _mdnsService;
+    private readonly BluetoothService _bluetoothService;
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
-    public SendService? SendService { get; set; }
+    public BluetoothService BluetoothService => _bluetoothService;
+    private SendService? _sendService;
+    public SendService? SendService
+    {
+        get => _sendService;
+        set
+        {
+            if (_sendService != null)
+                _sendService.BluetoothSendProgress -= OnBluetoothSendProgress;
+            _sendService = value;
+            if (_sendService != null)
+                _sendService.BluetoothSendProgress += OnBluetoothSendProgress;
+        }
+    }
 
     public event Action<bool>? FloatingBallVisibilityChanged;
 
@@ -42,12 +59,28 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _sseCts;
     private System.Threading.Tasks.Task? _sseTask;
 
+    // Bluetooth scan state
+    private bool _isScanning;
+    private List<DeviceInformation> _discoveredBtDevices = new();
+
     public MainWindow()
     {
         InitializeComponent();
 
         _configStore = new ConfigStore();
         _apiClient = new ApiClient(_configStore);
+        _mdnsService = new MdnsDiscoveryService();
+        _bluetoothService = new BluetoothService();
+
+        // Wire up Bluetooth events
+        _bluetoothService.SessionReady += OnBluetoothSessionReady;
+        _bluetoothService.SessionHandshakeFailed += OnBluetoothHandshakeFailed;
+        _bluetoothService.ConnectionFailed += OnBluetoothConnectionFailed;
+        _bluetoothService.Connected += OnBluetoothConnected;
+        _bluetoothService.ConnectionAccepted += OnBluetoothConnectionAccepted;
+        _bluetoothService.TransferReceived += OnBluetoothTransferReceived;
+        _bluetoothService.ReceiveProgress += OnBluetoothReceiveProgress;
+        _bluetoothService.ReceiveFailed += OnBluetoothReceiveFailed;
 
         DataContext = _configStore;
 
@@ -56,8 +89,14 @@ public partial class MainWindow : Window
 
         UpdateMainPanelState();
         UpdateDeviceInfoDisplay();
+        UpdateAccessTokenVisibility();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
+        InitializeTransferModeUI();
+
+        // Start mDNS discovery
+        _mdnsService.ServersChanged += OnDiscoveredServersChanged;
+        _mdnsService.StartBrowsing();
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -70,12 +109,6 @@ public partial class MainWindow : Window
         if (string.IsNullOrWhiteSpace(_configStore.HostUrl))
         {
             ShowStatus("Please enter a Host URL", isError: true);
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(_configStore.AccessToken))
-        {
-            ShowStatus("Please enter an Access Token", isError: true);
             return;
         }
 
@@ -135,7 +168,7 @@ public partial class MainWindow : Window
 
     private async void PasteCommand_Executed(object sender, System.Windows.Input.ExecutedRoutedEventArgs e)
     {
-        if (!_configStore.IsConfigured || SendService == null) return;
+        if (!_configStore.IsSendReady || SendService == null) return;
 
         e.Handled = true; // Prevent default paste into text inputs
 
@@ -222,7 +255,7 @@ public partial class MainWindow : Window
 
     private void Window_DragEnter(object sender, DragEventArgs e)
     {
-        if (!_configStore.IsConfigured) return;
+        if (!_configStore.IsSendReady) return;
         if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.UnicodeText) || e.Data.GetDataPresent(DataFormats.Text))
         {
             DropOverlay.Visibility = Visibility.Visible;
@@ -257,7 +290,7 @@ public partial class MainWindow : Window
     {
         DropOverlay.Visibility = Visibility.Collapsed;
 
-        if (!_configStore.IsConfigured || SendService == null) return;
+        if (!_configStore.IsSendReady || SendService == null) return;
 
         // Handle file drops
         if (e.Data.GetDataPresent(DataFormats.FileDrop))
@@ -314,6 +347,7 @@ public partial class MainWindow : Window
         {
             var result = await _apiClient.TestConnectionAsync();
             ShowStatus(result.Message, isError: !result.Success);
+            UpdateAccessTokenVisibility();
         }
         finally
         {
@@ -1085,8 +1119,11 @@ public partial class MainWindow : Window
                 var url = $"{baseUrl}/api/v1/devices/{_configStore.DeviceId}/stream";
 
                 using var client = new System.Net.Http.HttpClient { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _configStore.AccessToken);
+                if (!string.IsNullOrWhiteSpace(_configStore.AccessToken))
+                {
+                    client.DefaultRequestHeaders.Authorization =
+                        new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _configStore.AccessToken);
+                }
 
                 using var response = await client.GetAsync(url, System.Net.Http.HttpCompletionOption.ResponseHeadersRead, ct);
                 response.EnsureSuccessStatusCode();
@@ -1198,6 +1235,615 @@ public partial class MainWindow : Window
         {
             // Best effort
         }
+    }
+
+    // --- Bluetooth ---
+
+    private void InitializeTransferModeUI()
+    {
+        // Set combo box to current transfer mode
+        TransferModeComboBox.SelectedIndex = _configStore.TransferMode == TransferMode.Bluetooth ? 1 : 0;
+        UpdateBluetoothSectionVisibility();
+        RenderPairedDevices();
+
+        // Start RFCOMM server if already in Bluetooth mode (for receiving inbound connections)
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            StartBluetoothServerIfNeeded();
+        }
+    }
+
+    private void TransferModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (TransferModeComboBox.SelectedItem is not ComboBoxItem item) return;
+        var tag = item.Tag as string;
+
+        var newMode = tag == "Bluetooth" ? TransferMode.Bluetooth : TransferMode.LanServer;
+        if (newMode == _configStore.TransferMode) return;
+
+        _configStore.TransferMode = newMode;
+        _configStore.PersistConfig();
+        UpdateBluetoothSectionVisibility();
+
+        if (newMode == TransferMode.Bluetooth)
+        {
+            // Stop LAN services, start Bluetooth
+            StopSSE();
+            StopQueuePolling();
+            StartBluetoothServerIfNeeded();
+        }
+        else
+        {
+            // Stop Bluetooth, restart LAN services
+            _bluetoothService.StopServer();
+            if (_configStore.IsConfigured)
+            {
+                StartSSE();
+                StartQueuePolling();
+                _ = RefreshQueueAsync();
+            }
+        }
+        UpdateMainPanelState();
+    }
+
+    private void UpdateBluetoothSectionVisibility()
+    {
+        BluetoothSection.Visibility = _configStore.TransferMode == TransferMode.Bluetooth
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void UpdateBluetoothStatus()
+    {
+        Dispatcher.Invoke(() =>
+        {
+            switch (_configStore.BluetoothConnectionStatus)
+            {
+                case BluetoothConnectionStatus.Disconnected:
+                    BtStatusIcon.Foreground = Brushes.Gray;
+                    BtStatusText.Text = "Disconnected";
+                    break;
+                case BluetoothConnectionStatus.Connecting:
+                    BtStatusIcon.Foreground = new SolidColorBrush(Color.FromRgb(234, 179, 8)); // yellow
+                    BtStatusText.Text = "Connecting...";
+                    break;
+                case BluetoothConnectionStatus.Connected:
+                    BtStatusIcon.Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // green
+                    BtStatusText.Text = _configStore.BluetoothConnectedDeviceName != null
+                        ? $"Connected to {_configStore.BluetoothConnectedDeviceName}"
+                        : "Connected";
+                    break;
+                case BluetoothConnectionStatus.Error:
+                    BtStatusIcon.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)); // red
+                    BtStatusText.Text = "Error";
+                    break;
+            }
+
+            if (_configStore.BluetoothConnectionStatus == BluetoothConnectionStatus.Error &&
+                !string.IsNullOrEmpty(_configStore.BluetoothErrorMessage))
+            {
+                BtErrorBorder.Visibility = Visibility.Visible;
+                BtErrorText.Text = _configStore.BluetoothErrorMessage;
+            }
+            else
+            {
+                BtErrorBorder.Visibility = Visibility.Collapsed;
+            }
+
+            RenderPairedDevices();
+            if (_configStore.TransferMode == TransferMode.Bluetooth)
+            {
+                UpdateBtStatusPanel();
+            }
+        });
+    }
+
+    private void UpdateBtStatusPanel()
+    {
+        var status = _configStore.BluetoothConnectionStatus;
+
+        SolidColorBrush dotColor;
+        string statusText;
+        System.Windows.Media.Color bgColor;
+
+        switch (status)
+        {
+            case BluetoothConnectionStatus.Connected:
+                dotColor = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+                statusText = "Connected";
+                bgColor = Color.FromArgb(25, 34, 197, 94);
+                break;
+            case BluetoothConnectionStatus.Connecting:
+                dotColor = new SolidColorBrush(Color.FromRgb(234, 179, 8));
+                statusText = "Connecting\u2026";
+                bgColor = Color.FromArgb(25, 234, 179, 8);
+                break;
+            case BluetoothConnectionStatus.Error:
+                dotColor = new SolidColorBrush(Color.FromRgb(239, 68, 68));
+                statusText = !string.IsNullOrEmpty(_configStore.BluetoothErrorMessage)
+                    ? $"Error: {_configStore.BluetoothErrorMessage}"
+                    : "Error";
+                bgColor = Color.FromArgb(25, 239, 68, 68);
+                break;
+            default:
+                dotColor = Brushes.Gray;
+                statusText = "Disconnected";
+                bgColor = Color.FromArgb(25, 128, 128, 128);
+                break;
+        }
+
+        BtStatusDot.Fill = dotColor;
+        BtStatusLabel.Text = statusText;
+        BtStatusBadge.Background = new SolidColorBrush(bgColor);
+
+        if (_configStore.BluetoothConnectedDeviceName != null)
+        {
+            BtConnectedDeviceText.Text = $"Connected to {_configStore.BluetoothConnectedDeviceName}";
+            BtConnectedDeviceText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BtConnectedDeviceText.Visibility = Visibility.Collapsed;
+        }
+
+        BtPairHintText.Visibility = !_configStore.IsSendReady ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void RenderPairedDevices()
+    {
+        PairedDevicesPanel.Children.Clear();
+
+        if (_configStore.PairedDevices.Count == 0)
+        {
+            PairedDevicesPanel.Children.Add(new TextBlock
+            {
+                Text = "No paired devices. Scan to find nearby devices.",
+                Foreground = Brushes.Gray,
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 10, 0, 10),
+            });
+            return;
+        }
+
+        foreach (var device in _configStore.PairedDevices)
+        {
+            var isConnected = _configStore.BluetoothConnectionStatus == BluetoothConnectionStatus.Connected
+                && _configStore.BluetoothConnectedDeviceName == device.Name;
+
+            var nameText = new TextBlock
+            {
+                Text = device.Name,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+            };
+
+            var addressText = new TextBlock
+            {
+                Text = device.AddressString,
+                FontSize = 11,
+                Foreground = Brushes.Gray,
+            };
+
+            var infoStack = new StackPanel { Margin = new Thickness(0, 0, 8, 0) };
+            infoStack.Children.Add(nameText);
+            infoStack.Children.Add(addressText);
+
+            var buttonPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            if (isConnected)
+            {
+                buttonPanel.Children.Add(new TextBlock
+                {
+                    Text = "\u2713",
+                    FontSize = 14,
+                    Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0),
+                });
+
+                var disconnectBtn = new Button { Content = "Disconnect", Width = 80, Height = 24, FontSize = 11 };
+                disconnectBtn.Click += (_, _) => DisconnectBluetooth();
+                buttonPanel.Children.Add(disconnectBtn);
+            }
+            else
+            {
+                var connectBtn = new Button
+                {
+                    Content = "Connect",
+                    Width = 70,
+                    Height = 24,
+                    FontSize = 11,
+                    IsEnabled = _configStore.BluetoothConnectionStatus != BluetoothConnectionStatus.Connecting,
+                };
+                var capturedDevice = device;
+                connectBtn.Click += (_, _) => ConnectToPairedDevice(capturedDevice);
+                buttonPanel.Children.Add(connectBtn);
+            }
+
+            var forgetBtn = new Button
+            {
+                Content = "Forget",
+                Width = 55,
+                Height = 24,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(Color.FromRgb(185, 28, 28)),
+                Margin = new Thickness(4, 0, 0, 0),
+            };
+            var capturedAddr = device.Address;
+            forgetBtn.Click += (_, _) => ForgetBluetoothDevice(capturedAddr);
+            buttonPanel.Children.Add(forgetBtn);
+
+            var row = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(buttonPanel, Dock.Right);
+            row.Children.Add(buttonPanel);
+            row.Children.Add(infoStack);
+
+            var border = new Border
+            {
+                BorderBrush = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(8, 6, 8, 6),
+                Background = isConnected
+                    ? new SolidColorBrush(Color.FromRgb(219, 234, 254))
+                    : Brushes.Transparent,
+                Child = row,
+            };
+            PairedDevicesPanel.Children.Add(border);
+        }
+    }
+
+    private async void BtScanButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isScanning) return;
+
+        _isScanning = true;
+        BtScanButton.Content = "Scanning...";
+        BtScanButton.IsEnabled = false;
+        BtScanningPanel.Visibility = Visibility.Visible;
+        BtScanErrorText.Visibility = Visibility.Collapsed;
+        BtDiscoveredBorder.Visibility = Visibility.Collapsed;
+        BtDiscoveredPanel.Children.Clear();
+
+        try
+        {
+            var devices = await BluetoothService.FindDevicesAsync();
+            _discoveredBtDevices = devices.ToList();
+
+            if (_discoveredBtDevices.Count == 0)
+            {
+                BtDiscoveredBorder.Visibility = Visibility.Visible;
+                BtDiscoveredPanel.Children.Add(new TextBlock
+                {
+                    Text = "No CopyEverywhere devices found.",
+                    Foreground = Brushes.Gray,
+                    FontSize = 11,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 10, 0, 10),
+                });
+            }
+            else
+            {
+                BtDiscoveredBorder.Visibility = Visibility.Visible;
+                RenderDiscoveredBtDevices();
+            }
+        }
+        catch (Exception ex)
+        {
+            BtScanErrorText.Text = $"Scan failed: {ex.Message}";
+            BtScanErrorText.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            _isScanning = false;
+            BtScanButton.Content = "Scan";
+            BtScanButton.IsEnabled = true;
+            BtScanningPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void RenderDiscoveredBtDevices()
+    {
+        BtDiscoveredPanel.Children.Clear();
+
+        foreach (var device in _discoveredBtDevices)
+        {
+            var isPaired = _configStore.PairedDevices.Any(p => device.Name == p.Name);
+
+            var nameText = new TextBlock
+            {
+                Text = device.Name ?? "(Unknown)",
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var buttonPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            if (isPaired)
+            {
+                buttonPanel.Children.Add(new TextBlock
+                {
+                    Text = "Paired",
+                    FontSize = 11,
+                    Foreground = Brushes.Gray,
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+            }
+            else
+            {
+                var pairBtn = new Button { Content = "Pair", Width = 55, Height = 24, FontSize = 11 };
+                var capturedDevice = device;
+                pairBtn.Click += (_, _) => PairBluetoothDevice(capturedDevice);
+                buttonPanel.Children.Add(pairBtn);
+            }
+
+            var row = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(buttonPanel, Dock.Right);
+            row.Children.Add(buttonPanel);
+            row.Children.Add(nameText);
+
+            BtDiscoveredPanel.Children.Add(new Border
+            {
+                BorderBrush = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(8, 6, 8, 6),
+                Child = row,
+            });
+        }
+    }
+
+    private async void PairBluetoothDevice(DeviceInformation deviceInfo)
+    {
+        _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Connecting;
+        _configStore.BluetoothErrorMessage = null;
+        UpdateBluetoothStatus();
+
+        try
+        {
+            // Attempt connection — this triggers the system pairing dialog if needed
+            await _bluetoothService.ConnectAsync(deviceInfo);
+        }
+        catch (Exception ex)
+        {
+            _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Error;
+            _configStore.BluetoothErrorMessage = $"Pairing failed: {ex.Message}";
+            UpdateBluetoothStatus();
+        }
+    }
+
+    private async void ConnectToPairedDevice(PairedBluetoothDevice device)
+    {
+        _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Connecting;
+        _configStore.BluetoothErrorMessage = null;
+        UpdateBluetoothStatus();
+
+        try
+        {
+            await _bluetoothService.ConnectByAddressAsync(device.Address);
+        }
+        catch (Exception ex)
+        {
+            _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Error;
+            _configStore.BluetoothErrorMessage = $"Connection failed: {ex.Message}";
+            UpdateBluetoothStatus();
+        }
+    }
+
+    private void DisconnectBluetooth()
+    {
+        _bluetoothService.Disconnect();
+        _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Disconnected;
+        _configStore.BluetoothConnectedDeviceName = null;
+        _configStore.BluetoothErrorMessage = null;
+        UpdateBluetoothStatus();
+    }
+
+    private void ForgetBluetoothDevice(ulong address)
+    {
+        // If currently connected to this device, disconnect first
+        if (_bluetoothService.ConnectedDevice != null)
+        {
+            try
+            {
+                // Compare by checking if the device is connected and matches
+                var connectedName = _configStore.BluetoothConnectedDeviceName;
+                var forgettingDevice = _configStore.PairedDevices.FirstOrDefault(d => d.Address == address);
+                if (forgettingDevice != null && connectedName == forgettingDevice.Name)
+                {
+                    DisconnectBluetooth();
+                }
+            }
+            catch { /* Best effort */ }
+        }
+
+        _configStore.RemovePairedDevice(address);
+        RenderPairedDevices();
+        RenderDiscoveredBtDevices();
+    }
+
+    // Bluetooth event handlers
+
+    private void OnBluetoothSessionReady(BluetoothSession session)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            var deviceName = _bluetoothService.ConnectedDevice?.Name ?? "Unknown Device";
+            _configStore.BluetoothConnectedDeviceName = deviceName;
+            _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Connected;
+            _configStore.BluetoothErrorMessage = null;
+
+            // Add to paired devices if not already there
+            if (_bluetoothService.ConnectedDevice != null)
+            {
+                var btDevice = _bluetoothService.ConnectedDevice;
+                var address = btDevice.BluetoothAddress;
+                var addressStr = FormatBluetoothAddress(address);
+
+                _configStore.AddPairedDevice(new PairedBluetoothDevice
+                {
+                    Name = btDevice.Name ?? "Unknown",
+                    Address = address,
+                    AddressString = addressStr,
+                });
+            }
+
+            UpdateBluetoothStatus();
+        });
+    }
+
+    private void OnBluetoothHandshakeFailed(Exception ex)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Error;
+            _configStore.BluetoothErrorMessage = $"Handshake failed: {ex.Message}";
+            UpdateBluetoothStatus();
+        });
+    }
+
+    private void OnBluetoothConnectionFailed(Exception ex)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _configStore.BluetoothConnectionStatus = BluetoothConnectionStatus.Error;
+            _configStore.BluetoothErrorMessage = $"Connection failed: {ex.Message}";
+            UpdateBluetoothStatus();
+        });
+    }
+
+    private void OnBluetoothConnected(Windows.Networking.Sockets.StreamSocket socket, Windows.Devices.Bluetooth.BluetoothDevice? device)
+    {
+        // Session creation is automatic — SessionReady will fire on handshake success
+    }
+
+    private void OnBluetoothConnectionAccepted(Windows.Networking.Sockets.StreamSocket socket, Windows.Devices.Bluetooth.BluetoothDevice? device)
+    {
+        // Session creation is automatic — SessionReady will fire on handshake success
+    }
+
+    private void OnBluetoothSendProgress(double progress)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (progress < 1.0)
+            {
+                UploadProgressPanel.Visibility = Visibility.Visible;
+                UploadProgressBar.Value = progress * 100;
+                UploadProgressText.Text = $"Bluetooth send — {progress * 100:F0}%";
+            }
+            else
+            {
+                UploadProgressPanel.Visibility = Visibility.Collapsed;
+            }
+        });
+    }
+
+    private void OnBluetoothReceiveProgress(double progress, BluetoothTransferHeader header)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (progress < 1.0)
+            {
+                BtReceiveProgressPanel.Visibility = Visibility.Visible;
+                BtReceiveProgressBar.Value = progress * 100;
+                var label = header.Type == BluetoothContentType.File
+                    ? $"Receiving {header.Filename} — {progress * 100:F0}%"
+                    : $"Receiving text — {progress * 100:F0}%";
+                BtReceiveProgressText.Text = label;
+            }
+            else
+            {
+                BtReceiveProgressPanel.Visibility = Visibility.Collapsed;
+            }
+        });
+    }
+
+    private void OnBluetoothTransferReceived(BluetoothSession session, BluetoothTransferPayload payload)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            BtReceiveProgressPanel.Visibility = Visibility.Collapsed;
+
+            if (payload.Header.Type == BluetoothContentType.Text)
+            {
+                var text = System.Text.Encoding.UTF8.GetString(payload.Data);
+                Clipboard.SetText(text);
+                RefreshClipboardPreview();
+                ShowToastNotification("Received text", $"Received text ({payload.Data.Length} chars) — copied to clipboard");
+            }
+            else
+            {
+                // Save file to Downloads folder
+                var downloadsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                var savePath = Path.Combine(downloadsPath, payload.Header.Filename);
+
+                // Avoid overwriting — append (1), (2), etc. if file exists
+                if (File.Exists(savePath))
+                {
+                    var ext = Path.GetExtension(savePath);
+                    var nameWithoutExt = Path.GetFileNameWithoutExtension(savePath);
+                    var counter = 1;
+                    do
+                    {
+                        savePath = Path.Combine(downloadsPath, $"{nameWithoutExt} ({counter}){ext}");
+                        counter++;
+                    } while (File.Exists(savePath));
+                }
+
+                File.WriteAllBytes(savePath, payload.Data);
+
+                // Verify byte count matches header
+                var written = new FileInfo(savePath).Length;
+                if (written != payload.Header.Size)
+                {
+                    ShowToastNotification("Receive warning",
+                        $"Size mismatch for {payload.Header.Filename}: expected {payload.Header.Size} bytes, got {written}");
+                }
+                else
+                {
+                    ShowToastNotification("Received file",
+                        $"Saved {Path.GetFileName(savePath)} to Downloads");
+                }
+            }
+        });
+    }
+
+    private void OnBluetoothReceiveFailed(Exception ex)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            BtReceiveProgressPanel.Visibility = Visibility.Collapsed;
+            ShowToastNotification("Bluetooth receive failed", ex.Message);
+        });
+    }
+
+    private async void StartBluetoothServerIfNeeded()
+    {
+        if (_bluetoothService.IsServerRunning) return;
+        try
+        {
+            await _bluetoothService.StartServerAsync();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to start Bluetooth RFCOMM server: {ex.Message}");
+        }
+    }
+
+    private static string FormatBluetoothAddress(ulong address)
+    {
+        var bytes = BitConverter.GetBytes(address);
+        return $"{bytes[5]:X2}:{bytes[4]:X2}:{bytes[3]:X2}:{bytes[2]:X2}:{bytes[1]:X2}:{bytes[0]:X2}";
     }
 
     // --- Helpers ---
@@ -1356,16 +2002,148 @@ public partial class MainWindow : Window
         }
     }
 
+    // --- mDNS Discovery ---
+
+    private void OnDiscoveredServersChanged()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(OnDiscoveredServersChanged);
+            return;
+        }
+
+        DiscoveredServersPanel.Children.Clear();
+
+        var servers = _mdnsService.DiscoveredServers;
+        if (servers.Count == 0)
+        {
+            DiscoveredServersPanel.Children.Add(new TextBlock
+            {
+                Text = "Scanning for servers on LAN...",
+                Foreground = Brushes.Gray,
+                FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 10, 0, 10),
+            });
+            return;
+        }
+
+        foreach (var server in servers)
+        {
+            var isSelected = _configStore.HostUrl.TrimEnd('/') == $"http://{server.Host}:{server.Port}";
+
+            var nameText = new TextBlock
+            {
+                Text = server.Name,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+            };
+
+            var detailParts = new System.Collections.Generic.List<string> { $"{server.Host}:{server.Port}" };
+            if (!string.IsNullOrEmpty(server.Version))
+                detailParts.Add($"v{server.Version}");
+            if (server.AuthRequired)
+                detailParts.Add("auth required");
+
+            var detailText = new TextBlock
+            {
+                Text = string.Join(" \u2022 ", detailParts),
+                FontSize = 11,
+                Foreground = Brushes.Gray,
+            };
+
+            var stack = new StackPanel { Margin = new Thickness(8, 0, 0, 0) };
+            stack.Children.Add(nameText);
+            stack.Children.Add(detailText);
+
+            var row = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            if (isSelected)
+            {
+                row.Children.Add(new TextBlock
+                {
+                    Text = "\u2713",
+                    FontSize = 14,
+                    FontWeight = FontWeights.Bold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(4, 0, 0, 0),
+                });
+            }
+
+            row.Children.Add(stack);
+
+            var border = new Border
+            {
+                Padding = new Thickness(8, 6, 8, 6),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                Background = isSelected
+                    ? new SolidColorBrush(Color.FromRgb(219, 234, 254))
+                    : Brushes.Transparent,
+            };
+            border.Child = row;
+
+            // Click to select
+            var capturedServer = server;
+            border.MouseLeftButtonUp += (_, _) => SelectDiscoveredServer(capturedServer);
+
+            DiscoveredServersPanel.Children.Add(border);
+        }
+    }
+
+    private void SelectDiscoveredServer(DiscoveredServer server)
+    {
+        _configStore.HostUrl = $"http://{server.Host}:{server.Port}";
+        _configStore.ServerAuthRequired = server.AuthRequired;
+        HostUrlTextBox.Text = _configStore.HostUrl;
+        UpdateAccessTokenVisibility();
+        OnDiscoveredServersChanged(); // Refresh selection highlight
+    }
+
+    private void UpdateAccessTokenVisibility()
+    {
+        if (_configStore.ServerAuthRequired == false)
+        {
+            AccessTokenPanel.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            AccessTokenPanel.Visibility = Visibility.Visible;
+            AccessTokenLabel.Text = _configStore.ServerAuthRequired == true
+                ? "Access Token (required)"
+                : "Access Token (optional)";
+        }
+    }
+
     private void UpdateMainPanelState()
     {
-        if (_configStore.IsConfigured)
+        var isBtMode = _configStore.TransferMode == TransferMode.Bluetooth;
+        var showPanel = isBtMode || _configStore.IsConfigured;
+
+        if (showPanel)
         {
             MainPanelPlaceholder.Visibility = Visibility.Collapsed;
             ClipboardPanel.Visibility = Visibility.Visible;
             RefreshClipboardPreview();
-            StartQueuePolling();
-            _ = LoadDeviceListAsync();
-            StartSSE();
+
+            // Toggle queue vs BT status sections
+            LanQueueSection.Visibility = isBtMode ? Visibility.Collapsed : Visibility.Visible;
+            BtStatusSection.Visibility = isBtMode ? Visibility.Visible : Visibility.Collapsed;
+
+            if (isBtMode)
+            {
+                UpdateBtStatusPanel();
+            }
+            else
+            {
+                StartQueuePolling();
+                _ = LoadDeviceListAsync();
+                StartSSE();
+            }
         }
         else
         {
@@ -1380,11 +2158,15 @@ public partial class MainWindow : Window
     protected override void OnActivated(EventArgs e)
     {
         base.OnActivated(e);
-        if (_configStore.IsConfigured)
+        RefreshClipboardPreview();
+        if (_configStore.TransferMode == TransferMode.LanServer && _configStore.IsConfigured)
         {
-            RefreshClipboardPreview();
             _ = RefreshQueueAsync();
             StartQueuePolling();
+        }
+        else if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            UpdateBtStatusPanel();
         }
     }
 

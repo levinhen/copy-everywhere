@@ -16,6 +16,7 @@ Three independent codebases share a single REST contract:
 
 - **[server/](server/)** — Go 1.22+ / Gin relay. SQLite metadata (`modernc.org/sqlite`, pure-Go, no CGO) plus a content store on disk. The server is stateless beyond `STORAGE_PATH`; clients address content by 6-char alphanumeric Clip IDs. Layout: `config/` env loader, `db/` schema + helpers, `middleware/` Bearer auth, `handlers/` (`clips.go` for single-shot, `uploads.go` for chunked), `cleanup/` background TTL goroutine, `main.go` wiring.
 - **[macos/CopyEverywhere/](macos/CopyEverywhere/)** — Swift Package Manager executable target (no .xcodeproj), macOS 13+ MenuBarExtra app. State lives in `ConfigStore` (`@MainActor` ObservableObject) and `HistoryStore`; views in `MenuBarView` / `MainPanelView` / `ConfigView`.
+- **[macos/CopyEverywhereServer/](macos/CopyEverywhereServer/)** — Swift Package Manager executable target, macOS 13+ MenuBarExtra host app. Manages the Go server binary (`copyeverywhere-server`) as a child `Process`. `ServerProcess` (`@MainActor` ObservableObject) owns the subprocess lifecycle (start/stop/restart) and captures stdout/stderr via `Pipe`. `AppDelegate` drives the NSStatusItem + NSPopover (same pattern as the client app).
 - **[windows/CopyEverywhere/](windows/CopyEverywhere/)** — .NET 8 WPF tray app using `Hardcodet.NotifyIcon.Wpf`. `Services/ApiClient.cs` mirrors the macOS networking layer; `Services/ConfigStore.cs` and `Services/HistoryStore.cs` are the persistence equivalents.
 
 The REST contract (all under `/api/v1`, Bearer auth required, except `/health`):
@@ -40,7 +41,8 @@ Server (run from [server/](server/)):
 go build ./...                          # build
 go test ./...                           # all tests
 go test ./handlers -run TestUploadPart  # single test
-ACCESS_TOKEN=dev go run .               # local run (also reads PORT, STORAGE_PATH, MAX_CLIP_SIZE_MB, TTL_HOURS)
+go run .                                # local run, no auth (also reads PORT, BIND_ADDRESS, STORAGE_PATH, MAX_CLIP_SIZE_MB, TTL_HOURS)
+AUTH_ENABLED=true ACCESS_TOKEN=dev go run .  # local run with auth enabled
 docker compose up --build               # containerized
 ```
 
@@ -64,7 +66,10 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 
 **Server (Go):**
 
+- **`BIND_ADDRESS` env var (default `0.0.0.0`)** controls which interface the server listens on. The listen address is `BIND_ADDRESS:PORT`. MenuBarExtra config panel exposes this as the "Bind address" field; value forwarded to the Go subprocess via `ServerConfig.environment`.
+- **Auth is opt-in via `AUTH_ENABLED` env var (default `false`).** When false, the auth middleware is not applied and clients should not send `Authorization` headers. The `/health` endpoint exposes `"auth": true|false` so clients can discover whether auth is required. Both macOS `ConfigStore.setAuthHeader()` and Windows `ApiClient.SetAuthHeader()` skip the header when `accessToken` is empty.
 - **SSE broker is a shared singleton.** `sse.NewBroker()` is created once in `main.go` and injected into `ClipHandler`, `UploadHandler`, and `DeviceHandler`. Targeted clip notifications flow through `Broker.Notify(targetDeviceID, event)` — call it after a clip with `TargetDeviceID != nil` becomes `ready` (single-shot upload or chunked complete). SSE tests need `httptest.NewServer` (not `NewRecorder`) because streaming requires a real HTTP connection.
+- **mDNS service broadcast.** `discovery/` package wraps `github.com/hashicorp/mdns` (pure-Go, no CGO). Service type is `_copyeverywhere._tcp`. TXT records carry `version` and `auth` fields. `main.go` starts mDNS after config load and deregisters on SIGINT/SIGTERM.
 - **Gin route order matters.** Register `/clips/latest` *before* `/clips/:id`, otherwise `latest` is captured as an `:id` param.
 - **`clipResponse` vs `Clip`.** Handlers return a trimmed `clipResponse` struct so internal fields (`StoragePath`, `Status`) don't leak. Don't return the raw model.
 - **SQLite single writer.** `db.Open` sets `SetMaxOpenConns(1)`. Don't crank it up — `modernc.org/sqlite` corrupts under concurrent writes otherwise.
@@ -88,6 +93,26 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **SSE client uses `URLSession.shared.bytes(for:)` + `bytes.lines`** for async line-by-line streaming. Set `request.timeoutInterval = .infinity` for long-lived SSE. Parse events by empty-line boundaries, `event:` prefix, and `data:` prefix.
 - **`appendDeviceFields(to:boundary:)`** is a shared helper that appends `sender_device_id` and `target_device_id` multipart fields to any outgoing clip POST body. Chunked uploads add device IDs directly to the JSON init body instead.
 - **SSE reconnect loop** lives in `ConfigStore.sseLoop()` with exponential backoff (1s → 2s → 4s → capped at 30s). `startSSE()` is idempotent (checks `sseTask != nil`). Call `stopSSE()` before `startSSE()` when credentials change.
+- **Bluetooth RFCOMM protocol.** `BluetoothProtocol.swift` defines the app-layer protocol on top of RFCOMM connections. `BluetoothSession` wraps an `IOBluetoothRFCOMMChannel` and manages the handshake + transfer lifecycle. Wire format: newline-delimited JSON headers (`\n` = `0x0A`) followed by raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON (`type`, `filename`, `size`) + `\n` + content bytes.
+- **`BluetoothSession` is `IOBluetoothRFCOMMChannelDelegate`.** Data arrives via `rfcommChannelData(_:data:length:)` on a non-main thread — bridged to `@MainActor` via `Task`. Receive uses a buffer-based state machine: handshake phase → header phase → content accumulation.
+- **`BluetoothService` owns `activeSession`.** On RFCOMM connect (server accept or client connect), `createSession(channel:device:)` creates a `BluetoothSession` that auto-starts the handshake. Delegate chain: `BluetoothSession` → `BluetoothService` (as `BluetoothSessionDelegate`) → `BluetoothServiceDelegate`.
+- **IOBluetooth `closeChannel()` is obsoleted** — use `channel.close()` (returns `IOReturn`, discard with `_ =`).
+- **`BluetoothDiscovery`** wraps `IOBluetoothDeviceInquiry` for scanning nearby devices. Found devices are filtered via SDP query for the CopyEverywhere UUID before appearing in the UI. `IOBluetoothDeviceInquiry(delegate:)` returns optional — use `guard let`.
+- **`BluetoothPairHelper`** manages the system-level pairing flow. `device.openConnection(self)` triggers the macOS pairing dialog. After pairing, it initiates RFCOMM connection via `BluetoothService.connect(to:)`. The delegate chain is: `BluetoothPairHelper` → `BluetoothService` → `ConfigStore` (as `BluetoothServiceDelegate`).
+- **`TransferMode`** enum (`.lanServer` / `.bluetooth`) persisted in UserDefaults. `ConfigView` uses a segmented `Picker` to switch modes. Paired Bluetooth devices persisted as JSON in UserDefaults (`PairedBluetoothDevice` Codable struct).
+- **Send routing via `transferMode`.** All send entry points (`sendClipboardText`, `sendText`, `sendFile`, AppDelegate drop handlers, Cmd+V) check `transferMode` at the top and dispatch to private `*Bluetooth()` methods or existing LAN API calls. `isSendReady` computed property returns true when the active mode's transport is ready (LAN configured or Bluetooth connected+handshake complete).
+- **Bluetooth send progress.** `BluetoothSession.sendText(_:)` and `sendFile(url:)` return `AsyncStream<Double>` for progress. Bluetooth send methods in `ConfigStore` reuse existing `fileUploadProgress`/`fileUploadSpeed` published properties so the same progress UI works for both modes.
+- **Bluetooth receive.** `BluetoothService` forwards `session(_:didReceive:)` and `session(_:receiveProgress:header:)` to `BluetoothServiceDelegate`. `ConfigStore` handles received text (clipboard + notification) and files (saved to ~/Downloads + notification). `bluetoothReceiveProgress`/`bluetoothReceiveFilename` drive the receive progress UI in `MainPanelView`. Size is verified against the header-declared size on completion.
+- **RFCOMM server auto-start.** In Bluetooth mode, `ConfigStore` starts the RFCOMM server via `startBluetoothServerIfNeeded()` both in `autoReconnectBluetooth()` (on launch) and `setTransferMode(_:)` (on mode switch). This allows the device to accept inbound Bluetooth connections.
+
+**macOS Server Host App (`macos/CopyEverywhereServer/`):**
+
+- **Go subprocess management.** `ServerProcess` (`@MainActor` ObservableObject) wraps `Foundation.Process` to launch/stop/restart the Go binary. Stdout and stderr are captured via `Pipe` with `readabilityHandler` and surfaced as `@Published logLines: [String]`.
+- **Binary path convention.** `ServerProcess.binaryPath` defaults to a sibling `copyeverywhere-server` next to the Swift executable. The Go binary is compiled independently (`go build -o copyeverywhere-server .` in `server/`).
+- **Environment forwarding.** `ServerProcess.config` (`ServerConfig`) provides the environment dict, which is merged with the current process env before launching the Go binary. This is how `PORT`, `STORAGE_PATH`, `BIND_ADDRESS`, `AUTH_ENABLED`, etc. are passed to the server.
+- **ServerConfig persistence.** `ServerConfig` (`@MainActor` ObservableObject) persists port, storage path, TTL, auth settings to `~/Library/Application Support/CopyEverywhereServer/config.json`. Default storage path is `~/Library/Application Support/CopyEverywhereServer/data`. Config changes require a server restart to take effect.
+- **Graceful shutdown.** `process.terminate()` sends SIGTERM (Go server already handles SIGTERM for mDNS deregistration). `applicationWillTerminate` calls `stop()` to clean up on app quit.
+- **Same popover pattern as the client app.** `AppDelegate` owns `NSStatusItem` + `NSPopover` with `.applicationDefined` behavior + global event monitor for dismiss-on-click-outside.
 
 **Windows:**
 
@@ -100,8 +125,28 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **`SendService`** is the shared send helper used by `FloatingBallWindow`, `MainWindow` (drop + Ctrl+V), and any future send paths. It reads `ConfigStore.DeviceId` / `ConfigStore.TargetDeviceId` and passes them to all API calls.
 - **SSE client** uses `HttpClient` with `HttpCompletionOption.ResponseHeadersRead` + `StreamReader.ReadLineAsync()` loop. `Timeout` set to `Timeout.InfiniteTimeSpan` for the long-lived connection. Reconnect with exponential backoff (1s → 2s → 4s → capped at 30s). `StartSSE()` is idempotent (checks `_sseTask != null`).
 - **FloatingBallWindow** is a 64x64 borderless, transparent, always-on-top WPF window that accepts file and text drops. Position persisted in `config.json`. Toggle in MainWindow config section.
+- **mDNS discovery** uses `Zeroconf` NuGet (v3.6.11). `MdnsDiscoveryService` runs a periodic scan loop for `_copyeverywhere._tcp.local.` services. `DiscoveredServer` model matches macOS `DiscoveredServer` struct. TXT records provide `auth` and `version` fields.
+- **`ConfigStore.ServerAuthRequired`** (nullable bool) controls Access Token field visibility: `null` = unknown (show as optional), `true` = shown as required, `false` = hidden. Populated from mDNS TXT `auth` field or `/health` response `auth` field.
+
+- **Bluetooth RFCOMM** uses WinRT APIs (`Windows.Devices.Bluetooth.Rfcomm`). The project TFM is `net8.0-windows10.0.19041.0` to access WinRT projections (no extra NuGet needed). `BluetoothService` (`INotifyPropertyChanged + IDisposable`) mirrors the macOS `BluetoothService` — server mode via `RfcommServiceProvider` + `StreamSocketListener`, client mode via `RfcommDeviceService` + `StreamSocket`.
+- **RFCOMM Service UUID** is `CE000001-1000-1000-8000-00805F9B34FB` — defined as `BluetoothService.CopyEverywhereServiceUuid` (System.Guid). Must match macOS `kCopyEverywhereServiceUUID` exactly.
+- **RFCOMM server SDP attributes.** `RfcommServiceProvider.SdpRawAttributes[0x0100]` writes the service name. Format: `0x25` (UTF-8 type byte) + length byte + string bytes.
+- **RFCOMM client discovery.** `RfcommDeviceService.GetDeviceSelector(RfcommServiceId)` builds a selector for `DeviceInformation.FindAllAsync()`. For reconnecting by address, use `BluetoothDevice.FromBluetoothAddressAsync()` + `GetRfcommServicesForIdAsync()`.
+- **StreamSocket I/O.** `DataWriter(socket.OutputStream)` / `DataReader(socket.InputStream)` are the WinRT equivalents of IOBluetooth's `writeAsync`/`rfcommChannelData`. Set `DataReader.InputStreamOptions = InputStreamOptions.Partial` for streaming reads.
+- **Bluetooth RFCOMM protocol (Windows).** `BluetoothSession` mirrors macOS `BluetoothProtocol.swift`. Same wire format: newline-delimited JSON headers (`0x0A`) + raw content bytes. Handshake: `{"app":"CopyEverywhere","version":"3.0"}\n`. Transfer: `BluetoothTransferHeader` JSON + `\n` + content bytes. Cross-platform interop with macOS.
+- **`BluetoothSession` lifecycle.** Created by `BluetoothService.CreateSession()` on RFCOMM connect. `StartAsync()` sends handshake and starts the receive loop. Events: `HandshakeCompleted`, `HandshakeFailed`, `TransferReceived`, `ReceiveProgress`, `ReceiveFailed`. `BluetoothService` exposes `ActiveSession`, `SessionReady`, `SessionHandshakeFailed`.
+- **`BluetoothTransferHeader.Type` serialization.** Uses a string-backed `TypeString` property for JSON (`"text"`/`"file"` lowercase) with a `[JsonIgnore]` convenience `Type` property mapping to `BluetoothContentType` enum.
+- **`TransferMode` enum** (`LanServer`/`Bluetooth`) in `ConfigStore.cs`. `PairedBluetoothDevice` model persisted in `config.json` alongside device config. `BluetoothConnectionStatus` enum mirrors macOS pattern. `AddPairedDevice()`/`RemovePairedDevice()` helpers manage the list and auto-persist.
+- **Bluetooth pairing flow (Windows).** `BluetoothService.ConnectAsync(DeviceInformation)` triggers the Windows system pairing dialog if needed. On `SessionReady`, the device is added to `PairedDevices`. Reconnection uses `ConnectByAddressAsync(ulong)`.
+- **Bluetooth UI in MainWindow.** Transfer mode ComboBox controls `BluetoothSection` visibility. Scan uses `BluetoothService.FindDevicesAsync()` (static). Paired device list rendered programmatically with Connect/Disconnect/Forget buttons. Status badge shows connection state via colored dot.
 
 **Cross-platform:**
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.
 - **History storage (MVP):** Both macOS and Windows HistoryStore removed — replaced by live server queue view (`GET /clips?device_id=<self>`). macOS removed in US-027, Windows in US-033.
+- **Send routing via `TransferMode` (Windows).** `SendService` checks `ConfigStore.TransferMode` at the top of `SendTextAsync`/`SendFileAsync` and dispatches to `BluetoothSession` or `ApiClient`. `IsSendReady` property on `ConfigStore` returns true when the active mode's transport is ready (LAN configured or Bluetooth connected+handshake complete). All send entry points (Ctrl+V, drag-drop, FloatingBall drop) go through `SendService`.
+- **Bluetooth send progress (Windows).** `SendService.BluetoothSendProgress` event (0.0–1.0) drives the same `UploadProgressPanel` used for chunked uploads. `MainWindow` subscribes via the `SendService` property setter.
+- **Bluetooth receive (Windows).** `BluetoothService` forwards `TransferReceived`, `ReceiveProgress`, `ReceiveFailed` events from `BluetoothSession`. `MainWindow` subscribes in the constructor. Received text → `Clipboard.SetText()` + toast. Received files → saved to `~/Downloads` with duplicate-name avoidance + toast. `BtReceiveProgressPanel` in the XAML Bluetooth section shows receive progress.
+- **RFCOMM server auto-start (Windows).** `StartBluetoothServerIfNeeded()` starts the RFCOMM server in Bluetooth mode. Called from `InitializeTransferModeUI()` (on launch) and `TransferModeComboBox_SelectionChanged` (on mode switch). Mirrors macOS `startBluetoothServerIfNeeded()`.
+- **Mode switch service lifecycle.** On both macOS and Windows, switching transfer mode must stop/start background services: LAN→BT stops SSE + queue polling, starts RFCOMM server; BT→LAN stops RFCOMM server, restarts SSE + queue polling. `UpdateMainPanelState()` (Windows) / `MainPanelView` (macOS) conditionally shows queue (LAN) or BT status section.
+- **`UpdateBtStatusPanel()` (Windows)** mirrors macOS `bluetoothStatusColor`/`bluetoothStatusText` helpers. Called from `UpdateBluetoothStatus()` when in BT mode and from `UpdateMainPanelState()`. Updates `BtStatusDot`, `BtStatusLabel`, `BtConnectedDeviceText`, `BtPairHintText`.

@@ -1,12 +1,46 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CredentialManagement;
 
 namespace CopyEverywhere.Services;
+
+// ── Transfer mode ────────────────────────────────────────────────────
+
+public enum TransferMode
+{
+    LanServer,
+    Bluetooth
+}
+
+// ── Paired device persistence model ─────────────────────────────────
+
+public class PairedBluetoothDevice
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("address")]
+    public ulong Address { get; set; }
+
+    [JsonPropertyName("address_string")]
+    public string AddressString { get; set; } = "";
+}
+
+// ── Bluetooth connection status ─────────────────────────────────────
+
+public enum BluetoothConnectionStatus
+{
+    Disconnected,
+    Connecting,
+    Connected,
+    Error
+}
 
 public class ConfigStore : INotifyPropertyChanged
 {
@@ -26,6 +60,14 @@ public class ConfigStore : INotifyPropertyChanged
     private bool _showFloatingBall = true;
     private double _floatingBallX = double.NaN;
     private double _floatingBallY = double.NaN;
+    private bool? _serverAuthRequired; // null = unknown, populated from mDNS TXT or /health
+
+    // Bluetooth state
+    private TransferMode _transferMode = TransferMode.LanServer;
+    private List<PairedBluetoothDevice> _pairedDevices = new();
+    private BluetoothConnectionStatus _bluetoothConnectionStatus = BluetoothConnectionStatus.Disconnected;
+    private string? _bluetoothConnectedDeviceName;
+    private string? _bluetoothErrorMessage;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -77,7 +119,48 @@ public class ConfigStore : INotifyPropertyChanged
         set { _floatingBallY = value; OnPropertyChanged(); }
     }
 
-    public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl) && !string.IsNullOrWhiteSpace(AccessToken);
+    public bool? ServerAuthRequired
+    {
+        get => _serverAuthRequired;
+        set { _serverAuthRequired = value; OnPropertyChanged(); }
+    }
+
+    public TransferMode TransferMode
+    {
+        get => _transferMode;
+        set { _transferMode = value; OnPropertyChanged(); }
+    }
+
+    public List<PairedBluetoothDevice> PairedDevices
+    {
+        get => _pairedDevices;
+        set { _pairedDevices = value; OnPropertyChanged(); }
+    }
+
+    public BluetoothConnectionStatus BluetoothConnectionStatus
+    {
+        get => _bluetoothConnectionStatus;
+        set { _bluetoothConnectionStatus = value; OnPropertyChanged(); }
+    }
+
+    public string? BluetoothConnectedDeviceName
+    {
+        get => _bluetoothConnectedDeviceName;
+        set { _bluetoothConnectedDeviceName = value; OnPropertyChanged(); }
+    }
+
+    public string? BluetoothErrorMessage
+    {
+        get => _bluetoothErrorMessage;
+        set { _bluetoothErrorMessage = value; OnPropertyChanged(); }
+    }
+
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl);
+
+    public bool IsSendReady =>
+        TransferMode == TransferMode.LanServer
+            ? IsConfigured
+            : BluetoothConnectionStatus == BluetoothConnectionStatus.Connected;
 
     public ConfigStore()
     {
@@ -115,6 +198,8 @@ public class ConfigStore : INotifyPropertyChanged
             ShowFloatingBall = ShowFloatingBall,
             FloatingBallX = FloatingBallX,
             FloatingBallY = FloatingBallY,
+            TransferMode = TransferMode.ToString(),
+            PairedDevices = PairedDevices,
         };
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(ConfigFilePath, json);
@@ -136,12 +221,29 @@ public class ConfigStore : INotifyPropertyChanged
                 ShowFloatingBall = config.ShowFloatingBall;
                 if (!double.IsNaN(config.FloatingBallX)) FloatingBallX = config.FloatingBallX;
                 if (!double.IsNaN(config.FloatingBallY)) FloatingBallY = config.FloatingBallY;
+                if (Enum.TryParse<TransferMode>(config.TransferMode, out var mode))
+                    TransferMode = mode;
+                if (config.PairedDevices != null)
+                    PairedDevices = config.PairedDevices;
             }
         }
         catch
         {
             // Corrupt config file — ignore
         }
+    }
+
+    public void AddPairedDevice(PairedBluetoothDevice device)
+    {
+        if (PairedDevices.Any(d => d.Address == device.Address)) return;
+        PairedDevices = new List<PairedBluetoothDevice>(PairedDevices) { device };
+        PersistConfig();
+    }
+
+    public void RemovePairedDevice(ulong address)
+    {
+        PairedDevices = PairedDevices.Where(d => d.Address != address).ToList();
+        PersistConfig();
     }
 
     private static string? ReadCredential(string target)
@@ -197,4 +299,10 @@ internal class DeviceConfig
 
     [JsonPropertyName("floating_ball_y")]
     public double FloatingBallY { get; set; } = double.NaN;
+
+    [JsonPropertyName("transfer_mode")]
+    public string TransferMode { get; set; } = "LanServer";
+
+    [JsonPropertyName("paired_devices")]
+    public List<PairedBluetoothDevice>? PairedDevices { get; set; }
 }

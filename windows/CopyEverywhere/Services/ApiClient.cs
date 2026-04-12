@@ -18,6 +18,7 @@ public class HealthResponse
 {
     public string Version { get; set; } = "";
     public string Uptime { get; set; } = "";
+    public bool? Auth { get; set; }
 }
 
 public class TestConnectionResult
@@ -66,8 +67,20 @@ public class ApiClient : IDisposable
 
     private void SetAuthHeader()
     {
-        _httpClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+        SetAuthHeader(_httpClient);
+    }
+
+    private void SetAuthHeader(HttpClient client)
+    {
+        if (!string.IsNullOrWhiteSpace(_config.AccessToken))
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+        }
+        else
+        {
+            client.DefaultRequestHeaders.Authorization = null;
+        }
     }
 
     public async Task<TestConnectionResult> TestConnectionAsync(CancellationToken ct = default)
@@ -107,6 +120,12 @@ public class ApiClient : IDisposable
             {
                 PropertyNameCaseInsensitive = true,
             });
+
+            // Update ServerAuthRequired from /health response
+            if (health?.Auth != null)
+            {
+                _config.ServerAuthRequired = health.Auth;
+            }
 
             // Verify auth works by calling an authed endpoint
             SetAuthHeader();
@@ -247,8 +266,7 @@ public class ApiClient : IDisposable
     public async Task<bool> ConsumeClipToFileAsync(string clipId, string savePath, CancellationToken ct = default)
     {
         using var downloadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-        downloadClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+        SetAuthHeader(downloadClient);
 
         using var response = await downloadClient.GetAsync(
             $"{BaseUrl}/api/v1/clips/{clipId}/raw",
@@ -329,8 +347,7 @@ public class ApiClient : IDisposable
 
         // Use a longer timeout for file uploads
         using var uploadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-        uploadClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+        SetAuthHeader(uploadClient);
 
         var response = await uploadClient.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
@@ -370,8 +387,7 @@ public class ApiClient : IDisposable
         content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
         using var uploadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        uploadClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+        SetAuthHeader(uploadClient);
 
         var response = await uploadClient.PutAsync($"{BaseUrl}/api/v1/uploads/{uploadId}/parts/{partNumber}", content, ct);
         // 409 means chunk already uploaded (safe during resume)
@@ -406,8 +422,7 @@ public class ApiClient : IDisposable
     public async Task DownloadFileAsync(string clipId, string savePath, IProgress<(long received, long total)>? progress = null, CancellationToken ct = default)
     {
         using var downloadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
-        downloadClient.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", _config.AccessToken);
+        SetAuthHeader(downloadClient);
 
         using var response = await downloadClient.GetAsync(
             $"{BaseUrl}/api/v1/clips/{clipId}/raw",
