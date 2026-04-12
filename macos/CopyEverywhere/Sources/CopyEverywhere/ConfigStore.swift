@@ -90,6 +90,17 @@ final class ConfigStore: ObservableObject {
     let bluetoothDiscovery = BluetoothDiscovery()
     let bluetoothService = BluetoothService()
 
+    /// Whether the app is ready to send content (LAN configured or Bluetooth connected).
+    var isSendReady: Bool {
+        switch transferMode {
+        case .lanServer:
+            return isConfigured
+        case .bluetooth:
+            return bluetoothConnectionStatus == .connected
+                && bluetoothService.activeSession?.isHandshakeComplete == true
+        }
+    }
+
     enum BluetoothConnectionStatus: Equatable {
         case disconnected
         case connecting
@@ -452,6 +463,103 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    // MARK: - Bluetooth Send
+
+    /// Send clipboard text via Bluetooth RFCOMM.
+    private func sendClipboardTextBluetooth() async {
+        guard let text = getClipboardText(), !text.isEmpty else {
+            sendStatus = .error("Clipboard is empty")
+            return
+        }
+        guard let session = bluetoothService.activeSession, session.isHandshakeComplete else {
+            sendStatus = .error("Bluetooth not connected")
+            return
+        }
+
+        sendStatus = .sending
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let progressStream = session.sendText(text) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    self.sendStatus = .error("Bluetooth send failed: \(error.localizedDescription)")
+                } else {
+                    self.sendStatus = .success(clipID: "BT", expiresAt: "N/A")
+                }
+                continuation.resume()
+            }
+            // Track progress on file upload progress (reuse existing UI)
+            Task {
+                for await progress in progressStream {
+                    self.fileUploadProgress = progress
+                }
+            }
+        }
+    }
+
+    /// Fire-and-forget text send via Bluetooth.
+    private func sendTextBluetooth(_ text: String) async -> (success: Bool, message: String) {
+        guard let session = bluetoothService.activeSession, session.isHandshakeComplete else {
+            return (false, "Bluetooth not connected")
+        }
+
+        return await withCheckedContinuation { (continuation: CheckedContinuation<(Bool, String), Never>) in
+            let _ = session.sendText(text) { error in
+                if let error {
+                    continuation.resume(returning: (false, "Bluetooth: \(error.localizedDescription)"))
+                } else {
+                    continuation.resume(returning: (true, "text (\(text.count) chars)"))
+                }
+            }
+        }
+    }
+
+    /// Send a file via Bluetooth RFCOMM with progress.
+    private func sendFileBluetooth(url fileURL: URL) async {
+        guard let session = bluetoothService.activeSession, session.isHandshakeComplete else {
+            fileUploadStatus = .error("Bluetooth not connected")
+            return
+        }
+
+        let filename = fileURL.lastPathComponent
+        fileUploadStatus = .uploading(filename: filename)
+        fileUploadProgress = 0
+        fileUploadSpeed = ""
+
+        let startTime = Date()
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+              let fileSize = attrs[.size] as? Int64 else {
+            fileUploadStatus = .error("Cannot read file")
+            return
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let progressStream = session.sendFile(url: fileURL) { [weak self] error in
+                guard let self else { return }
+                if let error {
+                    self.fileUploadStatus = .error("Bluetooth send failed: \(error.localizedDescription)")
+                } else {
+                    self.fileUploadProgress = 1.0
+                    self.fileUploadStatus = .success(
+                        clipID: "BT",
+                        filename: filename,
+                        fileSize: self.formatBytes(fileSize),
+                        expiresAt: "N/A"
+                    )
+                }
+                continuation.resume()
+            }
+            Task {
+                for await progress in progressStream {
+                    self.fileUploadProgress = progress
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    let bytesSent = Int64(Double(fileSize) * progress)
+                    let speed = elapsed > 0 ? Double(bytesSent) / elapsed : 0
+                    self.fileUploadSpeed = "\(self.formatBytes(Int64(speed)))/s"
+                }
+            }
+        }
+    }
+
     // MARK: - Clipboard Operations
 
     func getClipboardText() -> String? {
@@ -459,6 +567,11 @@ final class ConfigStore: ObservableObject {
     }
 
     func sendClipboardText() async {
+        if transferMode == .bluetooth {
+            await sendClipboardTextBluetooth()
+            return
+        }
+
         guard let text = getClipboardText(), !text.isEmpty else {
             sendStatus = .error("Clipboard is empty")
             return
@@ -559,6 +672,9 @@ final class ConfigStore: ObservableObject {
 
     /// Fire-and-forget text send for drag-and-drop (does not touch sendStatus).
     func sendText(_ text: String) async -> (success: Bool, message: String) {
+        if transferMode == .bluetooth {
+            return await sendTextBluetooth(text)
+        }
         guard isConfigured else { return (false, "Not configured") }
 
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -683,6 +799,11 @@ final class ConfigStore: ObservableObject {
     // MARK: - File Upload
 
     func sendFile(url fileURL: URL) async {
+        if transferMode == .bluetooth {
+            await sendFileBluetooth(url: fileURL)
+            return
+        }
+
         let filename = fileURL.lastPathComponent
 
         // Check file size

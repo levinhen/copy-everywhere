@@ -100,6 +100,8 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **`BluetoothDiscovery`** wraps `IOBluetoothDeviceInquiry` for scanning nearby devices. Found devices are filtered via SDP query for the CopyEverywhere UUID before appearing in the UI. `IOBluetoothDeviceInquiry(delegate:)` returns optional — use `guard let`.
 - **`BluetoothPairHelper`** manages the system-level pairing flow. `device.openConnection(self)` triggers the macOS pairing dialog. After pairing, it initiates RFCOMM connection via `BluetoothService.connect(to:)`. The delegate chain is: `BluetoothPairHelper` → `BluetoothService` → `ConfigStore` (as `BluetoothServiceDelegate`).
 - **`TransferMode`** enum (`.lanServer` / `.bluetooth`) persisted in UserDefaults. `ConfigView` uses a segmented `Picker` to switch modes. Paired Bluetooth devices persisted as JSON in UserDefaults (`PairedBluetoothDevice` Codable struct).
+- **Send routing via `transferMode`.** All send entry points (`sendClipboardText`, `sendText`, `sendFile`, AppDelegate drop handlers, Cmd+V) check `transferMode` at the top and dispatch to private `*Bluetooth()` methods or existing LAN API calls. `isSendReady` computed property returns true when the active mode's transport is ready (LAN configured or Bluetooth connected+handshake complete).
+- **Bluetooth send progress.** `BluetoothSession.sendText(_:)` and `sendFile(url:)` return `AsyncStream<Double>` for progress. Bluetooth send methods in `ConfigStore` reuse existing `fileUploadProgress`/`fileUploadSpeed` published properties so the same progress UI works for both modes.
 
 **macOS Server Host App (`macos/CopyEverywhereServer/`):**
 

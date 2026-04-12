@@ -85,6 +85,10 @@ final class BluetoothSession: NSObject, ObservableObject {
 
     @Published var isHandshakeComplete = false
 
+    // Send progress stream
+    private var sendProgressContinuation: AsyncStream<Double>.Continuation?
+    private(set) var sendProgressStream: AsyncStream<Double>?
+
     // Receive buffer
     private var receiveBuffer = Data()
     private var pendingHeader: BluetoothTransferHeader?
@@ -139,31 +143,48 @@ final class BluetoothSession: NSObject, ObservableObject {
 
     // MARK: - Send
 
-    /// Send a text string to the remote peer.
-    func sendText(_ text: String, completion: (@MainActor (Error?) -> Void)? = nil) {
+    /// Send a text string to the remote peer. Returns an AsyncStream<Double> for progress tracking.
+    func sendText(_ text: String, completion: (@MainActor (Error?) -> Void)? = nil) -> AsyncStream<Double> {
+        let (stream, continuation) = AsyncStream<Double>.makeStream()
+        sendProgressContinuation = continuation
+        sendProgressStream = stream
+
         guard isHandshakeComplete else {
             completion?(BluetoothSessionError.channelClosed)
-            return
+            continuation.finish()
+            return stream
         }
         guard let contentData = text.data(using: .utf8) else {
             completion?(BluetoothSessionError.writeFailed(kIOReturnBadArgument))
-            return
+            continuation.finish()
+            return stream
         }
         let header = BluetoothTransferHeader(type: .text, filename: "clipboard.txt", size: contentData.count)
-        sendTransfer(header: header, content: contentData, completion: completion)
+        sendTransfer(header: header, content: contentData) { [weak self] error in
+            self?.sendProgressContinuation?.yield(1.0)
+            self?.sendProgressContinuation?.finish()
+            completion?(error)
+        }
+        return stream
     }
 
     /// Send a file to the remote peer. Reads in chunks to avoid OOM on large files.
-    func sendFile(url: URL, completion: (@MainActor (Error?) -> Void)? = nil) {
+    /// Returns an AsyncStream<Double> for progress tracking.
+    func sendFile(url: URL, completion: (@MainActor (Error?) -> Void)? = nil) -> AsyncStream<Double> {
+        let (stream, continuation) = AsyncStream<Double>.makeStream()
+        sendProgressContinuation = continuation
+        sendProgressStream = stream
+
         guard isHandshakeComplete else {
             completion?(BluetoothSessionError.channelClosed)
-            return
+            continuation.finish()
+            return stream
         }
         guard let fileHandle = try? FileHandle(forReadingFrom: url) else {
             completion?(BluetoothSessionError.writeFailed(kIOReturnBadArgument))
-            return
+            continuation.finish()
+            return stream
         }
-        defer { try? fileHandle.close() }
 
         let fileSize: Int
         do {
@@ -171,7 +192,9 @@ final class BluetoothSession: NSObject, ObservableObject {
             fileSize = (attrs[.size] as? Int) ?? 0
         } catch {
             completion?(error)
-            return
+            continuation.finish()
+            try? fileHandle.close()
+            return stream
         }
 
         let header = BluetoothTransferHeader(type: .file, filename: url.lastPathComponent, size: fileSize)
@@ -179,7 +202,9 @@ final class BluetoothSession: NSObject, ObservableObject {
         // Send header
         guard let headerData = try? JSONEncoder().encode(header) else {
             completion?(BluetoothSessionError.invalidHeader)
-            return
+            continuation.finish()
+            try? fileHandle.close()
+            return stream
         }
         var payload = headerData
         payload.append(kDelimiter)
@@ -188,14 +213,22 @@ final class BluetoothSession: NSObject, ObservableObject {
             guard let self else { return }
             if let error {
                 completion?(error)
+                self.sendProgressContinuation?.finish()
+                try? fileHandle.close()
                 return
             }
             // Stream file content in chunks
-            self.streamFileContent(fileHandle: fileHandle, remaining: fileSize, completion: completion)
+            self.streamFileContent(fileHandle: fileHandle, totalSize: fileSize, remaining: fileSize, completion: { [weak self] error in
+                try? fileHandle.close()
+                self?.sendProgressContinuation?.yield(1.0)
+                self?.sendProgressContinuation?.finish()
+                completion?(error)
+            })
         }
+        return stream
     }
 
-    private func streamFileContent(fileHandle: FileHandle, remaining: Int, completion: (@MainActor (Error?) -> Void)?) {
+    private func streamFileContent(fileHandle: FileHandle, totalSize: Int, remaining: Int, completion: (@MainActor (Error?) -> Void)?) {
         let chunkSize = 16 * 1024 // 16 KB chunks over RFCOMM
         guard remaining > 0 else {
             completion?(nil)
@@ -206,13 +239,19 @@ final class BluetoothSession: NSObject, ObservableObject {
             completion?(nil)
             return
         }
+        let newRemaining = remaining - chunk.count
         writeData(chunk) { [weak self] error in
             guard let self else { return }
             if let error {
                 completion?(error)
                 return
             }
-            self.streamFileContent(fileHandle: fileHandle, remaining: remaining - chunk.count, completion: completion)
+            // Report progress
+            if totalSize > 0 {
+                let progress = Double(totalSize - newRemaining) / Double(totalSize)
+                self.sendProgressContinuation?.yield(progress)
+            }
+            self.streamFileContent(fileHandle: fileHandle, totalSize: totalSize, remaining: newRemaining, completion: completion)
         }
     }
 

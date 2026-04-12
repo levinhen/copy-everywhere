@@ -23,6 +23,8 @@
 - IOBluetooth `closeChannel()` is obsoleted in Swift 3 — use `channel.close()` instead (returns IOReturn).
 - `IOBluetoothDeviceInquiry(delegate:)` returns optional. SDP filtering of discovered devices requires per-device helper objects retained until query completes.
 - `TransferMode` enum (`.lanServer`/`.bluetooth`) persisted in UserDefaults. Paired devices persisted as JSON-encoded `[PairedBluetoothDevice]` in UserDefaults.
+- All send entry points route through `transferMode` at the top of `sendClipboardText`/`sendText`/`sendFile`. `isSendReady` is the universal readiness check.
+- `BluetoothSession.sendText`/`sendFile` return `AsyncStream<Double>` for progress. Use `withCheckedContinuation` to bridge to async/await.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -280,4 +282,27 @@
   - SDP filtering of discovered devices requires a separate helper class (NSObject subclass with `sdpQueryComplete` callback) per device, retained in an array until the query completes.
   - `device.openConnection(self)` triggers the macOS system Bluetooth pairing dialog. If the device is already paired, skip straight to RFCOMM connection.
   - Paired device persistence uses simple JSON-encoded `[PairedBluetoothDevice]` in UserDefaults — lightweight enough for a small list of devices.
+---
+
+## 2026-04-12 - US-043
+- What was implemented:
+  - `BluetoothSession.sendText(_:)` and `sendFile(url:)` now return `AsyncStream<Double>` for send progress tracking
+  - File send progress reports per-chunk (16KB RFCOMM chunks) via continuation yield
+  - Three new private Bluetooth send methods in `ConfigStore`: `sendClipboardTextBluetooth()`, `sendTextBluetooth(_:)`, `sendFileBluetooth(url:)`
+  - All three public send entry points (`sendClipboardText`, `sendText`, `sendFile`) route through `transferMode` at the top — Bluetooth mode dispatches to private BT methods, LAN mode uses existing API calls
+  - `isSendReady` computed property: returns true when LAN is configured (LAN mode) or Bluetooth is connected + handshake complete (BT mode)
+  - AppDelegate drop handlers (`handleFileDrop`, `handleTextDrop`) now check `isSendReady` instead of `isConfigured`
+  - Bluetooth send methods reuse existing `fileUploadProgress`, `fileUploadSpeed`, `fileUploadStatus`, and `sendStatus` published properties — same progress UI works for both modes
+  - Notifications: existing notification paths in AppDelegate (drop handlers, Cmd+V paste) work unchanged since they observe the same status properties
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothProtocol.swift — sendText/sendFile return AsyncStream<Double>, progress tracking in streamFileContent
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift — isSendReady, sendClipboardTextBluetooth, sendTextBluetooth, sendFileBluetooth, transferMode routing in sendClipboardText/sendText/sendFile
+  - macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift — drop handlers use isSendReady
+  - CLAUDE.md — documented send routing and Bluetooth progress patterns
+  - prd.json — US-043 passes: true
+- **Learnings for future iterations:**
+  - `AsyncStream.makeStream()` is the cleanest way to create a continuation-based stream in Swift 5.9+. No need for the old `AsyncStream { continuation in }` init.
+  - Bluetooth send methods use `withCheckedContinuation` to bridge completion-handler-based `BluetoothSession` APIs to async/await — the progress stream runs concurrently in a separate `Task`.
+  - Reusing existing `@Published` properties (`fileUploadProgress`, `sendStatus`) for Bluetooth sends avoids duplicating UI — the same `MainPanelView` progress views work for both LAN and Bluetooth.
+  - The `isSendReady` pattern (computed property checking mode-specific readiness) is the right abstraction for gating all send paths without duplicating mode checks everywhere.
 ---

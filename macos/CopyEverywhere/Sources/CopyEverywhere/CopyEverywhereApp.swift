@@ -188,8 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Drop Handlers
 
     private func handleFileDrop(_ urls: [URL]) {
-        guard configStore.isConfigured else {
-            Self.sendNotification(body: "Configure server first")
+        guard configStore.isSendReady else {
+            Self.sendNotification(body: configStore.transferMode == .bluetooth ? "Bluetooth not connected" : "Configure server first")
             return
         }
         Task { @MainActor in
@@ -208,8 +208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleTextDrop(_ text: String) {
-        guard configStore.isConfigured else {
-            Self.sendNotification(body: "Configure server first")
+        guard configStore.isSendReady else {
+            Self.sendNotification(body: configStore.transferMode == .bluetooth ? "Bluetooth not connected" : "Configure server first")
             return
         }
         Task { @MainActor in
