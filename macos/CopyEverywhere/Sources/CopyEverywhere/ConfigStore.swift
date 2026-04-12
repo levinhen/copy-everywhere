@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Network
 import Security
 import UserNotifications
 
@@ -69,6 +70,9 @@ final class ConfigStore: ObservableObject {
     @Published var queueError: String? = nil
     @Published var availableDevices: [DeviceInfo] = []
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
+    @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
+
+    let bonjourBrowser = BonjourBrowser()
 
     // SSE state
     private var sseTask: Task<Void, Never>?
@@ -141,6 +145,15 @@ final class ConfigStore: ObservableObject {
         loadFromKeychain()
         deviceID = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceID") ?? ""
         deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
+        bonjourBrowser.startBrowsing()
+    }
+
+    func selectDiscoveredServer(_ server: DiscoveredServer) {
+        hostURL = "http://\(server.host):\(server.port)"
+        serverAuthRequired = server.authRequired
+        if !server.authRequired {
+            accessToken = ""
+        }
     }
 
     // MARK: - Keychain Operations
@@ -277,7 +290,7 @@ final class ConfigStore: ObservableObject {
         let start = Date()
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 connectionStatus = .error("Invalid response")
@@ -289,6 +302,11 @@ final class ConfigStore: ObservableObject {
             switch httpResponse.statusCode {
             case 200:
                 connectionStatus = .success(latencyMs: latencyMs)
+                // Read auth requirement from /health response
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let auth = json["auth"] as? Bool {
+                    serverAuthRequired = auth
+                }
             case 401:
                 connectionStatus = .error("Authentication failed (401) - check your access token")
             default:

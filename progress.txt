@@ -12,6 +12,7 @@
 - Server host app config persisted to `~/Library/Application Support/CopyEverywhereServer/config.json`. `ServerConfig.environment` provides the env dict for `ServerProcess`.
 - Launch at Login uses `SMAppService.mainApp` (ServiceManagement, macOS 13+). Sync actual status on init via `.status == .enabled` since users can toggle login items in System Settings independently.
 - Adding a new server env var requires updates in 5 places: config.Config + Load(), main.go usage, docker-compose.yml, ServerConfig.swift (env dict + persistence + ConfigData), MenuBarView.swift (config UI).
+- macOS client uses `NWBrowser` (Network.framework) for Bonjour discovery of `_copyeverywhere._tcp` services. Resolve endpoints via temporary `NWConnection` to get IP:port.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -147,4 +148,31 @@
 - **Learnings for future iterations:**
   - When adding new env vars to the Go server, remember to also update: (1) `config.Config` struct + `Load()`, (2) `main.go` usage, (3) `docker-compose.yml`, (4) `ServerConfig.swift` environment dict + persistence, (5) `MenuBarView.swift` config UI.
   - `ConfigData` fields for new optional settings should be `Optional` (`String?`, `Bool?`) to maintain backward compatibility with existing config.json files.
+---
+
+## 2026-04-12 - US-039
+- What was implemented:
+  - New `BonjourBrowser.swift` — `@MainActor` ObservableObject using `NWBrowser` (Network.framework) to browse `_copyeverywhere._tcp` services
+  - `DiscoveredServer` model with id, name, host, port, authRequired, version fields
+  - NWBrowser resolves endpoints via NWConnection to get actual IP:port; TXT records parsed for `auth` and `version`
+  - `ConfigStore` owns `BonjourBrowser` instance, starts browsing on init
+  - `selectDiscoveredServer(_:)` sets hostURL and serverAuthRequired from the discovered server
+  - `serverAuthRequired` published property: populated from mDNS TXT record or `/health` response `auth` field
+  - `testConnection()` now reads `auth` from `/health` JSON response to update `serverAuthRequired`
+  - `ConfigView` updated with "Discovered Servers" section showing LAN servers with click-to-select
+  - Selected server highlighted with checkmark and blue background
+  - Server entries show name, host:port, version badge, and lock icon for auth-required servers
+  - Access Token field hidden when `serverAuthRequired == false`; shown as required when `true`, optional when unknown
+  - Manual Host URL input preserved as fallback below discovered servers
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BonjourBrowser.swift — new file
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift — bonjourBrowser, serverAuthRequired, selectDiscoveredServer, /health auth parsing
+  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift — discovered servers UI, conditional token field
+  - prd.json — US-039 passes: true
+- **Learnings for future iterations:**
+  - `NWBrowser` (Network.framework) is the modern API for Bonjour browsing on macOS 13+. No need for `NetServiceBrowser`.
+  - `NWTXTRecord.getEntry(for:)` returns `NWTXTRecord.Entry?` enum — use a custom `stringValue(for:)` wrapper to extract string values.
+  - `NWTXTRecord.Entry` cases are `.string`, `.data`, `.empty`, `.none` — no `.rawBytes` case exists.
+  - To resolve a Bonjour service endpoint to an actual IP:port, create a temporary `NWConnection` and read `currentPath?.remoteEndpoint` when `.ready`.
+  - `NWBrowser.browseResultsChangedHandler` fires with the full current set of results, not deltas — diff against existing state manually.
 ---

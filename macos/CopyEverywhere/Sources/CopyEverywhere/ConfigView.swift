@@ -8,6 +8,9 @@ struct ConfigView: View {
             Text("Server Configuration")
                 .font(.headline)
 
+            // Discovered Servers section
+            discoveredServersSection
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("Host URL")
                     .font(.subheadline)
@@ -16,12 +19,20 @@ struct ConfigView: View {
                     .textFieldStyle(.roundedBorder)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Access Token (optional)")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                SecureField("Leave empty if server auth is disabled", text: $configStore.accessToken)
+            // Only show token field when auth is required or unknown
+            if configStore.serverAuthRequired != false {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Access Token\(configStore.serverAuthRequired == true ? "" : " (optional)")")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    SecureField(
+                        configStore.serverAuthRequired == true
+                            ? "Required by this server"
+                            : "Leave empty if server auth is disabled",
+                        text: $configStore.accessToken
+                    )
                     .textFieldStyle(.roundedBorder)
+                }
             }
 
             if !configStore.deviceID.isEmpty {
@@ -84,6 +95,83 @@ struct ConfigView: View {
             connectionStatusView
         }
         .padding()
+    }
+
+    // MARK: - Discovered Servers
+
+    @ViewBuilder
+    private var discoveredServersSection: some View {
+        let servers = configStore.bonjourBrowser.discoveredServers
+        let isSearching = configStore.bonjourBrowser.isSearching
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Discovered Servers")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if isSearching {
+                    ProgressView()
+                        .controlSize(.mini)
+                }
+            }
+
+            if servers.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .foregroundColor(.secondary)
+                    Text(isSearching ? "Scanning LAN..." : "No servers found")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                VStack(spacing: 4) {
+                    ForEach(servers) { server in
+                        Button {
+                            configStore.selectDiscoveredServer(server)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "server.rack")
+                                    .foregroundColor(.accentColor)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(server.name)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    Text("\(server.host):\(server.port)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if !server.version.isEmpty {
+                                    Text("v\(server.version)")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                                if server.authRequired {
+                                    Image(systemName: "lock.fill")
+                                        .font(.caption2)
+                                        .foregroundColor(.orange)
+                                }
+                                // Show checkmark if this server is currently selected
+                                if configStore.hostURL == "http://\(server.host):\(server.port)" {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundColor(.green)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(configStore.hostURL == "http://\(server.host):\(server.port)"
+                                          ? Color.accentColor.opacity(0.1)
+                                          : Color.clear)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
     }
 
     private func platformIcon(_ platform: String) -> String {
