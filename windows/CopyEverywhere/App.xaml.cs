@@ -9,6 +9,7 @@ public partial class App : Application
 {
     private TaskbarIcon? _notifyIcon;
     private MainWindow? _mainWindow;
+    private FloatingBallWindow? _floatingBall;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -28,8 +29,28 @@ public partial class App : Application
 
         _mainWindow = new MainWindow();
 
+        // Create floating ball window, sharing ConfigStore and ApiClient
+        _floatingBall = new FloatingBallWindow(_mainWindow.ConfigStore, _mainWindow.ApiClient);
+        if (_mainWindow.ConfigStore.ShowFloatingBall)
+        {
+            _floatingBall.Show();
+        }
+
+        // Listen for toggle changes from config UI
+        _mainWindow.FloatingBallVisibilityChanged += OnFloatingBallVisibilityChanged;
+
         // Show on first launch so user can configure
         ShowMainWindow();
+    }
+
+    private void OnFloatingBallVisibilityChanged(bool visible)
+    {
+        if (_floatingBall == null) return;
+
+        if (visible)
+            _floatingBall.Show();
+        else
+            _floatingBall.Hide();
     }
 
     private void OnTrayLeftClick(object sender, RoutedEventArgs e)

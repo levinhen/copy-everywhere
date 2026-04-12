@@ -22,6 +22,9 @@ public class ConfigStore : INotifyPropertyChanged
     private string _accessToken = "";
     private string _deviceId = "";
     private string _deviceName = "";
+    private bool _showFloatingBall = true;
+    private double _floatingBallX = double.NaN;
+    private double _floatingBallY = double.NaN;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -49,6 +52,24 @@ public class ConfigStore : INotifyPropertyChanged
         set { _deviceName = value; OnPropertyChanged(); }
     }
 
+    public bool ShowFloatingBall
+    {
+        get => _showFloatingBall;
+        set { _showFloatingBall = value; OnPropertyChanged(); }
+    }
+
+    public double FloatingBallX
+    {
+        get => _floatingBallX;
+        set { _floatingBallX = value; OnPropertyChanged(); }
+    }
+
+    public double FloatingBallY
+    {
+        get => _floatingBallY;
+        set { _floatingBallY = value; OnPropertyChanged(); }
+    }
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl) && !string.IsNullOrWhiteSpace(AccessToken);
 
     public ConfigStore()
@@ -73,9 +94,20 @@ public class ConfigStore : INotifyPropertyChanged
     {
         DeviceId = deviceId;
         DeviceName = deviceName;
+        PersistConfig();
+    }
 
+    public void PersistConfig()
+    {
         Directory.CreateDirectory(ConfigDir);
-        var config = new DeviceConfig { DeviceId = deviceId, DeviceName = deviceName };
+        var config = new DeviceConfig
+        {
+            DeviceId = DeviceId,
+            DeviceName = DeviceName,
+            ShowFloatingBall = ShowFloatingBall,
+            FloatingBallX = FloatingBallX,
+            FloatingBallY = FloatingBallY,
+        };
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(ConfigFilePath, json);
     }
@@ -92,6 +124,9 @@ public class ConfigStore : INotifyPropertyChanged
             {
                 DeviceId = config.DeviceId;
                 DeviceName = config.DeviceName;
+                ShowFloatingBall = config.ShowFloatingBall;
+                if (!double.IsNaN(config.FloatingBallX)) FloatingBallX = config.FloatingBallX;
+                if (!double.IsNaN(config.FloatingBallY)) FloatingBallY = config.FloatingBallY;
             }
         }
         catch
@@ -141,4 +176,13 @@ internal class DeviceConfig
 
     [JsonPropertyName("device_name")]
     public string DeviceName { get; set; } = "";
+
+    [JsonPropertyName("show_floating_ball")]
+    public bool ShowFloatingBall { get; set; } = true;
+
+    [JsonPropertyName("floating_ball_x")]
+    public double FloatingBallX { get; set; } = double.NaN;
+
+    [JsonPropertyName("floating_ball_y")]
+    public double FloatingBallY { get; set; } = double.NaN;
 }

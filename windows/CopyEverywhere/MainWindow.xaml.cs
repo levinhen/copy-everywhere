@@ -18,6 +18,11 @@ public partial class MainWindow : Window
     private readonly ApiClient _apiClient;
     private readonly HistoryStore _historyStore;
 
+    public ConfigStore ConfigStore => _configStore;
+    public ApiClient ApiClient => _apiClient;
+
+    public event Action<bool>? FloatingBallVisibilityChanged;
+
     private const int ChunkSize = 10 * 1024 * 1024; // 10MB
     private const long ChunkedThreshold = 50L * 1024 * 1024; // 50MB
 
@@ -45,6 +50,7 @@ public partial class MainWindow : Window
 
         UpdateMainPanelState();
         UpdateDeviceInfoDisplay();
+        FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         RefreshHistoryList();
     }
@@ -106,6 +112,14 @@ public partial class MainWindow : Window
         {
             DeviceInfoPanel.Visibility = Visibility.Collapsed;
         }
+    }
+
+    private void FloatingBallCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        var isChecked = FloatingBallCheckBox.IsChecked == true;
+        _configStore.ShowFloatingBall = isChecked;
+        _configStore.PersistConfig();
+        FloatingBallVisibilityChanged?.Invoke(isChecked);
     }
 
     private async void TestConnectionButton_Click(object sender, RoutedEventArgs e)

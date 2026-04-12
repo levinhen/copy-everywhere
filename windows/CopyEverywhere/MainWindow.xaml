@@ -81,6 +81,14 @@
                 </Border>
             </StackPanel>
 
+            <!-- Floating Ball Toggle -->
+            <CheckBox x:Name="FloatingBallCheckBox"
+                      Content="Show floating drop target"
+                      IsChecked="True"
+                      Margin="0,0,0,12"
+                      Checked="FloatingBallCheckBox_Changed"
+                      Unchecked="FloatingBallCheckBox_Changed"/>
+
             <!-- Separator -->
             <Separator Margin="0,4,0,16"/>
 

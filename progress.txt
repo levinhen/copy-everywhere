@@ -485,3 +485,21 @@
   - Device info display panel is separate from status — shown when DeviceId is populated, hidden otherwise
   - Environment.MachineName gives the Windows machine name (equivalent to macOS Host.current().localizedName)
 ---
+
+## 2026-04-12 - US-030
+- What was implemented: Windows FloatingBallWindow — 64x64 borderless circular always-on-top drop target with drag-to-reposition, file and text drop handling (files via chunked/simple upload, text via text clip), position persistence in config.json, toggle in MainWindow config section, toast notifications for success/failure
+- Files changed:
+  - `windows/CopyEverywhere/FloatingBallWindow.xaml` (new) — 64x64 borderless circular Window with Topmost, AllowsTransparency, AllowDrop, blue ellipse with "CE" text
+  - `windows/CopyEverywhere/FloatingBallWindow.xaml.cs` (new) — Drop handler for files and text, DragMove for repositioning, position persistence, chunked/simple upload logic, toast notifications
+  - `windows/CopyEverywhere/Services/ConfigStore.cs` — Added ShowFloatingBall, FloatingBallX, FloatingBallY properties; PersistConfig() public method; updated DeviceConfig class
+  - `windows/CopyEverywhere/MainWindow.xaml` — Added "Show floating drop target" CheckBox
+  - `windows/CopyEverywhere/MainWindow.xaml.cs` — Added FloatingBallVisibilityChanged event, ConfigStore/ApiClient public accessors, FloatingBallCheckBox_Changed handler
+  - `windows/CopyEverywhere/App.xaml.cs` — Creates FloatingBallWindow sharing ConfigStore/ApiClient, manages visibility via event
+  - `prd.json` — Marked US-030 passes: true
+- **Learnings for future iterations:**
+  - WPF AllowsTransparency=True + WindowStyle=None + Background=Transparent creates a see-through borderless window suitable for floating drop targets
+  - DragMove() in MouseLeftButtonDown makes any borderless window draggable
+  - FloatingBallWindow shares ConfigStore/ApiClient from MainWindow via public properties — no separate DI container needed
+  - Position is saved on every DragMove end to config.json alongside device config
+  - DataFormats.UnicodeText with fallback to DataFormats.Text covers both Unicode and ASCII text drops
+---
