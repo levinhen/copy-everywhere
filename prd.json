@@ -137,7 +137,7 @@
         "swift build succeeds"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "Split from original US-041 — connection layer only, no data protocol yet"
     },
     {

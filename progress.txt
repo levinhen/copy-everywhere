@@ -15,6 +15,9 @@
 - macOS client uses `NWBrowser` (Network.framework) for Bonjour discovery of `_copyeverywhere._tcp` services. Resolve endpoints via temporary `NWConnection` to get IP:port.
 - Windows client uses `Zeroconf` NuGet for mDNS browsing. Service type is `_copyeverywhere._tcp.local.` (note trailing `.local.`). Periodic scan via `ZeroconfResolver.ResolveAsync`.
 - `ServerAuthRequired` property (nullable bool) on ConfigStore is populated from mDNS TXT `auth` field or `/health` response `auth` field. Controls Access Token field visibility.
+- CopyEverywhere Bluetooth RFCOMM UUID: `CE000001-1000-1000-8000-00805F9B34FB`. Defined as `kCopyEverywhereServiceUUID` (macOS IOBluetoothSDPUUID). Same UUID must be used on Windows.
+- `BluetoothService` (`@MainActor`) is the RFCOMM connection layer. Server mode: SDP publish + channel notification. Client mode: SDP query + RFCOMM open. IOBluetooth callbacks arrive on non-main threads — use `nonisolated` bridge methods + `Task { @MainActor in }`.
+- IOBluetooth API: use `hasService(from:)` not the obsoleted `hasServiceFromArray(_:)`. `IOBluetoothSDPUUID(bytes:length:)` returns non-optional.
 
 ## 2026-04-12 - US-035
 - What was implemented:
@@ -202,4 +205,24 @@
   - TXT record properties in Zeroconf are `IReadOnlyList<IReadOnlyDictionary<string, string>>` — iterate the outer list and check each dict.
   - WPF dynamically generated UI (clearing StackPanel children) works well for discovered server lists; avoid `x:Name` on children that will be removed.
   - `dotnet build` cannot be verified on macOS dev machine — note this in progress when Windows-only changes are made.
+---
+
+## 2026-04-12 - US-041A
+- What was implemented:
+  - New `BluetoothService.swift` — `@MainActor` ObservableObject wrapping IOBluetooth framework for RFCOMM connections
+  - Defines shared RFCOMM Service UUID `CE000001-1000-1000-8000-00805F9B34FB` as `kCopyEverywhereServiceUUID`
+  - Server mode: publishes SDP service record via `IOBluetoothSDPServiceRecord.publishedServiceRecord(with:)`, registers for inbound RFCOMM channel notifications
+  - Client mode: `SDPQueryHelper` performs async SDP query on remote device, finds CopyEverywhere service record, opens RFCOMM channel
+  - `BluetoothServiceDelegate` protocol for connection callbacks (didAcceptConnection, didConnectTo, didFailWithError)
+  - `BluetoothServiceError` enum for all failure cases (serviceUUIDNotFound, sdpQueryFailed, rfcommOpenFailed, etc.)
+  - IOBluetooth callbacks bridge to MainActor via `nonisolated` methods + `Task { @MainActor in }`
+- Files changed:
+  - macos/CopyEverywhere/Sources/CopyEverywhere/BluetoothService.swift — new file
+  - prd.json — US-041A passes: true
+- **Learnings for future iterations:**
+  - IOBluetooth SDP query callbacks arrive on non-main threads. Since `BluetoothService` is `@MainActor`, bridge methods must be `nonisolated` and dispatch back via `Task { @MainActor in }`.
+  - `IOBluetoothSDPUUID(bytes:length:)` returns a non-optional — no force unwrapping needed.
+  - Use `hasService(from:)` not `hasServiceFromArray(_:)` — the latter is obsoleted in Swift 3.
+  - SDP service record dict keys use the format `"0001 - ServiceClassIDList"`, `"0004 - ProtocolDescriptorList"`, `"0100 - ServiceName*"`.
+  - `publishedServiceRecord(with:)` takes `[AnyHashable: Any]` — cast array values explicitly with `as [Any]` to satisfy the type checker.
 ---
