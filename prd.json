@@ -228,7 +228,7 @@
         "Binary bundling strategy documented"
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

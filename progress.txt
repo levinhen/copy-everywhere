@@ -6,6 +6,11 @@
 - AppDelegate owns top-level singletons (configStore, serverConfig, serverProcess) and injects them via `@EnvironmentObject`.
 - New ConfigData fields must be `Optional` with defaults in `load()` for backward compat with older config files.
 - When restarting the Go subprocess, poll `isRunning` instead of fixed delay — mDNS needs the old process fully exited before the new one starts.
+- Windows `ServerProcess`/`ServerConfig` mirror macOS patterns but use `INotifyPropertyChanged` instead of `@Published`.
+- Windows uses `Process.Kill()` (hard kill) since there's no reliable SIGTERM equivalent for console-less processes.
+- Go server's `/api/v1/devices` returns `device_id` (not `id`) — model classes on all platforms need CodingKeys/JsonPropertyName mapping.
+- `FolderBrowserDialog` (Windows) requires `<UseWindowsForms>true</UseWindowsForms>` in the csproj.
+- CLAUDE.md may have unresolved merge conflict markers from branch merges — always resolve these when editing.
 
 ---
 
@@ -207,5 +212,19 @@
 - **Learnings for future iterations:**
   - Windows `Process.Kill()` is SIGKILL equivalent — no graceful shutdown. mDNS TTL handles stale records
   - Cross-device mDNS verification requires manual testing with multiple devices on the same network
+---
+
+## 2026-04-13 - US-082
+- Added "Embedded Server (Windows)" conventions section to CLAUDE.md documenting ServerProcess, ServerConfig, toggle/auto-connect, UI, shutdown, and restart patterns
+- Added "Binary bundling strategy" paragraph documenting how to compile and place the Go binary for both platforms
+- Android exclusion already documented in US-075 ("Android does not embed the server")
+- Architecture section already updated in US-075 (macOS bullet mentions embedded server, CopyEverywhereServer removed)
+- All acceptance criteria satisfied across US-075 + US-082
+- swift build verified
+- Files changed:
+  - CLAUDE.md (added Windows embedded server conventions, binary bundling strategy)
+- **Learnings for future iterations:**
+  - Documentation stories can overlap with earlier stories — check what was already done before duplicating effort
+  - Binary bundling is a deployment concern that should be documented centrally since it affects both platforms
 ---
 

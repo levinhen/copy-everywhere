@@ -153,6 +153,17 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Bluetooth pairing flow (Windows).** `BluetoothService.ConnectAsync(DeviceInformation)` triggers the Windows system pairing dialog if needed. On `SessionReady`, the device is added to `PairedDevices`. Reconnection uses `ConnectByAddressAsync(ulong)`.
 - **Bluetooth UI in MainWindow.** Transfer mode ComboBox controls `BluetoothSection` visibility. Scan uses `BluetoothService.FindDevicesAsync()` (static). Paired device list rendered programmatically with Connect/Disconnect/Forget buttons. Status badge shows connection state via colored dot.
 
+**Embedded Server (Windows — `windows/CopyEverywhere/`):**
+
+- **`ServerProcess`** (`Services/ServerProcess.cs`, `INotifyPropertyChanged`) wraps `System.Diagnostics.Process`. `IsRunning` property, `LogLines` (`ObservableCollection<string>`, max 500). `Start()`, `Stop()`, `Restart()` / `RestartAsync()`. Stdout/stderr via `OutputDataReceived`/`ErrorDataReceived` events dispatched to UI thread. `BinaryPath` defaults to `copyeverywhere-server.exe` next to the client exe.
+- **`ServerConfig`** (`Services/ServerConfig.cs`, `INotifyPropertyChanged`) persists to `%APPDATA%/CopyEverywhere/server-config.json`. Properties: Port (8080), StoragePath, BindAddress, TtlHours, AuthEnabled, AccessToken, MaxClipSizeMB (50), ServerEnabled, AutoStartServer. `GetEnvironment()` returns env var dict for subprocess. `RefreshUsedSpace()` computes storage directory size on a background thread.
+- **Server toggle and auto-connect.** `MainWindow.SetServerEnabled(bool)` starts/stops subprocess and auto-sets `HostUrl` to `http://localhost:<port>`. `AutoConnectToLocalServer()` copies server auth to client config. Auto-start checks `ServerEnabled && AutoStartServer` in `MainWindow` constructor.
+- **Server UI.** Embedded Server section in MainWindow XAML: enable toggle, config fields (port, bind address, storage path with Browse button, TTL, max clip size, auth toggle, auto-start). Server Management section: status dot + text, contextual Start/Stop/Restart buttons, storage stats, connected devices list (via `GET /api/v1/devices`), log viewer (ScrollViewer + TextBlock, auto-scroll).
+- **Process shutdown.** `Process.Kill()` (hard kill, no SIGTERM on Windows). `Application.Current.Exit` handler registered in `ServerProcess` constructor. mDNS records expire via TTL.
+- **`RestartAsync()` polls `IsRunning`** for up to 5s before starting new instance — prevents duplicate mDNS registrations.
+
+**Binary bundling strategy:** The Go server binary (`copyeverywhere-server` on macOS, `copyeverywhere-server.exe` on Windows) must be compiled independently from `server/` and placed next to the respective client executable. macOS: `go build -o copyeverywhere-server .` in `server/`. Windows: `GOOS=windows go build -o copyeverywhere-server.exe .` in `server/`. The client apps discover the binary via a sibling-path convention (same directory as the running executable). Android does not embed the server.
+
 **Android:**
 
 - **Gradle version catalog** at `android/gradle/libs.versions.toml` is the single source of truth for dependency versions. Use `libs.` references in `build.gradle.kts`, never hardcode version strings.
