@@ -1,16 +1,21 @@
 # CopyEverywhere — Windows 客户端
 
-基于 .NET 8 WPF 的 Windows 系统托盘应用，支持通过 LAN 中继服务器或蓝牙 RFCOMM 在设备间传输剪贴板内容与文件。
+基于 .NET WPF 的 Windows 系统托盘应用，支持通过 LAN 中继服务器或蓝牙 RFCOMM 在设备间传输剪贴板内容与文件。
 
 ## 环境要求
 
 | 依赖 | 最低版本 |
 |------|---------|
 | Windows | 10 (build 19041 / 20H1) 或更高 |
-| .NET SDK | 8.0 |
+| .NET SDK | 8.0（推荐 10.0） |
 | Git | 任意版本 |
 
 > 不需要安装 Visual Studio，但可以用于调试。
+>
+> **关于 .NET 版本：** 项目目标框架为 `net8.0-windows10.0.19041.0`，在 .NET 10 SDK 下编译时已做以下兼容处理：
+> - `BluetoothSession.cs` 中 `Buffer.BlockCopy` 改为 `System.Buffer.BlockCopy`，消除与 WinRT `Windows.Storage.Streams.Buffer` 的歧义
+> - `MainWindow.xaml.cs` 中 `SendFileAsync` / `InitChunkedUploadAsync` 的 `CancellationToken` 参数改为命名参数传递（`ct:`），适配参数顺序变化
+> - `FloatingBallCheckBox_Changed` 加 null 守护，防止 XAML 加载期间 `_configStore` 未初始化时崩溃
 
 ## 编译
 
@@ -82,7 +87,7 @@ dotnet run
 ## 项目结构
 
 ```
-CopyEverywhere.csproj          # 项目配置，目标框架 net8.0-windows10.0.19041.0
+CopyEverywhere.csproj          # 项目配置，目标框架 net8.0-windows10.0.19041.0（兼容 .NET 10 SDK）
 App.xaml / App.xaml.cs         # 应用入口，初始化托盘图标
 MainWindow.xaml / .xaml.cs     # 主窗口（配置 + 队列 + 发送）
 FloatingBallWindow.xaml / .cs  # 悬浮球窗口

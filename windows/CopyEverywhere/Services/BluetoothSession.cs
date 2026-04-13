@@ -259,8 +259,8 @@ public class BluetoothSession : INotifyPropertyChanged, IDisposable
 
                 // Append to buffer
                 var newBuffer = new byte[_receiveBuffer.Length + chunk.Length];
-                Buffer.BlockCopy(_receiveBuffer, 0, newBuffer, 0, _receiveBuffer.Length);
-                Buffer.BlockCopy(chunk, 0, newBuffer, _receiveBuffer.Length, chunk.Length);
+                System.Buffer.BlockCopy(_receiveBuffer, 0, newBuffer, 0, _receiveBuffer.Length);
+                System.Buffer.BlockCopy(chunk, 0, newBuffer, _receiveBuffer.Length, chunk.Length);
                 _receiveBuffer = newBuffer;
 
                 ProcessReceivedData();
@@ -296,13 +296,13 @@ public class BluetoothSession : INotifyPropertyChanged, IDisposable
         if (delimiterIndex < 0) return; // Wait for complete handshake line
 
         var lineBytes = new byte[delimiterIndex];
-        Buffer.BlockCopy(_receiveBuffer, 0, lineBytes, 0, delimiterIndex);
+        System.Buffer.BlockCopy(_receiveBuffer, 0, lineBytes, 0, delimiterIndex);
 
         // Remove consumed bytes (including delimiter)
         var remaining = _receiveBuffer.Length - delimiterIndex - 1;
         var newBuffer = new byte[remaining];
         if (remaining > 0)
-            Buffer.BlockCopy(_receiveBuffer, delimiterIndex + 1, newBuffer, 0, remaining);
+            System.Buffer.BlockCopy(_receiveBuffer, delimiterIndex + 1, newBuffer, 0, remaining);
         _receiveBuffer = newBuffer;
 
         // Parse handshake
@@ -335,13 +335,13 @@ public class BluetoothSession : INotifyPropertyChanged, IDisposable
             if (delimiterIndex < 0) return; // Wait for complete header line
 
             var headerBytes = new byte[delimiterIndex];
-            Buffer.BlockCopy(_receiveBuffer, 0, headerBytes, 0, delimiterIndex);
+            System.Buffer.BlockCopy(_receiveBuffer, 0, headerBytes, 0, delimiterIndex);
 
             // Remove consumed bytes
             var remaining = _receiveBuffer.Length - delimiterIndex - 1;
             var newBuffer = new byte[remaining];
             if (remaining > 0)
-                Buffer.BlockCopy(_receiveBuffer, delimiterIndex + 1, newBuffer, 0, remaining);
+                System.Buffer.BlockCopy(_receiveBuffer, delimiterIndex + 1, newBuffer, 0, remaining);
             _receiveBuffer = newBuffer;
 
             try
@@ -376,13 +376,13 @@ public class BluetoothSession : INotifyPropertyChanged, IDisposable
         {
             // We have all the content
             var contentData = new byte[_bytesRemaining];
-            Buffer.BlockCopy(_receiveBuffer, 0, contentData, 0, _bytesRemaining);
+            System.Buffer.BlockCopy(_receiveBuffer, 0, contentData, 0, _bytesRemaining);
 
             // Remove consumed bytes
             var leftover = _receiveBuffer.Length - _bytesRemaining;
             var leftoverBuffer = new byte[leftover];
             if (leftover > 0)
-                Buffer.BlockCopy(_receiveBuffer, _bytesRemaining, leftoverBuffer, 0, leftover);
+                System.Buffer.BlockCopy(_receiveBuffer, _bytesRemaining, leftoverBuffer, 0, leftover);
             _receiveBuffer = leftoverBuffer;
 
             _pendingHeader = null;

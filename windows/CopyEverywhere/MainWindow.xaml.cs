@@ -158,6 +158,7 @@ public partial class MainWindow : Window
 
     private void FloatingBallCheckBox_Changed(object sender, RoutedEventArgs e)
     {
+        if (_configStore == null) return;
         var isChecked = FloatingBallCheckBox.IsChecked == true;
         _configStore.ShowFloatingBall = isChecked;
         _configStore.PersistConfig();
@@ -569,7 +570,7 @@ public partial class MainWindow : Window
                     UploadProgressText.Text = $"{pct:F0}% — {FormatSpeed(speed)}";
                 });
 
-                var clip = await _apiClient.SendFileAsync(filePath, progress, _uploadCts.Token);
+                var clip = await _apiClient.SendFileAsync(filePath, progress, ct: _uploadCts.Token);
                 if (clip != null)
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
@@ -604,7 +605,7 @@ public partial class MainWindow : Window
 
         ShowFileUploadStatus($"Initializing chunked upload ({totalChunks} chunks)...", isError: false);
 
-        var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileSize, ChunkSize, ct);
+        var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileSize, ChunkSize, ct: ct);
         if (initResult == null)
         {
             ShowFileUploadStatus("Failed to initialize chunked upload", isError: true);
