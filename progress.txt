@@ -1,0 +1,75 @@
+## Codebase Patterns
+- Windows: WPF PasswordBox doesn't support two-way binding — sync via PasswordChanged event
+- Windows: Use Application.Current.Dispatcher.Invoke() to update ObservableCollection from background threads (OutputDataReceived fires on a thread-pool thread)
+- Windows: Process.Kill(entireProcessTree: true) available on .NET 5+ — use it to ensure child processes are also killed
+- Windows: AppContext.BaseDirectory gives the directory containing the EXE (equivalent to Swift's Bundle.main.bundlePath)
+- Windows: Registry reads/writes via Microsoft.Win32.Registry.CurrentUser.OpenSubKey / CreateSubKey / DeleteValue — no extra NuGet needed
+- Windows: FolderBrowserDialog is in System.Windows.Forms — add <UseWindowsForms>true</UseWindowsForms> to csproj or use a WPF-native CommonOpenFileDialog from Microsoft.WindowsAPICodePack if available
+- Windows: Process.StartInfo.Environment is a Dictionary<string,string> pre-populated with the current process environment; override specific keys before starting
+- Windows: Atomic file write pattern: write to <path>.tmp then File.Replace(<path>.tmp, <path>, null)
+- Windows: GetFolderPath(Environment.SpecialFolder.ApplicationData) returns %APPDATA% (roaming); LocalApplicationData returns %LOCALAPPDATA%
+- Server binary path convention: copyeverywhere-server.exe placed as a sibling next to CopyEverywhere.exe (same directory); compiled separately with go build -o copyeverywhere-server.exe . from server/
+
+---
+
+## 2026-04-13 - US-083
+- Implemented `Services/ServerProcess.cs` — subprocess lifecycle management for the Go relay server
+- Implemented minimal `Services/ServerConfig.cs` stub with `GetEnvironment()` (full persistence in US-084)
+- Files changed: `windows/CopyEverywhere/Services/ServerProcess.cs` (new), `windows/CopyEverywhere/Services/ServerConfig.cs` (new)
+- **Learnings for future iterations:**
+  - `Process.EnableRaisingEvents = true` must be set before calling `Start()` for the `Exited` event to fire
+  - `OutputDataReceived`/`ErrorDataReceived` fire on thread-pool threads — must use `Dispatcher.Invoke` to update `ObservableCollection`
+  - `Process.Kill(entireProcessTree: true)` is the .NET 5+ way to kill a process tree — no need for P/Invoke
+  - `Application.Current.Dispatcher` can be null during shutdown — guard before invoking
+  - `BeginOutputReadLine()`/`BeginErrorReadLine()` must be called after `Start()` to begin async reading
+  - Created ServerConfig as a minimal stub since ServerProcess depends on it; US-084 will flesh it out with persistence
+---
+
+## 2026-04-13 - US-084
+- Fleshed out `Services/ServerConfig.cs` from stub to full implementation with JSON persistence
+- Added properties: `ServerEnabled`, `AutoStartServer`, `UsedSpaceBytes` (with backing fields + INotifyPropertyChanged)
+- Converted all existing properties to use backing fields with `OnPropertyChanged()` notifications
+- `Save()` writes atomically via `.tmp` file + `File.Replace`/`File.Move`
+- `Load()` deserializes from `%APPDATA%/CopyEverywhere/server-config.json`; missing/corrupt file keeps defaults
+- `RefreshUsedSpaceAsync()` enumerates `StoragePath` on a background thread, updates `UsedSpaceBytes` on UI thread
+- Private `ServerConfigData` class with `[JsonPropertyName]` attributes for clean JSON serialization
+- Files changed: `windows/CopyEverywhere/Services/ServerConfig.cs` (rewritten)
+- **Learnings for future iterations:**
+  - `File.Replace(src, dst, null)` throws if `dst` doesn't exist — need conditional: `File.Replace` when target exists, `File.Move` when it doesn't
+  - `Directory.EnumerateFiles` with `SearchOption.AllDirectories` can throw on inaccessible subdirectories — wrap in try/catch
+  - `Application.Current?.Dispatcher?.Invoke` double null-check needed for background tasks that may outlive the app lifecycle
+---
+
+## 2026-04-13 - US-085
+- Implemented server toggle and auto-connect in `App.xaml.cs` and `MainWindow.xaml.cs`
+- `App.xaml.cs`: creates `ServerConfig` + `ServerProcess`, calls `Load()`, auto-starts server if `AutoStartServer`, auto-sets `HostUrl` if `ServerEnabled`
+- `MainWindow` constructor now takes `ServerConfig` and `ServerProcess` parameters
+- Added `EnableServer()` / `DisableServer()` methods to `MainWindow` for UI toggle logic (US-086 will wire the CheckBox)
+- `EnableServer()` checks `File.Exists(BinaryPath)` and returns error message if missing, leaving `ServerEnabled=false`
+- `DisableServer()` stops the server but leaves `HostUrl` unchanged
+- `App.xaml.cs` handles `--minimized` arg to start hidden to tray
+- Updated CLAUDE.md source of truth and PRD files for new iteration
+- Files changed: `App.xaml.cs`, `MainWindow.xaml.cs`, `CLAUDE.md`, `prd.json`, `tasks/prd-windows-embedded-server.md` (new), `tasks/prd-embedded-server.md` (deleted)
+- **Learnings for future iterations:**
+  - `MainWindow` parameterless constructor was the only constructor — when adding DI parameters, must replace it (WPF designer may complain but runtime is fine since `App.xaml.cs` creates the window programmatically)
+  - `e.Args.Contains("--minimized")` requires `System.Linq` using
+  - Server enable/disable logic split: `App.xaml.cs` handles launch-time auto-start; `MainWindow` exposes `EnableServer()`/`DisableServer()` for runtime toggle (US-086 will wire the CheckBox)
+---
+
+## 2026-04-13 - US-086
+- Added "Embedded Server" configuration UI section to MainWindow XAML
+- CheckBox "Enable embedded server" toggles `ServerEnabled` and calls `EnableServer()`/`DisableServer()` from US-085
+- When ServerEnabled=false, all child controls inside `ServerConfigPanel` are greyed out (IsEnabled=false)
+- Port, Bind Address, TTL, Max Clip Size TextBoxes bound to ServerConfig properties
+- Storage Path TextBox + "Browse..." Button opens `FolderBrowserDialog` (added `<UseWindowsForms>true</UseWindowsForms>` to csproj)
+- "Require authentication" CheckBox shows/hides a PasswordBox for the server access token (synced via PasswordChanged)
+- "Auto-start server on app launch" CheckBox
+- "Apply & Restart Server" Button: saves ServerConfig, restarts server if running or starts if stopped (and ServerEnabled)
+- Error display when binary is missing (red border with message)
+- Files changed: `MainWindow.xaml`, `MainWindow.xaml.cs`, `CopyEverywhere.csproj`, `prd.json`
+- **Learnings for future iterations:**
+  - `FolderBrowserDialog` requires `<UseWindowsForms>true</UseWindowsForms>` in csproj and lives in `System.Windows.Forms` namespace
+  - `FolderBrowserDialog.UseDescriptionForTitle = true` gives a modern dialog appearance with the description as the title
+  - ServerConfig fields are read from UI controls manually in the Apply handler (not via data binding) since ServerConfig isn't the DataContext — DataContext is ConfigStore
+  - Guard `_serverConfig == null` in CheckBox Changed handlers to prevent XAML designer/load-time null reference issues
+---

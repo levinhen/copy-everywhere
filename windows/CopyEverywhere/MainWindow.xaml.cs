@@ -99,6 +99,9 @@ public partial class MainWindow : Window
         RefreshClipboardPreview();
         InitializeTransferModeUI();
 
+        // Initialize embedded server UI
+        InitializeServerConfigUI();
+
         // Start mDNS discovery
         _mdnsService.ServersChanged += OnDiscoveredServersChanged;
         _mdnsService.StartBrowsing();
@@ -2232,5 +2235,110 @@ public partial class MainWindow : Window
         _serverConfig.ServerEnabled = false;
         _serverConfig.Save();
         _serverProcess.Stop();
+    }
+
+    // --- Embedded Server Configuration UI (US-086) ---
+
+    private void InitializeServerConfigUI()
+    {
+        // Populate fields from ServerConfig
+        ServerEnabledCheckBox.IsChecked = _serverConfig.ServerEnabled;
+        ServerPortTextBox.Text = _serverConfig.Port;
+        ServerBindAddressTextBox.Text = _serverConfig.BindAddress;
+        ServerStoragePathTextBox.Text = _serverConfig.StoragePath;
+        ServerTtlTextBox.Text = _serverConfig.TtlHours.ToString();
+        ServerMaxClipSizeTextBox.Text = _serverConfig.MaxClipSizeMB.ToString();
+        ServerAuthCheckBox.IsChecked = _serverConfig.AuthEnabled;
+        ServerAccessTokenBox.Password = _serverConfig.AccessToken;
+        AutoStartServerCheckBox.IsChecked = _serverConfig.AutoStartServer;
+
+        // Set initial enabled/visibility state
+        ServerConfigPanel.IsEnabled = _serverConfig.ServerEnabled;
+        ServerAccessTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_serverConfig == null) return;
+
+        var isEnabled = ServerEnabledCheckBox.IsChecked == true;
+        ServerConfigPanel.IsEnabled = isEnabled;
+
+        if (isEnabled)
+        {
+            var error = EnableServer();
+            if (error != null)
+            {
+                ServerEnabledCheckBox.IsChecked = false;
+                ServerConfigPanel.IsEnabled = false;
+                ServerStatusBorder.Visibility = Visibility.Visible;
+                ServerStatusText.Text = error;
+            }
+            else
+            {
+                ServerStatusBorder.Visibility = Visibility.Collapsed;
+            }
+        }
+        else
+        {
+            ServerStatusBorder.Visibility = Visibility.Collapsed;
+            DisableServer();
+        }
+    }
+
+    private void ServerAuthCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_serverConfig == null) return;
+
+        var isChecked = ServerAuthCheckBox.IsChecked == true;
+        ServerAccessTokenPanel.Visibility = isChecked ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ServerAccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        // PasswordBox doesn't support binding — sync manually
+    }
+
+    private void BrowseStoragePathButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select storage directory for server data",
+            UseDescriptionForTitle = true,
+            SelectedPath = ServerStoragePathTextBox.Text,
+        };
+
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            ServerStoragePathTextBox.Text = dialog.SelectedPath;
+        }
+    }
+
+    private async void ApplyRestartServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Read values from UI controls into ServerConfig
+        _serverConfig.Port = ServerPortTextBox.Text.Trim();
+        _serverConfig.BindAddress = ServerBindAddressTextBox.Text.Trim();
+        _serverConfig.StoragePath = ServerStoragePathTextBox.Text.Trim();
+        if (int.TryParse(ServerTtlTextBox.Text.Trim(), out var ttl))
+            _serverConfig.TtlHours = ttl;
+        if (int.TryParse(ServerMaxClipSizeTextBox.Text.Trim(), out var maxClip))
+            _serverConfig.MaxClipSizeMB = maxClip;
+        _serverConfig.AuthEnabled = ServerAuthCheckBox.IsChecked == true;
+        _serverConfig.AccessToken = ServerAccessTokenBox.Password;
+        _serverConfig.AutoStartServer = AutoStartServerCheckBox.IsChecked == true;
+        _serverConfig.Save();
+
+        // Update client HostUrl to match new port
+        if (_serverConfig.ServerEnabled)
+        {
+            _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+            _configStore.Save();
+
+            if (_serverProcess.IsRunning)
+                await _serverProcess.RestartAsync();
+            else
+                _serverProcess.Start();
+        }
     }
 }

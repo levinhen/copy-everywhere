@@ -171,6 +171,96 @@
                 <ComboBoxItem Content="Bluetooth Direct" Tag="Bluetooth"/>
             </ComboBox>
 
+            <!-- Embedded Server Section -->
+            <Separator Margin="0,4,0,16"/>
+            <TextBlock Text="Embedded Server" Style="{StaticResource SectionHeader}"/>
+
+            <CheckBox x:Name="ServerEnabledCheckBox"
+                      Content="Enable embedded server"
+                      Margin="0,0,0,12"
+                      Checked="ServerEnabledCheckBox_Changed"
+                      Unchecked="ServerEnabledCheckBox_Changed"/>
+
+            <!-- Server error/status -->
+            <Border x:Name="ServerStatusBorder"
+                    Visibility="Collapsed"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Margin="0,0,0,8"
+                    Background="#FEE2E2">
+                <TextBlock x:Name="ServerStatusText"
+                           TextWrapping="Wrap"
+                           FontSize="12"
+                           Foreground="#B91C1C"/>
+            </Border>
+
+            <StackPanel x:Name="ServerConfigPanel" IsEnabled="False">
+                <TextBlock Text="Port" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerPortTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"
+                         Width="100"
+                         HorizontalAlignment="Left"/>
+
+                <TextBlock Text="Bind Address" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerBindAddressTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"/>
+
+                <TextBlock Text="Storage Path" Style="{StaticResource FieldLabel}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBox x:Name="ServerStoragePathTextBox"
+                             Padding="6,4"
+                             Width="260"/>
+                    <Button x:Name="BrowseStoragePathButton"
+                            Content="Browse..."
+                            Width="80" Height="28"
+                            Margin="8,0,0,0"
+                            Click="BrowseStoragePathButton_Click"/>
+                </StackPanel>
+
+                <TextBlock Text="TTL (hours)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerTtlTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"
+                         Width="100"
+                         HorizontalAlignment="Left"/>
+
+                <TextBlock Text="Max Clip Size (MB)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerMaxClipSizeTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"
+                         Width="100"
+                         HorizontalAlignment="Left"/>
+
+                <CheckBox x:Name="ServerAuthCheckBox"
+                          Content="Require authentication"
+                          Margin="0,0,0,8"
+                          Checked="ServerAuthCheckBox_Changed"
+                          Unchecked="ServerAuthCheckBox_Changed"/>
+
+                <StackPanel x:Name="ServerAccessTokenPanel" Visibility="Collapsed">
+                    <TextBlock Text="Server Access Token" Style="{StaticResource FieldLabel}"/>
+                    <PasswordBox x:Name="ServerAccessTokenBox"
+                                 Margin="0,0,0,8"
+                                 Padding="6,4"
+                                 PasswordChanged="ServerAccessTokenBox_PasswordChanged"/>
+                </StackPanel>
+
+                <CheckBox x:Name="AutoStartServerCheckBox"
+                          Content="Auto-start server on app launch"
+                          Margin="0,0,0,12"/>
+
+                <Button x:Name="ApplyRestartServerButton"
+                        Content="Apply &amp; Restart Server"
+                        Width="160" Height="30"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,8"
+                        Click="ApplyRestartServerButton_Click"/>
+            </StackPanel>
+
+            <Separator Margin="0,4,0,16"/>
+
             <!-- Bluetooth Section (hidden by default) -->
             <StackPanel x:Name="BluetoothSection" Visibility="Collapsed">
                 <!-- Connection Status -->
