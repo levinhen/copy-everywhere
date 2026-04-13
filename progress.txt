@@ -73,3 +73,21 @@
   - ServerConfig fields are read from UI controls manually in the Apply handler (not via data binding) since ServerConfig isn't the DataContext — DataContext is ConfigStore
   - Guard `_serverConfig == null` in CheckBox Changed handlers to prevent XAML designer/load-time null reference issues
 ---
+
+## 2026-04-13 - US-087
+- Added server management panel visible only when `ServerEnabled=true`
+- Status row: green/red Ellipse + "Running"/"Stopped" text driven by `ServerProcess.IsRunning`
+- Listen address TextBlock shows `BindAddress:Port`, visible only when running
+- Storage used TextBlock with `FormatBytes` helper (reused existing method); refreshed on start and via 30-second timer
+- Start/Stop/Restart buttons with correct visibility toggling based on `IsRunning`
+- Log viewer: ScrollViewer + Consolas TextBlock bound to `LogLines` joined by newline; auto-scrolls via `CollectionChanged` handler
+- "Clear Logs" button clears `LogLines` and resets the TextBlock
+- `ServerProcess.PropertyChanged` wired to `UpdateServerManagementPanel()` for reactive status updates
+- `ServerConfig.PropertyChanged` wired for `UsedSpaceBytes` to update storage text
+- Files changed: `MainWindow.xaml`, `MainWindow.xaml.cs`, `prd.json`
+- **Learnings for future iterations:**
+  - `FormatBytes` helper already existed in MainWindow — check for existing utility methods before adding duplicates
+  - `ObservableCollection.CollectionChanged` fires on the UI thread (since `AppendLog` uses `Dispatcher.Invoke`), so ScrollToEnd can be called directly
+  - Storage usage timer must be stopped when server is disabled to avoid unnecessary background work
+  - `_storageUsageTimer` field needs to be declared outside the method scope (class field) — DispatcherTimers must be retained to avoid GC
+---

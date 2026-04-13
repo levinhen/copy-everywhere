@@ -2239,6 +2239,8 @@ public partial class MainWindow : Window
 
     // --- Embedded Server Configuration UI (US-086) ---
 
+    private System.Windows.Threading.DispatcherTimer? _storageUsageTimer;
+
     private void InitializeServerConfigUI()
     {
         // Populate fields from ServerConfig
@@ -2255,6 +2257,27 @@ public partial class MainWindow : Window
         // Set initial enabled/visibility state
         ServerConfigPanel.IsEnabled = _serverConfig.ServerEnabled;
         ServerAccessTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
+
+        // Wire up management panel
+        _serverProcess.LogLines.CollectionChanged += (_, _) =>
+        {
+            ServerLogText.Text = string.Join("\n", _serverProcess.LogLines);
+            ServerLogScrollViewer.ScrollToEnd();
+        };
+
+        _serverProcess.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ServerProcess.IsRunning))
+                UpdateServerManagementPanel();
+        };
+
+        _serverConfig.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ServerConfig.UsedSpaceBytes))
+                UpdateStorageUsedText();
+        };
+
+        UpdateServerManagementPanel();
     }
 
     private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -2284,6 +2307,8 @@ public partial class MainWindow : Window
             ServerStatusBorder.Visibility = Visibility.Collapsed;
             DisableServer();
         }
+
+        UpdateServerManagementPanel();
     }
 
     private void ServerAuthCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -2340,5 +2365,102 @@ public partial class MainWindow : Window
             else
                 _serverProcess.Start();
         }
+
+        UpdateServerManagementPanel();
+    }
+
+    // --- Server Management Panel (US-087) ---
+
+    private void UpdateServerManagementPanel()
+    {
+        var enabled = _serverConfig.ServerEnabled;
+        ServerManagementPanel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!enabled)
+        {
+            StopStorageUsageTimer();
+            return;
+        }
+
+        var running = _serverProcess.IsRunning;
+
+        // Status dot and text
+        ServerRunningDot.Fill = running
+            ? new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)) // green
+            : new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44)); // red
+        ServerRunningText.Text = running ? "Running" : "Stopped";
+
+        // Listen address
+        ServerListenAddressText.Text = $"Listening on {_serverConfig.BindAddress}:{_serverConfig.Port}";
+        ServerListenAddressText.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+
+        // Buttons
+        StartServerButton.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
+        StopServerButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        RestartServerButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+
+        // Storage usage + timer
+        if (running)
+        {
+            _ = _serverConfig.RefreshUsedSpaceAsync();
+            StartStorageUsageTimer();
+        }
+        else
+        {
+            StopStorageUsageTimer();
+        }
+
+        UpdateStorageUsedText();
+    }
+
+    private void UpdateStorageUsedText()
+    {
+        ServerStorageUsedText.Text = $"Storage used: {FormatBytes(_serverConfig.UsedSpaceBytes)}";
+    }
+
+    private void StartStorageUsageTimer()
+    {
+        if (_storageUsageTimer != null) return;
+
+        _storageUsageTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(30)
+        };
+        _storageUsageTimer.Tick += async (_, _) =>
+        {
+            await _serverConfig.RefreshUsedSpaceAsync();
+            UpdateStorageUsedText();
+        };
+        _storageUsageTimer.Start();
+    }
+
+    private void StopStorageUsageTimer()
+    {
+        _storageUsageTimer?.Stop();
+        _storageUsageTimer = null;
+    }
+
+    private void StartServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.Start();
+        UpdateServerManagementPanel();
+    }
+
+    private void StopServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.Stop();
+        UpdateServerManagementPanel();
+    }
+
+    private async void RestartServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _serverProcess.RestartAsync();
+        UpdateServerManagementPanel();
+    }
+
+    private void ClearLogsButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.LogLines.Clear();
+        ServerLogText.Text = "";
     }
 }

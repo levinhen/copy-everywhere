@@ -259,6 +259,68 @@
                         Click="ApplyRestartServerButton_Click"/>
             </StackPanel>
 
+            <!-- Server Management Panel (visible only when ServerEnabled) -->
+            <StackPanel x:Name="ServerManagementPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                <!-- Status row -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Ellipse x:Name="ServerRunningDot" Width="10" Height="10" Fill="Red" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ServerRunningText" Text="Stopped" FontSize="12" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Listen address (visible when running) -->
+                <TextBlock x:Name="ServerListenAddressText"
+                           FontSize="12"
+                           Foreground="Gray"
+                           Margin="0,0,0,4"
+                           Visibility="Collapsed"/>
+
+                <!-- Storage used -->
+                <TextBlock x:Name="ServerStorageUsedText"
+                           FontSize="12"
+                           Foreground="Gray"
+                           Margin="0,0,0,8"/>
+
+                <!-- Start/Stop/Restart buttons -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="StartServerButton"
+                            Content="Start Server"
+                            Width="100" Height="28"
+                            Margin="0,0,8,0"
+                            Click="StartServerButton_Click"/>
+                    <Button x:Name="StopServerButton"
+                            Content="Stop Server"
+                            Width="100" Height="28"
+                            Margin="0,0,8,0"
+                            Visibility="Collapsed"
+                            Click="StopServerButton_Click"/>
+                    <Button x:Name="RestartServerButton"
+                            Content="Restart"
+                            Width="80" Height="28"
+                            Visibility="Collapsed"
+                            Click="RestartServerButton_Click"/>
+                </StackPanel>
+
+                <!-- Log viewer -->
+                <TextBlock Text="Server Logs" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,4"
+                        MaxHeight="200">
+                    <ScrollViewer x:Name="ServerLogScrollViewer" VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="ServerLogText"
+                                   FontFamily="Consolas"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Padding="6,4"/>
+                    </ScrollViewer>
+                </Border>
+
+                <Button x:Name="ClearLogsButton"
+                        Content="Clear Logs"
+                        Width="80" Height="26"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,8"
+                        Click="ClearLogsButton_Click"/>
+            </StackPanel>
+
             <Separator Margin="0,4,0,16"/>
 
             <!-- Bluetooth Section (hidden by default) -->
