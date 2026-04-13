@@ -1,0 +1,235 @@
+{
+  "project": "CopyEverywhere",
+  "branchName": "ralph/embedded-server",
+  "description": "Embedded Server — Merge the standalone Go relay server into the macOS and Windows client apps as an optional subprocess, eliminating the separate CopyEverywhereServer host app",
+  "userStories": [
+    {
+      "id": "US-069",
+      "title": "macOS — Migrate ServerProcess into client app",
+      "description": "As a macOS user, I want the CopyEverywhere client to manage the Go server subprocess so I don't need a separate server host app.",
+      "acceptanceCriteria": [
+        "ServerProcess class copied from CopyEverywhereServer into CopyEverywhere sources",
+        "ServerProcess adapted to work within the client app's @MainActor context",
+        "binaryPath defaults to a bundled copyeverywhere-server binary next to the client executable",
+        "start() / stop() / restart() work correctly from the client app",
+        "Log capture (stdout/stderr) works, max 500 lines retained",
+        "Graceful shutdown via SIGTERM on app quit (applicationWillTerminate)",
+        "swift build succeeds"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-070",
+      "title": "macOS — Migrate ServerConfig into client app",
+      "description": "As a macOS user, I want server settings stored alongside my client config so everything is in one place.",
+      "acceptanceCriteria": [
+        "ServerConfig class copied from CopyEverywhereServer into CopyEverywhere sources",
+        "Config persisted to ~/Library/Application Support/CopyEverywhere/server-config.json (separate from client config)",
+        "Properties: port (default 8080), storagePath (default ~/Library/Application Support/CopyEverywhere/server-data), bindAddress (default 0.0.0.0), ttlHours (default 24), authEnabled (default false), accessToken, maxClipSizeMB (default 50)",
+        "environment computed property generates the env dict for subprocess",
+        "save() / load() / refreshUsedSpace() work correctly",
+        "swift build succeeds"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-071",
+      "title": "macOS — Server toggle and auto-connect",
+      "description": "As a macOS user, I want a toggle to enable/disable the embedded server, and when enabled, automatically connect to it.",
+      "acceptanceCriteria": [
+        "serverEnabled boolean persisted in ServerConfig (default false)",
+        "autoStartServer boolean persisted in ServerConfig (default false)",
+        "When serverEnabled toggled ON: start the subprocess, set hostURL to http://localhost:<port>",
+        "When serverEnabled toggled OFF: stop the subprocess, keep hostURL as-is",
+        "If autoStartServer is true, start server on app launch",
+        "User can manually override hostURL to point to a remote server even when local server is running",
+        "swift build succeeds"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-072",
+      "title": "macOS — Server configuration UI",
+      "description": "As a macOS user, I want to configure the embedded server from the same settings panel I use for client config.",
+      "acceptanceCriteria": [
+        "New Server section in ConfigView, visible below the existing transfer mode sections",
+        "Toggle: Enable embedded server (binds to serverEnabled)",
+        "When enabled, show server config fields: Port, Bind Address, Storage Path, TTL (hours), Max Clip Size (MB)",
+        "Toggle: Require authentication with Access Token field (shown when auth enabled)",
+        "Toggle: Auto-start server on launch",
+        "Apply & Restart Server button (saves config, restarts subprocess if running)",
+        "Fields disabled when server is not enabled",
+        "swift build succeeds"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-073",
+      "title": "macOS — Server management panel",
+      "description": "As a macOS user, I want a full management panel showing server status, logs, storage usage, and connected devices.",
+      "acceptanceCriteria": [
+        "Server status indicator in MainPanelView header area: green dot = running, red dot = stopped, gray dot = disabled",
+        "Start / Stop / Restart buttons (contextual: show Start when stopped, Stop+Restart when running)",
+        "Expandable log viewer showing last 500 lines of server output, auto-scrolling",
+        "Storage stats: used space (from refreshUsedSpace()), storage path displayed",
+        "Connected devices list: fetched via GET /api/v1/devices from the local server (only when running)",
+        "Panel section hidden when serverEnabled is false",
+        "swift build succeeds"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-074",
+      "title": "macOS — mDNS broadcast from embedded server",
+      "description": "As a macOS user hosting the server, I want other devices to discover my server via mDNS automatically.",
+      "acceptanceCriteria": [
+        "When embedded server starts, the Go binary's built-in mDNS broadcast activates (already in server code)",
+        "Verify that other clients (macOS, Windows, Android) discover the embedded server via mDNS",
+        "When server stops, mDNS deregisters (already handled by Go server's SIGTERM handler)",
+        "No duplicate mDNS registrations on restart",
+        "swift build succeeds"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-075",
+      "title": "macOS — Remove standalone CopyEverywhereServer app",
+      "description": "As a developer, I want to remove the standalone server host app since its functionality is now in the client.",
+      "acceptanceCriteria": [
+        "macos/CopyEverywhereServer/ directory deleted",
+        "References to CopyEverywhereServer removed from CLAUDE.md architecture section",
+        "CLAUDE.md updated to document the embedded server architecture in the client app",
+        "swift build succeeds for CopyEverywhere"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-076",
+      "title": "Windows — Add ServerProcess management",
+      "description": "As a Windows user, I want the CopyEverywhere WPF app to manage the Go server subprocess.",
+      "acceptanceCriteria": [
+        "New Services/ServerProcess.cs class using System.Diagnostics.Process",
+        "Properties: IsRunning, LogLines (ObservableCollection, max 500)",
+        "Methods: Start(), Stop(), Restart()",
+        "Stdout/stderr captured via OutputDataReceived / ErrorDataReceived events",
+        "BinaryPath defaults to copyeverywhere-server.exe next to the client executable",
+        "Environment variables forwarded from ServerConfig",
+        "Process killed on app exit (Application.Current.Exit handler)",
+        "dotnet build succeeds"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-077",
+      "title": "Windows — Add ServerConfig persistence",
+      "description": "As a Windows user, I want server settings stored alongside my client config.",
+      "acceptanceCriteria": [
+        "New Services/ServerConfig.cs class (INotifyPropertyChanged)",
+        "Properties: Port (default 8080), StoragePath (default %APPDATA%/CopyEverywhere/server-data), BindAddress (default 0.0.0.0), TtlHours (default 24), AuthEnabled (default false), AccessToken, MaxClipSizeMB (default 50)",
+        "ServerEnabled (default false), AutoStartServer (default false)",
+        "Config persisted to %APPDATA%/CopyEverywhere/server-config.json",
+        "GetEnvironment() method returns Dictionary<string, string> for subprocess",
+        "Save() / Load() / RefreshUsedSpace() methods",
+        "dotnet build succeeds"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-078",
+      "title": "Windows — Server toggle and auto-connect",
+      "description": "As a Windows user, I want a toggle to enable/disable the embedded server, and when enabled, automatically connect to it.",
+      "acceptanceCriteria": [
+        "When ServerEnabled toggled ON: start subprocess, set HostUrl to http://localhost:<port>",
+        "When ServerEnabled toggled OFF: stop subprocess, keep HostUrl as-is",
+        "If AutoStartServer is true, start server on app launch",
+        "User can manually override HostUrl to point to a remote server",
+        "dotnet build succeeds"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-079",
+      "title": "Windows — Server configuration UI",
+      "description": "As a Windows user, I want to configure the embedded server from the same settings panel.",
+      "acceptanceCriteria": [
+        "New Server section in MainWindow XAML, below existing config sections",
+        "CheckBox: Enable embedded server (binds to ServerEnabled)",
+        "When enabled, show fields: Port, Bind Address, Storage Path (with Browse button), TTL, Max Clip Size",
+        "CheckBox: Require authentication with PasswordBox for token",
+        "CheckBox: Auto-start server on launch",
+        "Apply & Restart Server button",
+        "Fields disabled when server is not enabled",
+        "dotnet build succeeds"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-080",
+      "title": "Windows — Server management panel",
+      "description": "As a Windows user, I want a management panel showing server status, logs, storage, and connected devices.",
+      "acceptanceCriteria": [
+        "Server status indicator: colored dot (green/red/gray) + status text",
+        "Start / Stop / Restart buttons (contextual)",
+        "Expandable log viewer (ScrollViewer + TextBlock, auto-scroll, max 500 lines)",
+        "Storage stats: used space + storage path",
+        "Connected devices list fetched from local server GET /api/v1/devices",
+        "Section hidden when ServerEnabled is false",
+        "dotnet build succeeds"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-081",
+      "title": "Windows — mDNS broadcast verification",
+      "description": "As a Windows user hosting the server, I want other devices to discover my server via mDNS.",
+      "acceptanceCriteria": [
+        "When embedded server starts, Go binary's mDNS broadcast activates (already in server code)",
+        "Verify other clients discover the Windows-hosted embedded server",
+        "mDNS deregisters on server stop (Go handles SIGTERM/process exit)",
+        "dotnet build succeeds"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-082",
+      "title": "Documentation and CLAUDE.md update",
+      "description": "As a developer, I want CLAUDE.md updated to reflect the new embedded server architecture.",
+      "acceptanceCriteria": [
+        "Architecture section updated: macOS and Windows clients now embed the server as an optional subprocess",
+        "CopyEverywhereServer references removed or marked as removed",
+        "New conventions added for ServerProcess/ServerConfig patterns on both platforms",
+        "Android exclusion documented",
+        "Binary bundling strategy documented"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": ""
+    }
+  ]
+}
