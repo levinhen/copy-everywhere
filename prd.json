@@ -126,7 +126,7 @@
         "Source of truth section updated: active iteration points at prd.json and tasks/prd-windows-embedded-server.md"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": ""
     }
   ]

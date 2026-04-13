@@ -105,3 +105,18 @@
   - `Process.GetCurrentProcess().MainModule?.FileName` gives the full EXE path for the registry value
   - `Microsoft.Win32.Registry` is the namespace for registry access — no extra NuGet needed (already in `using` scope via OpenFileDialog)
 ---
+
+## 2026-04-13 - US-089
+- Updated CLAUDE.md with Windows embedded server conventions:
+  - ServerProcess: subprocess lifecycle, Dispatcher.Invoke for log lines, Kill(entireProcessTree:true), BinaryPath convention
+  - ServerConfig: properties, GetEnvironment() mapping, JSON persistence path, atomic save
+  - Registry startup key pattern and --minimized arg handling
+  - Server config UI layout and FolderBrowserDialog pattern
+  - Server management panel: status dot, live logs, storage usage timer
+- Updated Architecture section: Windows client entry now mentions ServerProcess and ServerConfig
+- Resolved all merge conflict markers (4 sets of <<<<<<< / ======= / >>>>>>>) from ralph/android-client branch, keeping both HEAD and android content
+- Files changed: `CLAUDE.md`, `prd.json`
+- **Learnings for future iterations:**
+  - CLAUDE.md had accumulated merge conflict markers from a prior branch merge — always check for and resolve these before committing
+  - When resolving conflicts, keep both sides' content (HEAD + incoming) unless one is truly obsolete
+---
