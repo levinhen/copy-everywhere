@@ -2253,6 +2253,7 @@ public partial class MainWindow : Window
         ServerAuthCheckBox.IsChecked = _serverConfig.AuthEnabled;
         ServerAccessTokenBox.Password = _serverConfig.AccessToken;
         AutoStartServerCheckBox.IsChecked = _serverConfig.AutoStartServer;
+        RunAtStartupCheckBox.IsChecked = _serverConfig.RunAtWindowsStartup;
 
         // Set initial enabled/visibility state
         ServerConfigPanel.IsEnabled = _serverConfig.ServerEnabled;
@@ -2322,6 +2323,15 @@ public partial class MainWindow : Window
     private void ServerAccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
     {
         // PasswordBox doesn't support binding — sync manually
+    }
+
+    private void RunAtStartupCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_serverConfig == null) return;
+
+        var enable = RunAtStartupCheckBox.IsChecked == true;
+        _serverConfig.SetRunAtStartup(enable);
+        _serverConfig.Save();
     }
 
     private void BrowseStoragePathButton_Click(object sender, RoutedEventArgs e)

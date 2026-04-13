@@ -249,7 +249,13 @@
 
                 <CheckBox x:Name="AutoStartServerCheckBox"
                           Content="Auto-start server on app launch"
-                          Margin="0,0,0,12"/>
+                          Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="RunAtStartupCheckBox"
+                          Content="Run at Windows startup"
+                          Margin="0,0,0,12"
+                          Checked="RunAtStartupCheckBox_Changed"
+                          Unchecked="RunAtStartupCheckBox_Changed"/>
 
                 <Button x:Name="ApplyRestartServerButton"
                         Content="Apply &amp; Restart Server"

@@ -91,3 +91,17 @@
   - Storage usage timer must be stopped when server is disabled to avoid unnecessary background work
   - `_storageUsageTimer` field needs to be declared outside the method scope (class field) — DispatcherTimers must be retained to avoid GC
 ---
+
+## 2026-04-13 - US-088
+- Added `RunAtWindowsStartup` property to `ServerConfig` with JSON persistence
+- Added `SetRunAtStartup(bool)` method that writes/deletes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key
+- Registry value format: `"<full exe path>" --minimized` for startup in tray-only mode
+- Added "Run at Windows startup" CheckBox to the server configuration UI section
+- `--minimized` arg handling already existed in `App.xaml.cs` from US-085
+- Files changed: `ServerConfig.cs`, `MainWindow.xaml`, `MainWindow.xaml.cs`, `prd.json`
+- **Learnings for future iterations:**
+  - `Registry.CurrentUser.OpenSubKey(path, writable: true)` — the `writable` parameter is required for `SetValue`/`DeleteValue`
+  - `key.DeleteValue(name, throwOnMissingValue: false)` avoids exceptions when deleting a non-existent value
+  - `Process.GetCurrentProcess().MainModule?.FileName` gives the full EXE path for the registry value
+  - `Microsoft.Win32.Registry` is the namespace for registry access — no extra NuGet needed (already in `using` scope via OpenFileDialog)
+---

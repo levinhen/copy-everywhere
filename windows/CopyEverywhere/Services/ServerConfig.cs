@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Windows;
+using Microsoft.Win32;
 
 namespace CopyEverywhere.Services;
 
@@ -28,6 +29,7 @@ public class ServerConfig : INotifyPropertyChanged
     private int _maxClipSizeMB = 50;
     private bool _serverEnabled;
     private bool _autoStartServer;
+    private bool _runAtWindowsStartup;
     private long _usedSpaceBytes;
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -86,6 +88,12 @@ public class ServerConfig : INotifyPropertyChanged
         set { _autoStartServer = value; OnPropertyChanged(); }
     }
 
+    public bool RunAtWindowsStartup
+    {
+        get => _runAtWindowsStartup;
+        set { _runAtWindowsStartup = value; OnPropertyChanged(); }
+    }
+
     public long UsedSpaceBytes
     {
         get => _usedSpaceBytes;
@@ -125,6 +133,7 @@ public class ServerConfig : INotifyPropertyChanged
             MaxClipSizeMB = MaxClipSizeMB,
             ServerEnabled = ServerEnabled,
             AutoStartServer = AutoStartServer,
+            RunAtWindowsStartup = RunAtWindowsStartup,
         };
 
         var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
@@ -157,10 +166,40 @@ public class ServerConfig : INotifyPropertyChanged
             MaxClipSizeMB = data.MaxClipSizeMB;
             ServerEnabled = data.ServerEnabled;
             AutoStartServer = data.AutoStartServer;
+            RunAtWindowsStartup = data.RunAtWindowsStartup;
         }
         catch
         {
             // Missing or corrupt file — keep defaults
+        }
+    }
+
+    private const string StartupRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupValueName = "CopyEverywhere";
+
+    public void SetRunAtStartup(bool enable)
+    {
+        RunAtWindowsStartup = enable;
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, writable: true);
+            if (key == null) return;
+
+            if (enable)
+            {
+                var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrEmpty(exePath))
+                    key.SetValue(StartupValueName, $"\"{exePath}\" --minimized");
+            }
+            else
+            {
+                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
+            }
+        }
+        catch
+        {
+            // Registry access may fail — silently ignore
         }
     }
 
@@ -230,5 +269,8 @@ public class ServerConfig : INotifyPropertyChanged
 
         [JsonPropertyName("auto_start_server")]
         public bool AutoStartServer { get; set; }
+
+        [JsonPropertyName("run_at_windows_startup")]
+        public bool RunAtWindowsStartup { get; set; }
     }
 }
