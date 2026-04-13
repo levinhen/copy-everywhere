@@ -20,6 +20,8 @@ public partial class MainWindow : Window
     private readonly ApiClient _apiClient;
     private readonly MdnsDiscoveryService _mdnsService;
     private readonly BluetoothService _bluetoothService;
+    private readonly ServerConfig _serverConfig;
+    private readonly ServerProcess _serverProcess;
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
@@ -63,8 +65,11 @@ public partial class MainWindow : Window
     private bool _isScanning;
     private List<DeviceInformation> _discoveredBtDevices = new();
 
-    public MainWindow()
+    public MainWindow(ServerConfig serverConfig, ServerProcess serverProcess)
     {
+        _serverConfig = serverConfig;
+        _serverProcess = serverProcess;
+
         InitializeComponent();
 
         _configStore = new ConfigStore();
@@ -2190,5 +2195,42 @@ public partial class MainWindow : Window
         Hide();
         ShowInTaskbar = false;
         StopQueuePolling();
+    }
+
+    // --- Embedded Server Toggle (US-085) ---
+
+    /// <summary>
+    /// Called when ServerEnabled is toggled ON. Starts the server and auto-connects the client.
+    /// Returns null on success, or an error message string if the binary is missing.
+    /// </summary>
+    public string? EnableServer()
+    {
+        if (!File.Exists(_serverProcess.BinaryPath))
+        {
+            _serverConfig.ServerEnabled = false;
+            _serverConfig.Save();
+            return $"Server binary not found: {_serverProcess.BinaryPath}";
+        }
+
+        _serverConfig.ServerEnabled = true;
+        _serverConfig.Save();
+        _serverProcess.Start();
+
+        // Auto-connect client to the embedded server
+        _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+        _configStore.Save();
+        UpdateMainPanelState();
+
+        return null;
+    }
+
+    /// <summary>
+    /// Called when ServerEnabled is toggled OFF. Stops the server but leaves HostUrl unchanged.
+    /// </summary>
+    public void DisableServer()
+    {
+        _serverConfig.ServerEnabled = false;
+        _serverConfig.Save();
+        _serverProcess.Stop();
     }
 }

@@ -1,6 +1,8 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows;
+using CopyEverywhere.Services;
 using Hardcodet.Wpf.TaskbarNotification;
 
 namespace CopyEverywhere;
@@ -10,10 +12,17 @@ public partial class App : Application
     private TaskbarIcon? _notifyIcon;
     private MainWindow? _mainWindow;
     private FloatingBallWindow? _floatingBall;
+    private ServerConfig? _serverConfig;
+    private ServerProcess? _serverProcess;
 
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // Create and load server config + process
+        _serverConfig = new ServerConfig();
+        _serverConfig.Load();
+        _serverProcess = new ServerProcess(_serverConfig);
 
         _notifyIcon = new TaskbarIcon
         {
@@ -27,7 +36,20 @@ public partial class App : Application
         _notifyIcon.ContextMenu = new System.Windows.Controls.ContextMenu();
         _notifyIcon.ContextMenu.Items.Add(exitItem);
 
-        _mainWindow = new MainWindow();
+        _mainWindow = new MainWindow(_serverConfig, _serverProcess);
+
+        // Auto-start server if configured
+        if (_serverConfig.AutoStartServer)
+        {
+            _serverProcess.Start();
+        }
+
+        // Auto-connect client to embedded server if server is enabled (or was just started)
+        if (_serverConfig.ServerEnabled || _serverConfig.AutoStartServer)
+        {
+            _mainWindow.ConfigStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+            _mainWindow.ConfigStore.Save();
+        }
 
         // Create floating ball window, sharing ConfigStore and SendService
         var sendService = new Services.SendService(_mainWindow.ApiClient, _mainWindow.ConfigStore, _mainWindow.BluetoothService);
@@ -41,8 +63,12 @@ public partial class App : Application
         // Listen for toggle changes from config UI
         _mainWindow.FloatingBallVisibilityChanged += OnFloatingBallVisibilityChanged;
 
-        // Show on first launch so user can configure
-        ShowMainWindow();
+        // Show on first launch (unless started minimized via --minimized arg)
+        bool minimized = e.Args.Contains("--minimized");
+        if (!minimized)
+        {
+            ShowMainWindow();
+        }
     }
 
     private void OnFloatingBallVisibilityChanged(bool visible)

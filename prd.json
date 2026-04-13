@@ -1,234 +1,132 @@
 {
   "project": "CopyEverywhere",
-  "branchName": "ralph/embedded-server",
-  "description": "Embedded Server — Merge the standalone Go relay server into the macOS and Windows client apps as an optional subprocess, eliminating the separate CopyEverywhereServer host app",
+  "branchName": "ralph/windows-embedded-server",
+  "description": "Windows Embedded Server — Integrate the Go relay server as an optional embedded subprocess in the Windows WPF client app. Adds ServerProcess (subprocess lifecycle management), ServerConfig (server settings persistence), a server configuration UI section, a server management panel with live logs, and Windows startup integration.",
   "userStories": [
     {
-      "id": "US-069",
-      "title": "macOS — Migrate ServerProcess into client app",
-      "description": "As a macOS user, I want the CopyEverywhere client to manage the Go server subprocess so I don't need a separate server host app.",
+      "id": "US-083",
+      "title": "Windows — ServerProcess service",
+      "description": "As a Windows user, I want the WPF app to manage the Go server subprocess so I can host the relay server from my Windows machine.",
       "acceptanceCriteria": [
-        "ServerProcess class copied from CopyEverywhereServer into CopyEverywhere sources",
-        "ServerProcess adapted to work within the client app's @MainActor context",
-        "binaryPath defaults to a bundled copyeverywhere-server binary next to the client executable",
-        "start() / stop() / restart() work correctly from the client app",
-        "Log capture (stdout/stderr) works, max 500 lines retained",
-        "Graceful shutdown via SIGTERM on app quit (applicationWillTerminate)",
-        "swift build succeeds"
+        "New Services/ServerProcess.cs class (INotifyPropertyChanged)",
+        "IsRunning: bool property, updated when process starts/exits",
+        "LogLines: ObservableCollection<string> (max 500 lines; oldest removed when limit reached)",
+        "BinaryPath: string property defaulting to Path.Combine(AppContext.BaseDirectory, \"copyeverywhere-server.exe\")",
+        "ServerConfig reference passed to constructor; used in GetEnvironment()",
+        "Start() creates a new Process with RedirectStandardOutput=true, RedirectStandardError=true, UseShellExecute=false, CreateNoWindow=true, sets environment from GetEnvironment(), attaches OutputDataReceived and ErrorDataReceived handlers, sets IsRunning=true",
+        "OutputDataReceived/ErrorDataReceived handlers append lines to LogLines via Application.Current.Dispatcher.Invoke (UI-thread safe)",
+        "Process Exited event sets IsRunning=false and appends exit code to LogLines",
+        "Stop() calls process.Kill(entireProcessTree: true) if process is running, sets IsRunning=false",
+        "Restart() calls Stop() then waits 500 ms then calls Start()",
+        "Application.Current.Exit event handler calls Stop() for cleanup on app quit",
+        "GetEnvironment() returns Dictionary<string,string> from the injected ServerConfig",
+        "dotnet build succeeds"
       ],
       "priority": 1,
       "passes": true,
       "notes": ""
     },
     {
-      "id": "US-070",
-      "title": "macOS — Migrate ServerConfig into client app",
-      "description": "As a macOS user, I want server settings stored alongside my client config so everything is in one place.",
+      "id": "US-084",
+      "title": "Windows — ServerConfig persistence",
+      "description": "As a Windows user, I want server settings persisted alongside the client config so everything is in one place.",
       "acceptanceCriteria": [
-        "ServerConfig class copied from CopyEverywhereServer into CopyEverywhere sources",
-        "Config persisted to ~/Library/Application Support/CopyEverywhere/server-config.json (separate from client config)",
-        "Properties: port (default 8080), storagePath (default ~/Library/Application Support/CopyEverywhere/server-data), bindAddress (default 0.0.0.0), ttlHours (default 24), authEnabled (default false), accessToken, maxClipSizeMB (default 50)",
-        "environment computed property generates the env dict for subprocess",
-        "save() / load() / refreshUsedSpace() work correctly",
-        "swift build succeeds"
+        "New Services/ServerConfig.cs class (INotifyPropertyChanged)",
+        "Properties with defaults: Port (\"8080\"), BindAddress (\"0.0.0.0\"), StoragePath (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), \"CopyEverywhere\", \"server-data\")), TtlHours (24), AuthEnabled (false), AccessToken (\"\"), MaxClipSizeMB (50), ServerEnabled (false), AutoStartServer (false)",
+        "UsedSpaceBytes: long property (default 0, populated by RefreshUsedSpaceAsync)",
+        "Persisted to Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), \"CopyEverywhere\", \"server-config.json\")",
+        "GetEnvironment() returns Dictionary<string,string> with keys: PORT, BIND_ADDRESS, STORAGE_PATH, TTL_HOURS, AUTH_ENABLED, ACCESS_TOKEN (omitted when AuthEnabled=false or token empty), MAX_CLIP_SIZE_MB",
+        "Save() serialises all properties to JSON and writes atomically (write temp file, then File.Replace)",
+        "Load() deserialises from JSON; missing file returns defaults without error",
+        "RefreshUsedSpaceAsync() calculates total bytes under StoragePath in a background Task, updates UsedSpaceBytes on the UI thread",
+        "dotnet build succeeds"
       ],
       "priority": 2,
       "passes": true,
       "notes": ""
     },
     {
-      "id": "US-071",
-      "title": "macOS — Server toggle and auto-connect",
-      "description": "As a macOS user, I want a toggle to enable/disable the embedded server, and when enabled, automatically connect to it.",
+      "id": "US-085",
+      "title": "Windows — Server toggle and auto-connect",
+      "description": "As a Windows user, I want the embedded server to start automatically when I enable it, and for the client to connect to it without manual URL entry.",
       "acceptanceCriteria": [
-        "serverEnabled boolean persisted in ServerConfig (default false)",
-        "autoStartServer boolean persisted in ServerConfig (default false)",
-        "When serverEnabled toggled ON: start the subprocess, set hostURL to http://localhost:<port>",
-        "When serverEnabled toggled OFF: stop the subprocess, keep hostURL as-is",
-        "If autoStartServer is true, start server on app launch",
-        "User can manually override hostURL to point to a remote server even when local server is running",
-        "swift build succeeds"
+        "App.xaml.cs creates ServerConfig and ServerProcess instances and makes them available to MainWindow",
+        "On app launch: ServerConfig.Load() called; if AutoStartServer is true, ServerProcess.Start() called; if ServerEnabled is true (or server just started), ConfigStore.HostUrl set to http://localhost:<ServerConfig.Port>",
+        "In MainWindow: toggling ServerEnabled CheckBox ON calls ServerProcess.Start() and sets ConfigStore.HostUrl to http://localhost:<ServerConfig.Port> then saves ConfigStore",
+        "Toggling ServerEnabled CheckBox OFF calls ServerProcess.Stop(); HostUrl is left unchanged so user can still point at a remote server",
+        "If binary is missing (BinaryPath does not exist), toggling ON shows an error message in the server status area and leaves ServerEnabled=false",
+        "User can manually edit the Host URL TextBox at any time, overriding the auto-set value",
+        "dotnet build succeeds"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-072",
-      "title": "macOS — Server configuration UI",
-      "description": "As a macOS user, I want to configure the embedded server from the same settings panel I use for client config.",
+      "id": "US-086",
+      "title": "Windows — Server configuration UI",
+      "description": "As a Windows user, I want to configure the embedded server from the same settings panel I use for client config.",
       "acceptanceCriteria": [
-        "New Server section in ConfigView, visible below the existing transfer mode sections",
-        "Toggle: Enable embedded server (binds to serverEnabled)",
-        "When enabled, show server config fields: Port, Bind Address, Storage Path, TTL (hours), Max Clip Size (MB)",
-        "Toggle: Require authentication with Access Token field (shown when auth enabled)",
-        "Toggle: Auto-start server on launch",
-        "Apply & Restart Server button (saves config, restarts subprocess if running)",
-        "Fields disabled when server is not enabled",
-        "swift build succeeds"
+        "New 'Embedded Server' GroupBox added to MainWindow XAML below the existing transfer mode section",
+        "CheckBox 'Enable embedded server' bound to ServerConfig.ServerEnabled; toggling calls the enable/disable logic from US-085",
+        "When ServerEnabled=false, all child controls inside the group are IsEnabled=false (greyed out)",
+        "Port TextBox, Bind Address TextBox, TTL (hours) TextBox, Max Clip Size (MB) TextBox — all bound to ServerConfig properties",
+        "Storage Path TextBox bound to ServerConfig.StoragePath plus a 'Browse...' Button that opens a FolderBrowserDialog and writes the chosen path back to StoragePath",
+        "CheckBox 'Require authentication' bound to ServerConfig.AuthEnabled; when checked, a PasswordBox for Access Token appears (sync via PasswordChanged event)",
+        "CheckBox 'Auto-start server on app launch' bound to ServerConfig.AutoStartServer",
+        "'Apply & Restart Server' Button: saves ServerConfig, calls ServerProcess.Restart() if running or ServerProcess.Start() if stopped (and ServerEnabled=true)",
+        "dotnet build succeeds"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-073",
-      "title": "macOS — Server management panel",
-      "description": "As a macOS user, I want a full management panel showing server status, logs, storage usage, and connected devices.",
+      "id": "US-087",
+      "title": "Windows — Server management panel",
+      "description": "As a Windows user, I want a management panel showing server status, live logs, storage usage, and controls to start/stop/restart.",
       "acceptanceCriteria": [
-        "Server status indicator in MainPanelView header area: green dot = running, red dot = stopped, gray dot = disabled",
-        "Start / Stop / Restart buttons (contextual: show Start when stopped, Stop+Restart when running)",
-        "Expandable log viewer showing last 500 lines of server output, auto-scrolling",
-        "Storage stats: used space (from refreshUsedSpace()), storage path displayed",
-        "Connected devices list: fetched via GET /api/v1/devices from the local server (only when running)",
-        "Panel section hidden when serverEnabled is false",
-        "swift build succeeds"
+        "Server management section visible only when ServerConfig.ServerEnabled=true; hidden otherwise",
+        "Status row: Ellipse (green Fill when IsRunning, red Fill when stopped) + TextBlock ('Running' / 'Stopped')",
+        "Listen address TextBlock shows BindAddress:Port from ServerConfig (e.g. '0.0.0.0:8080'), visible when running",
+        "Storage used TextBlock shows formatted UsedSpaceBytes (via FormatBytes helper); refreshed by calling RefreshUsedSpaceAsync() when server starts and on a 30-second timer while running",
+        "Buttons: 'Start Server' visible when !IsRunning; 'Stop Server' and 'Restart' visible when IsRunning",
+        "Log viewer: ScrollViewer containing a TextBlock (FontFamily Consolas or Courier New) bound to LogLines joined by newline; auto-scrolls to bottom on each new log line via ScrollViewer.ScrollToEnd() in a LogLines.CollectionChanged handler",
+        "'Clear Logs' Button calls LogLines.Clear()",
+        "dotnet build succeeds"
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-074",
-      "title": "macOS — mDNS broadcast from embedded server",
-      "description": "As a macOS user hosting the server, I want other devices to discover my server via mDNS automatically.",
+      "id": "US-088",
+      "title": "Windows — Run at Windows startup",
+      "description": "As a Windows user, I want the option to launch CopyEverywhere automatically when Windows starts.",
       "acceptanceCriteria": [
-        "When embedded server starts, the Go binary's built-in mDNS broadcast activates (already in server code)",
-        "Verify that other clients (macOS, Windows, Android) discover the embedded server via mDNS",
-        "When server stops, mDNS deregisters (already handled by Go server's SIGTERM handler)",
-        "No duplicate mDNS registrations on restart",
-        "swift build succeeds"
+        "CheckBox 'Run at Windows startup' added to the server configuration UI section (US-086)",
+        "Checking the box writes registry value HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run, key name 'CopyEverywhere', value = '\"<full path to CopyEverywhere.exe>\" --minimized'",
+        "Unchecking the box deletes the registry value if it exists",
+        "On app launch, App.xaml.cs checks if args contain '--minimized'; if so, MainWindow is not shown (app starts minimized to tray only)",
+        "ServerConfig persists the RunAtWindowsStartup bool so the CheckBox state survives restart",
+        "SetRunAtStartup(bool) helper on ServerConfig encapsulates the Registry read/write/delete logic",
+        "dotnet build succeeds"
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-075",
-      "title": "macOS — Remove standalone CopyEverywhereServer app",
-      "description": "As a developer, I want to remove the standalone server host app since its functionality is now in the client.",
+      "id": "US-089",
+      "title": "Windows — CLAUDE.md conventions update",
+      "description": "As a developer, I want CLAUDE.md updated to document the new embedded server patterns for Windows.",
       "acceptanceCriteria": [
-        "macos/CopyEverywhereServer/ directory deleted",
-        "References to CopyEverywhereServer removed from CLAUDE.md architecture section",
-        "CLAUDE.md updated to document the embedded server architecture in the client app",
-        "swift build succeeds for CopyEverywhere"
+        "Windows section in Conventions and gotchas gets new entries for: ServerProcess (subprocess lifecycle, Dispatcher.Invoke for log lines, Kill(entireProcessTree:true), BinaryPath convention), ServerConfig (properties, GetEnvironment() mapping, JSON persistence path), registry startup key pattern, --minimized arg handling in App.xaml.cs",
+        "Architecture section updated: Windows client entry notes that ServerProcess and ServerConfig provide optional embedded server support",
+        "Source of truth section updated: active iteration points at prd.json and tasks/prd-windows-embedded-server.md"
       ],
       "priority": 7,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-076",
-      "title": "Windows — Add ServerProcess management",
-      "description": "As a Windows user, I want the CopyEverywhere WPF app to manage the Go server subprocess.",
-      "acceptanceCriteria": [
-        "New Services/ServerProcess.cs class using System.Diagnostics.Process",
-        "Properties: IsRunning, LogLines (ObservableCollection, max 500)",
-        "Methods: Start(), Stop(), Restart()",
-        "Stdout/stderr captured via OutputDataReceived / ErrorDataReceived events",
-        "BinaryPath defaults to copyeverywhere-server.exe next to the client executable",
-        "Environment variables forwarded from ServerConfig",
-        "Process killed on app exit (Application.Current.Exit handler)",
-        "dotnet build succeeds"
-      ],
-      "priority": 8,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-077",
-      "title": "Windows — Add ServerConfig persistence",
-      "description": "As a Windows user, I want server settings stored alongside my client config.",
-      "acceptanceCriteria": [
-        "New Services/ServerConfig.cs class (INotifyPropertyChanged)",
-        "Properties: Port (default 8080), StoragePath (default %APPDATA%/CopyEverywhere/server-data), BindAddress (default 0.0.0.0), TtlHours (default 24), AuthEnabled (default false), AccessToken, MaxClipSizeMB (default 50)",
-        "ServerEnabled (default false), AutoStartServer (default false)",
-        "Config persisted to %APPDATA%/CopyEverywhere/server-config.json",
-        "GetEnvironment() method returns Dictionary<string, string> for subprocess",
-        "Save() / Load() / RefreshUsedSpace() methods",
-        "dotnet build succeeds"
-      ],
-      "priority": 9,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-078",
-      "title": "Windows — Server toggle and auto-connect",
-      "description": "As a Windows user, I want a toggle to enable/disable the embedded server, and when enabled, automatically connect to it.",
-      "acceptanceCriteria": [
-        "When ServerEnabled toggled ON: start subprocess, set HostUrl to http://localhost:<port>",
-        "When ServerEnabled toggled OFF: stop subprocess, keep HostUrl as-is",
-        "If AutoStartServer is true, start server on app launch",
-        "User can manually override HostUrl to point to a remote server",
-        "dotnet build succeeds"
-      ],
-      "priority": 10,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-079",
-      "title": "Windows — Server configuration UI",
-      "description": "As a Windows user, I want to configure the embedded server from the same settings panel.",
-      "acceptanceCriteria": [
-        "New Server section in MainWindow XAML, below existing config sections",
-        "CheckBox: Enable embedded server (binds to ServerEnabled)",
-        "When enabled, show fields: Port, Bind Address, Storage Path (with Browse button), TTL, Max Clip Size",
-        "CheckBox: Require authentication with PasswordBox for token",
-        "CheckBox: Auto-start server on launch",
-        "Apply & Restart Server button",
-        "Fields disabled when server is not enabled",
-        "dotnet build succeeds"
-      ],
-      "priority": 11,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-080",
-      "title": "Windows — Server management panel",
-      "description": "As a Windows user, I want a management panel showing server status, logs, storage, and connected devices.",
-      "acceptanceCriteria": [
-        "Server status indicator: colored dot (green/red/gray) + status text",
-        "Start / Stop / Restart buttons (contextual)",
-        "Expandable log viewer (ScrollViewer + TextBlock, auto-scroll, max 500 lines)",
-        "Storage stats: used space + storage path",
-        "Connected devices list fetched from local server GET /api/v1/devices",
-        "Section hidden when ServerEnabled is false",
-        "dotnet build succeeds"
-      ],
-      "priority": 12,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-081",
-      "title": "Windows — mDNS broadcast verification",
-      "description": "As a Windows user hosting the server, I want other devices to discover my server via mDNS.",
-      "acceptanceCriteria": [
-        "When embedded server starts, Go binary's mDNS broadcast activates (already in server code)",
-        "Verify other clients discover the Windows-hosted embedded server",
-        "mDNS deregisters on server stop (Go handles SIGTERM/process exit)",
-        "dotnet build succeeds"
-      ],
-      "priority": 13,
-      "passes": true,
-      "notes": ""
-    },
-    {
-      "id": "US-082",
-      "title": "Documentation and CLAUDE.md update",
-      "description": "As a developer, I want CLAUDE.md updated to reflect the new embedded server architecture.",
-      "acceptanceCriteria": [
-        "Architecture section updated: macOS and Windows clients now embed the server as an optional subprocess",
-        "CopyEverywhereServer references removed or marked as removed",
-        "New conventions added for ServerProcess/ServerConfig patterns on both platforms",
-        "Android exclusion documented",
-        "Binary bundling strategy documented"
-      ],
-      "priority": 14,
-      "passes": true,
+      "passes": false,
       "notes": ""
     }
   ]

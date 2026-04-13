@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Source of truth
 
-- Five iterations have shipped and are now archived — there is no active `prd.json` in the repo root right now. Historical context only:
+- **Active iteration: Windows Embedded Server (US-083 … US-089)** — `prd.json` and `progress.txt` at repo root; PRD doc at [tasks/prd-windows-embedded-server.md](tasks/prd-windows-embedded-server.md). Integrates the Go relay server as an optional embedded subprocess in the Windows WPF client app.
+- Five iterations have shipped and are now archived. Historical context only:
   - **MVP (US-001 … US-017)** under [archive/mvp/](archive/mvp/) — initial clipboard-relay feature set.
   - **Queue + frictionless UX (US-018 … US-034)** under [archive/queue-and-frictionless-ux/](archive/queue-and-frictionless-ux/) — device registration, targeted queue, SSE push, drag-and-drop, auto-receive.
   - **LAN & Bluetooth (US-035 … US-050)** under [archive/lan-and-bluetooth/](archive/lan-and-bluetooth/) — LAN self-hosted server, mDNS discovery, MenuBarExtra host app, Bluetooth RFCOMM peer-to-peer mode.
   - **Android Client (US-051 … US-068)** under [archive/android-client/](archive/android-client/) — Kotlin + Jetpack Compose Android client with LAN server mode, Bluetooth RFCOMM, share sheet, foreground service, boot receiver.
-  - **Embedded Server (US-069 … US-082)** under [archive/embedded-server/](archive/embedded-server/) — Go relay server merged into macOS and Windows client apps as an optional subprocess, removing the standalone CopyEverywhereServer host app.
+  - **Embedded Server (US-069 … US-082)** under [archive/embedded-server/](archive/embedded-server/) — Go relay server merged into macOS client app as an optional subprocess; Windows side not implemented (covered by active iteration).
 - When a new iteration starts, drop its fresh `prd.json` + `progress.txt` at the repo root and its PRD doc at `tasks/prd-*.md`, then update this section to point at them.
 - This repo is driven by the Ralph autonomous agent loop ([scripts/ralph/ralph.sh](scripts/ralph/ralph.sh) + [scripts/ralph/CLAUDE.md](scripts/ralph/CLAUDE.md)). One commit ≈ one user story; commit messages follow `feat: [US-XXX] - [Title]`. The hard-won "do this / don't do that" list lives in the **Conventions and gotchas** section below — add to it (don't replace) when you discover a new reusable pattern.
 
