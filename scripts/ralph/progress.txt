@@ -1,0 +1,50 @@
+# Ralph Progress Log
+Started: 2026-04-17
+
+## Current Iteration
+Targeted Auto-Delivery Reliability
+
+US-069A: Server: track targeted delivery lifecycle state                 [ ]
+US-069B: Server: expose receiver connectivity on devices list            [ ]
+US-070:  Server: confirm targeted delivery on successful raw consume     [ ]
+US-071:  Server: fallback targeted clips back into recoverable queue     [ ]
+US-072:  Server: add targeted delivery diagnostics and regression cover  [ ]
+US-073A: macOS: surface self receiver status and SSE health              [ ]
+US-073B: macOS: show target device receiver readiness in picker          [ ]
+US-073C: macOS: targeted auto-receive failure visible and recoverable    [ ]
+US-074A: Windows: surface self receiver status and SSE health            [ ]
+US-074B: Windows: target device readiness and fallback messaging         [ ]
+US-074C: Windows: targeted auto-receive failure visible and recoverable  [ ]
+US-075A: Android: expose foreground receiver status                      [ ]
+US-075B: Android: preserve queue fallback on targeted failure            [ ]
+US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
+
+## Codebase Patterns
+- Active Ralph run files live under `scripts/ralph/`; `ralph.sh` reads `scripts/ralph/prd.json` and `scripts/ralph/progress.txt`
+- The repo root `prd.json` can mirror the active iteration for humans, but the autonomous loop follows `scripts/ralph/prd.json`
+- Targeted LAN delivery already uses `server`-stored clips plus SSE notify plus client `GET /clips/:id/raw`; do not introduce client-side inbound APIs unless a later PRD explicitly changes the architecture
+- Server delivery-state lifecycle starts targeted clips in `targeted_pending`; only untargeted clips use `ready` immediately, so new server/client work should not assume every sendable clip is `ready`
+- Server targeted SSE events are emitted from `server/handlers/clips.go` and `server/handlers/uploads.go`, and replayed on connect from `server/handlers/devices.go`
+- macOS targeted auto-receive lives in `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`
+- Windows targeted auto-receive lives in `windows/CopyEverywhere/MainWindow.xaml.cs`
+- Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
+
+---
+
+## 2026-04-17 - Iteration setup
+- Created the active iteration PRD for "Targeted Auto-Delivery Reliability" in both repo root and `scripts/ralph/`
+- Created the active iteration progress tracker at `scripts/ralph/progress.txt`
+- Next implementation story is `US-069A` with server delivery-state persistence
+- **Learnings for future iterations:**
+  - `ralph.sh` does not read the repo root `prd.json`; it reads `scripts/ralph/prd.json`
+  - Keep `AGENTS.md` and `scripts/ralph/CLAUDE.md` aligned with the actual active file locations to avoid the loop reading stale inputs
+---
+## 2026-04-17 00:42:44 CST - US-069A
+- Implemented persisted targeted delivery lifecycle states on the server by introducing shared clip-status constants and saving targeted single uploads and completed chunked uploads as `targeted_pending` instead of `ready`
+- Files changed: `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/clips_test.go`, `server/handlers/uploads.go`, `server/handlers/uploads_test.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
+- Learnings for future iterations:
+  - Use the shared `db.ClipStatus*` constants instead of hardcoded strings when adding new targeted-delivery transitions
+  - Targeted uploads are persisted as `targeted_pending` before and after SSE notification, which preserves the distinction between notification and confirmed delivery
+  - Queue queries still only include `ready` clips at this stage, so future fallback work must update queue visibility deliberately
+---

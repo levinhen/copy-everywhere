@@ -16,6 +16,15 @@ const idChars = "abcdefghijklmnopqrstuvwxyz0123456789"
 const idLength = 6
 const deviceIDLength = 8
 
+const (
+	ClipStatusReady             = "ready"
+	ClipStatusUploading         = "uploading"
+	ClipStatusTargetedPending   = "targeted_pending"
+	ClipStatusTargetedDelivered = "targeted_delivered"
+	ClipStatusTargetedFallback  = "targeted_fallback"
+	ClipStatusFailed            = "failed"
+)
+
 type Clip struct {
 	ID             string     `json:"id"`
 	Type           string     `json:"type"`
@@ -78,7 +87,7 @@ func (d *DB) migrate() error {
 			type         TEXT NOT NULL,
 			filename     TEXT,
 			size_bytes   INTEGER NOT NULL DEFAULT 0,
-			status       TEXT NOT NULL DEFAULT 'ready',
+			status       TEXT NOT NULL DEFAULT '` + ClipStatusReady + `',
 			created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			expires_at   DATETIME NOT NULL,
 			storage_path TEXT NOT NULL DEFAULT ''
@@ -169,9 +178,9 @@ func (d *DB) GetLatestClip() (*Clip, error) {
 	clip := &Clip{}
 	err := d.conn.QueryRow(`
 		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
-		FROM clips WHERE expires_at > ? AND status = 'ready'
+		FROM clips WHERE expires_at > ? AND status = ?
 		ORDER BY created_at DESC LIMIT 1
-	`, time.Now().UTC()).Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt)
+	`, time.Now().UTC(), ClipStatusReady).Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.ConsumedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -249,11 +258,11 @@ func (d *DB) ListQueueClips(deviceID string) ([]*Clip, error) {
 		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, consumed_at
 		FROM clips
 		WHERE consumed_at IS NULL
-		  AND status = 'ready'
+		  AND status = ?
 		  AND expires_at > ?
 		  AND (target_device_id IS NULL OR target_device_id = ?)
 		ORDER BY created_at DESC
-	`, time.Now().UTC(), deviceID)
+	`, ClipStatusReady, time.Now().UTC(), deviceID)
 	if err != nil {
 		return nil, err
 	}

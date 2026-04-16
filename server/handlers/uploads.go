@@ -89,7 +89,7 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		Type:           "file",
 		Filename:       &req.Filename,
 		SizeBytes:      req.SizeBytes,
-		Status:         "uploading",
+		Status:         db.ClipStatusUploading,
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(time.Duration(h.TTLHours) * time.Hour),
 		StoragePath:    partsDir,
@@ -238,7 +238,12 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 	}
 
 	// Update clip record
-	if err := h.DB.UpdateClip(uploadID, "ready", info.Size(), finalPath); err != nil {
+	status := db.ClipStatusReady
+	if clip.TargetDeviceID != nil {
+		status = db.ClipStatusTargetedPending
+	}
+
+	if err := h.DB.UpdateClip(uploadID, status, info.Size(), finalPath); err != nil {
 		log.Printf("ERROR: update clip: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return

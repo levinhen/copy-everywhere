@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -430,7 +431,7 @@ func TestCreateClipWithDeviceIDs(t *testing.T) {
 	clip := &Clip{
 		Type:           "text",
 		SizeBytes:      10,
-		Status:         "ready",
+		Status:         ClipStatusTargetedPending,
 		ExpiresAt:      time.Now().UTC().Add(time.Hour),
 		StoragePath:    "/tmp/dev",
 		TargetDeviceID: &target,
@@ -452,6 +453,41 @@ func TestCreateClipWithDeviceIDs(t *testing.T) {
 	}
 	if got.ConsumedAt != nil {
 		t.Fatalf("expected consumed_at=nil, got %v", got.ConsumedAt)
+	}
+}
+
+func TestCreateClipTargetedLifecycleStatuses(t *testing.T) {
+	d := setupTestDB(t)
+
+	target := "dev12345"
+	statuses := []string{
+		ClipStatusTargetedPending,
+		ClipStatusTargetedDelivered,
+		ClipStatusTargetedFallback,
+		ClipStatusFailed,
+	}
+
+	for i, status := range statuses {
+		clip := &Clip{
+			ID:             fmt.Sprintf("st%04d", i+1),
+			Type:           "text",
+			SizeBytes:      10,
+			Status:         status,
+			ExpiresAt:      time.Now().UTC().Add(time.Hour),
+			StoragePath:    "/tmp/status",
+			TargetDeviceID: &target,
+		}
+		if err := d.CreateClip(clip); err != nil {
+			t.Fatalf("create clip with status %s: %v", status, err)
+		}
+
+		got, err := d.GetClipByID(clip.ID)
+		if err != nil {
+			t.Fatalf("get clip with status %s: %v", status, err)
+		}
+		if got.Status != status {
+			t.Fatalf("expected status %s, got %s", status, got.Status)
+		}
 	}
 }
 

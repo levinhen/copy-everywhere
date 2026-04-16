@@ -112,7 +112,7 @@ func (h *ClipHandler) Upload(c *gin.Context) {
 		Type:        clipType,
 		Filename:    &filename,
 		SizeBytes:   written,
-		Status:      "ready",
+		Status:      db.ClipStatusReady,
 		CreatedAt:   now,
 		ExpiresAt:   now.Add(time.Duration(h.TTLHours) * time.Hour),
 		StoragePath: destPath,
@@ -120,6 +120,7 @@ func (h *ClipHandler) Upload(c *gin.Context) {
 
 	if targetDeviceID := c.PostForm("target_device_id"); targetDeviceID != "" {
 		clip.TargetDeviceID = &targetDeviceID
+		clip.Status = db.ClipStatusTargetedPending
 	}
 	if senderDeviceID := c.PostForm("sender_device_id"); senderDeviceID != "" {
 		clip.SenderDeviceID = &senderDeviceID
@@ -222,7 +223,7 @@ func (h *ClipHandler) GetRaw(c *gin.Context) {
 		return
 	}
 
-	if clip.Status == "failed" {
+	if clip.Status == db.ClipStatusFailed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "upload incomplete - download unavailable"})
 		return
 	}

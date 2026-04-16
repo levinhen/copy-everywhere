@@ -360,6 +360,9 @@ func TestUploadWithDeviceIDs(t *testing.T) {
 	if clip.SenderDeviceID == nil || *clip.SenderDeviceID != "dev67890" {
 		t.Errorf("expected sender_device_id=dev67890, got %v", clip.SenderDeviceID)
 	}
+	if clip.Status != db.ClipStatusTargetedPending {
+		t.Errorf("expected targeted clip status %q, got %q", db.ClipStatusTargetedPending, clip.Status)
+	}
 }
 
 func TestUploadWithoutDeviceIDs(t *testing.T) {
@@ -385,6 +388,9 @@ func TestUploadWithoutDeviceIDs(t *testing.T) {
 	}
 	if clip.SenderDeviceID != nil {
 		t.Errorf("expected nil sender_device_id, got %v", clip.SenderDeviceID)
+	}
+	if clip.Status != db.ClipStatusReady {
+		t.Errorf("expected untargeted clip status %q, got %q", db.ClipStatusReady, clip.Status)
 	}
 }
 
