@@ -32,8 +32,89 @@ struct ConfigView: View {
 
     @ViewBuilder
     private var lanServerSection: some View {
+        Toggle(
+            "Enable Local Server",
+            isOn: Binding(
+                get: { configStore.localServerEnabled },
+                set: { configStore.setLocalServerEnabled($0) }
+            )
+        )
+
+        if configStore.localServerEnabled {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Local Server Status")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(configStore.localServerStatusDescription)
+                        .font(.caption)
+                        .foregroundColor(localServerStatusColor)
+                }
+
+                HStack {
+                    Text("SSE Status")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text(configStore.sseStatusDescription)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Button("Start") {
+                        configStore.startLocalServerIfNeeded()
+                    }
+                    .disabled(isLocalServerRunningOrStarting)
+
+                    Button("Restart") {
+                        configStore.restartLocalServer()
+                    }
+                    .disabled(!isLocalServerRunning)
+
+                    Button("Stop") {
+                        configStore.stopLocalServer()
+                    }
+                    .disabled(!isLocalServerRunningOrStarting)
+                }
+            }
+        }
+
         // Discovered Servers section
         discoveredServersSection
+
+        if configStore.localServerEnabled, let localPreset = configStore.loadLocalServerPreset() {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Local Server")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Text(localPreset.hostURL)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(localPreset.authEnabled ? "Auth enabled" : "Auth disabled")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Use Local Server") {
+                        configStore.applyLocalServerPreset()
+                    }
+                    .controlSize(.small)
+                }
+                .padding(10)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .cornerRadius(8)
+            }
+        } else if !configStore.localServerEnabled {
+            Text("Turn on Local Server to allow the Mac-hosted server configuration to be applied.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
 
         VStack(alignment: .leading, spacing: 8) {
             Text("Host URL")
@@ -117,6 +198,35 @@ struct ConfigView: View {
         }
 
         connectionStatusView
+    }
+
+    private var isLocalServerRunning: Bool {
+        if case .running = configStore.localServerStatus {
+            return true
+        }
+        return false
+    }
+
+    private var isLocalServerRunningOrStarting: Bool {
+        switch configStore.localServerStatus {
+        case .running, .starting:
+            return true
+        case .stopped, .error:
+            return false
+        }
+    }
+
+    private var localServerStatusColor: Color {
+        switch configStore.localServerStatus {
+        case .running:
+            return .green
+        case .starting:
+            return .orange
+        case .error:
+            return .red
+        case .stopped:
+            return .secondary
+        }
     }
 
     // MARK: - Bluetooth Section

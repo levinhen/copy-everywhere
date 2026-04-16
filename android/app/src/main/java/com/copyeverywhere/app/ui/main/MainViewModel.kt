@@ -8,6 +8,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Log
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -81,7 +82,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _sendStatus.value = SendStatus.Sending
             try {
-                if (transferMode.value == TransferMode.Bluetooth) {
+                val currentMode = configStore.transferMode.first()
+                if (currentMode == TransferMode.Bluetooth) {
                     val session = CopyEverywhereService.instance?.bluetoothService?.activeSession
                     if (session == null || !session.isHandshakeComplete) {
                         _sendStatus.value = SendStatus.Error("No Bluetooth device connected")
@@ -92,10 +94,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     session.sendText(text).collect { /* progress not shown for text */ }
                 } else {
-                    val host = hostUrl.value
+                    val host = configStore.hostUrl.first().trim()
                     val token = configStore.getAccessToken()
-                    val sender = deviceId.value
-                    val target = targetDeviceId.value
+                    val sender = configStore.deviceId.first()
+                    val target = configStore.targetDeviceId.first()
+                    if (!host.startsWith("http://") && !host.startsWith("https://")) {
+                        throw IllegalStateException("Host URL must start with http:// or https://")
+                    }
                     apiClient.sendTextClip(host, token, text, sender, target)
                 }
                 _textInput.value = ""
@@ -104,6 +109,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 delay(2000)
                 _sendStatus.value = SendStatus.Idle
             } catch (e: Exception) {
+                Log.e(TAG, "sendText failed", e)
                 _sendStatus.value = SendStatus.Error(e.message ?: "Send failed")
                 showErrorNotification(e.message ?: "Send failed")
                 delay(3000)
@@ -114,7 +120,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendFile(uri: Uri) {
         viewModelScope.launch {
-            if (transferMode.value == TransferMode.Bluetooth) {
+            val currentMode = configStore.transferMode.first()
+            if (currentMode == TransferMode.Bluetooth) {
                 sendFileBluetooth(uri)
             } else {
                 val contentResolver = getApplication<Application>().contentResolver
@@ -177,16 +184,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _sendStatus.value = SendStatus.Sending
         try {
             val contentResolver = getApplication<Application>().contentResolver
-            val host = hostUrl.value
+            val host = configStore.hostUrl.first().trim()
             val token = configStore.getAccessToken()
-            val sender = deviceId.value
-            val target = targetDeviceId.value
+            val sender = configStore.deviceId.first()
+            val target = configStore.targetDeviceId.first()
+            if (!host.startsWith("http://") && !host.startsWith("https://")) {
+                throw IllegalStateException("Host URL must start with http:// or https://")
+            }
             apiClient.sendFileClip(host, token, contentResolver, uri, sender, target)
             _sendStatus.value = SendStatus.Success
             Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
+            Log.e(TAG, "sendSmallFile failed", e)
             _sendStatus.value = SendStatus.Error(e.message ?: "Upload failed")
             showErrorNotification(e.message ?: "Upload failed")
             delay(3000)
@@ -198,10 +209,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _uploadProgress.value = UploadProgress(fileName = fileName, progress = 0.0, speedMbps = 0.0, isPaused = false)
         try {
             val contentResolver = getApplication<Application>().contentResolver
-            val host = hostUrl.value
+            val host = configStore.hostUrl.first().trim()
             val token = configStore.getAccessToken()
-            val sender = deviceId.value
-            val target = targetDeviceId.value
+            val sender = configStore.deviceId.first()
+            val target = configStore.targetDeviceId.first()
+            if (!host.startsWith("http://") && !host.startsWith("https://")) {
+                throw IllegalStateException("Host URL must start with http:// or https://")
+            }
 
             val state = apiClient.initChunkedUpload(host, token, contentResolver, uri, sender, target)
             chunkedUploadState = state
@@ -244,6 +258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         } catch (e: Exception) {
+            Log.e(TAG, "startChunkedUpload failed", e)
             _uploadProgress.value = null
             _sendStatus.value = SendStatus.Error(e.message ?: "Upload init failed")
             showErrorNotification(e.message ?: "Upload init failed")
@@ -408,6 +423,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     companion object {
+        private const val TAG = "MainViewModel"
         private const val CHUNKED_THRESHOLD = 50L * 1024 * 1024 // 50 MB
     }
 }

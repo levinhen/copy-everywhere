@@ -30,8 +30,8 @@ func (h *DeviceHandler) Register(c *gin.Context) {
 		return
 	}
 
-	if req.Platform != "macos" && req.Platform != "windows" && req.Platform != "linux" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "platform must be macos, windows, or linux"})
+	if req.Platform != "macos" && req.Platform != "windows" && req.Platform != "linux" && req.Platform != "android" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "platform must be macos, windows, linux, or android"})
 		return
 	}
 
@@ -86,10 +86,35 @@ func (h *DeviceHandler) Stream(c *gin.Context) {
 	fmt.Fprintf(c.Writer, ": connected\n\n")
 	flusher.Flush()
 
+	eventID := 0
+
+	// Replay targeted clips that are already queued for this device so clients
+	// can auto-receive even if they missed the original live notification.
+	pending, err := h.DB.ListTargetedPendingClips(deviceID)
+	if err != nil {
+		log.Printf("ERROR: list pending targeted clips for SSE replay: %v", err)
+	} else {
+		for _, clip := range pending {
+			eventID++
+			fname := ""
+			if clip.Filename != nil {
+				fname = *clip.Filename
+			}
+			data, _ := json.Marshal(sse.ClipEvent{
+				ClipID:    clip.ID,
+				Type:      clip.Type,
+				Filename:  fname,
+				SizeBytes: clip.SizeBytes,
+			})
+			fmt.Fprintf(c.Writer, "id: %d\n", eventID)
+			fmt.Fprintf(c.Writer, "event: clip\n")
+			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
+
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
-
-	eventID := 0
 
 	for {
 		select {

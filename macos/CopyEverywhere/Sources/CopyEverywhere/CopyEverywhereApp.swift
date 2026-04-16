@@ -38,6 +38,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configStore.startSSE()
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        configStore.shutdown()
+    }
+
     // MARK: - Popover
 
     private func setupPopover() {
