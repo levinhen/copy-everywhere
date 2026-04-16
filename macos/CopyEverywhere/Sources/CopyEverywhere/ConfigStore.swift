@@ -2,7 +2,6 @@ import AppKit
 import Foundation
 import IOBluetooth
 import Network
-import Security
 import UserNotifications
 
 struct ClipResult {
@@ -181,7 +180,7 @@ final class ConfigStore: ObservableObject {
     private let transferModeKey = "com.copyeverywhere.transferMode"
 
     init() {
-        loadFromKeychain()
+        loadPersistedConfig()
         deviceID = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceID") ?? ""
         deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
         loadPairedDevices()
@@ -321,8 +320,8 @@ final class ConfigStore: ObservableObject {
     // MARK: - Keychain Operations
 
     func save() {
-        saveToKeychain(account: hostKey, value: hostURL)
-        saveToKeychain(account: tokenKey, value: accessToken)
+        UserDefaults.standard.set(hostURL, forKey: hostKey)
+        UserDefaults.standard.set(accessToken, forKey: tokenKey)
         isConfigured = !hostURL.isEmpty
         if isConfigured {
             Task {
@@ -366,69 +365,24 @@ final class ConfigStore: ObservableObject {
     }
 
     func clearConfig() {
-        deleteFromKeychain(account: hostKey)
-        deleteFromKeychain(account: tokenKey)
+        UserDefaults.standard.removeObject(forKey: hostKey)
+        UserDefaults.standard.removeObject(forKey: tokenKey)
         hostURL = ""
         accessToken = ""
         isConfigured = false
         connectionStatus = .idle
     }
 
-    private func loadFromKeychain() {
-        hostURL = readFromKeychain(account: hostKey) ?? ""
-        accessToken = readFromKeychain(account: tokenKey) ?? ""
+    private func loadPersistedConfig() {
+        hostURL = UserDefaults.standard.string(forKey: hostKey) ?? ""
+        accessToken = UserDefaults.standard.string(forKey: tokenKey) ?? ""
         isConfigured = !hostURL.isEmpty
     }
 
     private func setAuthHeader(_ request: inout URLRequest) {
         if !accessToken.isEmpty {
-            setAuthHeader(&request)
+            request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
-    }
-
-    private func saveToKeychain(account: String, value: String) {
-        let data = Data(value.utf8)
-
-        // Delete existing item first
-        deleteFromKeychain(account: account)
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: data,
-        ]
-
-        SecItemAdd(query as CFDictionary, nil)
-    }
-
-    private func readFromKeychain(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess, let data = result as? Data else {
-            return nil
-        }
-
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func deleteFromKeychain(account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-
-        SecItemDelete(query as CFDictionary)
     }
 
     // MARK: - Test Connection
