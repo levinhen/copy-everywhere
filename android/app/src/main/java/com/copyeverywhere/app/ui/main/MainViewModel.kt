@@ -18,6 +18,8 @@ import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.TransferMode
 import com.copyeverywhere.app.service.CopyEverywhereService
+import com.copyeverywhere.app.service.LanReceiverHealth
+import com.copyeverywhere.app.service.LanReceiverStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +43,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val transferMode: StateFlow<TransferMode> = configStore.transferMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TransferMode.LanServer)
+    val lanReceiverHealth: StateFlow<LanReceiverHealth> = CopyEverywhereService.receiverHealth
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            LanReceiverHealth(
+                status = LanReceiverStatus.Unavailable,
+                detail = "Foreground service is not running"
+            )
+        )
 
     private val _textInput = MutableStateFlow("")
     val textInput: StateFlow<String> = _textInput.asStateFlow()

@@ -40,7 +40,7 @@ class SseClient {
         deviceId: String,
         onEvent: suspend (SseEvent) -> Unit,
         onConnected: (() -> Unit)? = null,
-        onDisconnected: (() -> Unit)? = null
+        onDisconnected: ((retryDelayMs: Long, error: Exception?) -> Unit)? = null
     ): Unit = withContext(Dispatchers.IO) {
         var backoffMs = INITIAL_BACKOFF_MS
 
@@ -92,13 +92,15 @@ class SseClient {
                         }
                         // Ignore comments (lines starting with :) and unknown fields
                     }
+
+                    onDisconnected?.invoke(backoffMs, IOException("SSE stream ended"))
                 } finally {
                     reader.close()
                     response.close()
                 }
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
-                onDisconnected?.invoke()
+                onDisconnected?.invoke(backoffMs, e)
             }
 
             // Exponential backoff before reconnect

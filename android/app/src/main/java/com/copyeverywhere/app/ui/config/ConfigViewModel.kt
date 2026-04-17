@@ -23,6 +23,8 @@ import com.copyeverywhere.app.data.MdnsDiscoveryService
 import com.copyeverywhere.app.data.PairedBluetoothDevice
 import com.copyeverywhere.app.data.TransferMode
 import com.copyeverywhere.app.service.CopyEverywhereService
+import com.copyeverywhere.app.service.LanReceiverHealth
+import com.copyeverywhere.app.service.LanReceiverStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +61,15 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val transferMode: StateFlow<TransferMode> = configStore.transferMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TransferMode.LanServer)
+    val lanReceiverHealth: StateFlow<LanReceiverHealth> = CopyEverywhereService.receiverHealth
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            LanReceiverHealth(
+                status = LanReceiverStatus.Unavailable,
+                detail = "Foreground service is not running"
+            )
+        )
 
     private val _accessToken = MutableStateFlow(configStore.getAccessToken())
     val accessToken: StateFlow<String> = _accessToken.asStateFlow()

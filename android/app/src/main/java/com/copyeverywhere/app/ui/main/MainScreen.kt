@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -48,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.service.LanReceiverHealth
+import com.copyeverywhere.app.service.LanReceiverStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,6 +66,7 @@ fun MainScreen(
     val transferMode by viewModel.transferMode.collectAsState()
     val btReceiveProgress by viewModel.btReceiveProgress.collectAsState()
     val btReceiveFilename by viewModel.btReceiveFilename.collectAsState()
+    val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -169,6 +173,10 @@ fun MainScreen(
             // Queue section (LAN mode only)
             if (transferMode == TransferMode.LanServer) {
                 item {
+                    LanReceiverHealthCard(health = lanReceiverHealth)
+                }
+
+                item {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Queue", style = MaterialTheme.typography.titleMedium)
                 }
@@ -218,6 +226,49 @@ fun MainScreen(
 
             // Bottom spacing
             item { Spacer(modifier = Modifier.height(16.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun LanReceiverHealthCard(health: LanReceiverHealth) {
+    val (containerColor, contentColor, label) = when (health.status) {
+        LanReceiverStatus.Connected -> Triple(
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            "Receiver connected"
+        )
+        LanReceiverStatus.Reconnecting -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            "Receiver reconnecting"
+        )
+        LanReceiverStatus.Unavailable -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "Receiver unavailable"
+        )
+    }
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Surface(
+                color = containerColor,
+                contentColor = contentColor,
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = label,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = health.detail,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
