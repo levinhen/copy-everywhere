@@ -279,13 +279,33 @@ func (d *DB) ListQueueClips(deviceID string) ([]*Clip, error) {
 	return clips, rows.Err()
 }
 
-// ConsumeClip atomically marks a clip as consumed. Returns true if the clip was
-// successfully claimed (i.e. it was not already consumed). Returns false if
-// another caller already consumed it.
+// ConsumeClip atomically marks an untargeted clip as consumed. Returns true if
+// the clip was successfully claimed (i.e. it was not already consumed).
+// Returns false if another caller already consumed it.
 func (d *DB) ConsumeClip(id string) (bool, error) {
 	res, err := d.conn.Exec(`
 		UPDATE clips SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL
 	`, time.Now().UTC(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ConsumeTargetedClip atomically marks a targeted clip as consumed by its
+// addressed device and moves it into the delivered state. Returns true if the
+// addressed device successfully claimed it. Returns false if the clip was
+// already consumed or the requesting device does not match the target.
+func (d *DB) ConsumeTargetedClip(id string, deviceID string) (bool, error) {
+	res, err := d.conn.Exec(`
+		UPDATE clips
+		SET consumed_at = ?, status = ?
+		WHERE id = ? AND consumed_at IS NULL AND target_device_id = ?
+	`, time.Now().UTC(), ClipStatusTargetedDelivered, id, deviceID)
 	if err != nil {
 		return false, err
 	}

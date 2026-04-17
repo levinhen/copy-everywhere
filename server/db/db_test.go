@@ -589,6 +589,86 @@ func TestConsumeClip(t *testing.T) {
 	}
 }
 
+func TestConsumeTargetedClip(t *testing.T) {
+	d := setupTestDB(t)
+
+	target := "device_a"
+	d.CreateClip(&Clip{
+		ID:             "tcm001",
+		Type:           "text",
+		SizeBytes:      5,
+		Status:         ClipStatusTargetedPending,
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		TargetDeviceID: &target,
+	})
+
+	ok, err := d.ConsumeTargetedClip("tcm001", target)
+	if err != nil {
+		t.Fatalf("consume targeted: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected targeted consume to succeed")
+	}
+
+	clip, err := d.GetClipByID("tcm001")
+	if err != nil {
+		t.Fatalf("get targeted clip: %v", err)
+	}
+	if clip == nil {
+		t.Fatal("expected targeted clip to still exist")
+	}
+	if clip.ConsumedAt == nil {
+		t.Fatal("expected targeted consumed_at to be set")
+	}
+	if clip.Status != ClipStatusTargetedDelivered {
+		t.Fatalf("expected targeted clip status %q, got %q", ClipStatusTargetedDelivered, clip.Status)
+	}
+
+	ok, err = d.ConsumeTargetedClip("tcm001", target)
+	if err != nil {
+		t.Fatalf("second targeted consume: %v", err)
+	}
+	if ok {
+		t.Fatal("expected second targeted consume to fail")
+	}
+}
+
+func TestConsumeTargetedClipWrongDevice(t *testing.T) {
+	d := setupTestDB(t)
+
+	target := "device_a"
+	d.CreateClip(&Clip{
+		ID:             "tcm002",
+		Type:           "text",
+		SizeBytes:      5,
+		Status:         ClipStatusTargetedPending,
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		TargetDeviceID: &target,
+	})
+
+	ok, err := d.ConsumeTargetedClip("tcm002", "device_b")
+	if err != nil {
+		t.Fatalf("wrong-device targeted consume: %v", err)
+	}
+	if ok {
+		t.Fatal("expected wrong-device targeted consume to fail")
+	}
+
+	clip, err := d.GetClipByID("tcm002")
+	if err != nil {
+		t.Fatalf("get targeted clip after wrong-device attempt: %v", err)
+	}
+	if clip == nil {
+		t.Fatal("expected targeted clip to still exist")
+	}
+	if clip.ConsumedAt != nil {
+		t.Fatal("expected targeted clip to remain unconsumed")
+	}
+	if clip.Status != ClipStatusTargetedPending {
+		t.Fatalf("expected targeted clip status %q, got %q", ClipStatusTargetedPending, clip.Status)
+	}
+}
+
 func TestConsumeClipNotFound(t *testing.T) {
 	d := setupTestDB(t)
 

@@ -207,8 +207,12 @@ func (h *ClipHandler) ListQueue(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// GetRaw handles GET /api/v1/clips/:id/raw
-// This is an atomic claim: the first caller gets the body, subsequent callers get 410 Gone.
+// GetRaw handles GET /api/v1/clips/:id/raw.
+// This is the authoritative targeted-delivery acknowledgement path: for clips
+// with target_device_id, the caller must pass ?device_id=<target>, and only a
+// successful raw consume by that addressed device moves the clip to
+// targeted_delivered. As with untargeted clips, the first successful caller
+// gets the body and later consume attempts get 410 Gone.
 func (h *ClipHandler) GetRaw(c *gin.Context) {
 	id := c.Param("id")
 
@@ -228,8 +232,26 @@ func (h *ClipHandler) GetRaw(c *gin.Context) {
 		return
 	}
 
-	// Atomic consume: UPDATE ... WHERE consumed_at IS NULL
-	claimed, err := h.DB.ConsumeClip(id)
+	// Atomic consume: untargeted clips only need the first successful claim,
+	// but targeted clips must be claimed by the addressed device to confirm
+	// delivery.
+	var (
+		claimed bool
+	)
+	if clip.TargetDeviceID != nil {
+		requestingDeviceID := c.Query("device_id")
+		if requestingDeviceID == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "device_id query parameter is required for targeted clip consume"})
+			return
+		}
+		if requestingDeviceID != *clip.TargetDeviceID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "clip is targeted to a different device"})
+			return
+		}
+		claimed, err = h.DB.ConsumeTargetedClip(id, requestingDeviceID)
+	} else {
+		claimed, err = h.DB.ConsumeClip(id)
+	}
 	if err != nil {
 		log.Printf("ERROR: consume clip: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
@@ -259,17 +281,4 @@ func (h *ClipHandler) GetRaw(c *gin.Context) {
 	}
 
 	c.File(clip.StoragePath)
-
-	// Clean up on-disk file and DB record after response is flushed
-	go func() {
-		if clip.StoragePath != "" {
-			dir := filepath.Dir(clip.StoragePath)
-			if err := os.RemoveAll(dir); err != nil {
-				log.Printf("ERROR: cleanup consumed clip %s files: %v", id, err)
-			}
-		}
-		if err := h.DB.DeleteClip(id); err != nil {
-			log.Printf("ERROR: cleanup consumed clip %s record: %v", id, err)
-		}
-	}()
 }

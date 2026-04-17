@@ -6,7 +6,7 @@ Targeted Auto-Delivery Reliability
 
 US-069A: Server: track targeted delivery lifecycle state                 [ ]
 US-069B: Server: expose receiver connectivity on devices list            [x]
-US-070:  Server: confirm targeted delivery on successful raw consume     [ ]
+US-070:  Server: confirm targeted delivery on successful raw consume     [x]
 US-071:  Server: fallback targeted clips back into recoverable queue     [ ]
 US-072:  Server: add targeted delivery diagnostics and regression cover  [ ]
 US-073A: macOS: surface self receiver status and SSE health              [ ]
@@ -26,6 +26,8 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - Server delivery-state lifecycle starts targeted clips in `targeted_pending`; only untargeted clips use `ready` immediately, so new server/client work should not assume every sendable clip is `ready`
 - Server targeted SSE events are emitted from `server/handlers/clips.go` and `server/handlers/uploads.go`, and replayed on connect from `server/handlers/devices.go`
 - `/api/v1/devices` receiver presence is computed from the live `server/sse.Broker`, not persisted in SQLite; fresh active SSE subscriptions are `online`, stale active subscriptions are `degraded`, and no subscriber is `offline`
+- Targeted `GET /api/v1/clips/:id/raw` now requires `?device_id=<target>` and is the authoritative delivery acknowledgement path; only that addressed-device consume should transition a clip to `targeted_delivered`
+- Consumed clip rows should remain in SQLite until cleanup runs so duplicate raw consumes keep returning `410 Gone` and targeted delivery state stays inspectable after the first successful read
 - macOS targeted auto-receive lives in `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`
 - Windows targeted auto-receive lives in `windows/CopyEverywhere/MainWindow.xaml.cs`
 - Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
@@ -57,4 +59,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Keep device presence in the shared SSE broker so `/devices` can reflect live auto-receive readiness without adding more database state
   - Refresh broker presence only after successful stream writes; subscribe/unsubscribe alone should not imply long-lived freshness forever
   - Use a custom broker clock/TTL in tests to cover stale-heartbeat behavior without slow sleeps
+---
+## 2026-04-17 09:29:58 CST - US-070
+- Implemented targeted raw-consume acknowledgement by requiring `device_id` on targeted `GET /clips/:id/raw`, atomically marking addressed-device consumes as `targeted_delivered`, and rejecting missing or wrong-device targeted consume attempts before they can claim the clip
+- Files changed: `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/clips_test.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
+- Learnings for future iterations:
+  - Use `ConsumeTargetedClip()` when a code path must verify the addressed device and transition the clip to `targeted_delivered` atomically
+  - Do not inline-delete consumed clip rows in `GetRaw`; cleanup should own deletion so duplicate-consume `410 Gone` behavior and targeted delivery state remain observable
+  - Targeted raw-consume tests should cover missing `device_id`, wrong-device attempts, success, and duplicate consume behavior together because they share the same handler branch
 ---

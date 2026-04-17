@@ -438,6 +438,189 @@ func TestGetRawAtomicConsume(t *testing.T) {
 	}
 }
 
+func TestGetRawTargetedConsumeMarksDelivered(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	clipDir := filepath.Join(h.StoragePath, "traw01")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "hello.txt")
+	os.WriteFile(filePath, []byte("targeted"), 0644)
+
+	filename := "hello.txt"
+	target := "dev_target"
+	h.DB.CreateClip(&db.Clip{
+		ID:             "traw01",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      8,
+		Status:         db.ClipStatusTargetedPending,
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    filePath,
+		TargetDeviceID: &target,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/traw01/raw?device_id=dev_target", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	clip, err := h.DB.GetClipByID("traw01")
+	if err != nil {
+		t.Fatalf("get targeted clip: %v", err)
+	}
+	if clip == nil {
+		t.Fatal("expected targeted clip record to persist after consume")
+	}
+	if clip.ConsumedAt == nil {
+		t.Fatal("expected targeted clip consumed_at to be set")
+	}
+	if clip.Status != db.ClipStatusTargetedDelivered {
+		t.Fatalf("expected targeted clip status %q, got %q", db.ClipStatusTargetedDelivered, clip.Status)
+	}
+}
+
+func TestGetRawTargetedConsumeRequiresMatchingDeviceID(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	clipDir := filepath.Join(h.StoragePath, "traw02")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "hello.txt")
+	os.WriteFile(filePath, []byte("targeted"), 0644)
+
+	filename := "hello.txt"
+	target := "dev_target"
+	h.DB.CreateClip(&db.Clip{
+		ID:             "traw02",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      8,
+		Status:         db.ClipStatusTargetedPending,
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    filePath,
+		TargetDeviceID: &target,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/traw02/raw?device_id=other_device", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	clip, err := h.DB.GetClipByID("traw02")
+	if err != nil {
+		t.Fatalf("get targeted clip after wrong-device request: %v", err)
+	}
+	if clip == nil {
+		t.Fatal("expected targeted clip to still exist")
+	}
+	if clip.ConsumedAt != nil {
+		t.Fatal("expected wrong-device request not to consume the clip")
+	}
+	if clip.Status != db.ClipStatusTargetedPending {
+		t.Fatalf("expected targeted clip status %q, got %q", db.ClipStatusTargetedPending, clip.Status)
+	}
+}
+
+func TestGetRawTargetedConsumeRequiresDeviceID(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	clipDir := filepath.Join(h.StoragePath, "traw03")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "hello.txt")
+	os.WriteFile(filePath, []byte("targeted"), 0644)
+
+	filename := "hello.txt"
+	target := "dev_target"
+	h.DB.CreateClip(&db.Clip{
+		ID:             "traw03",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      8,
+		Status:         db.ClipStatusTargetedPending,
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    filePath,
+		TargetDeviceID: &target,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/traw03/raw", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	clip, err := h.DB.GetClipByID("traw03")
+	if err != nil {
+		t.Fatalf("get targeted clip after missing-device request: %v", err)
+	}
+	if clip == nil {
+		t.Fatal("expected targeted clip to still exist")
+	}
+	if clip.ConsumedAt != nil {
+		t.Fatal("expected missing-device request not to consume the clip")
+	}
+	if clip.Status != db.ClipStatusTargetedPending {
+		t.Fatalf("expected targeted clip status %q, got %q", db.ClipStatusTargetedPending, clip.Status)
+	}
+}
+
+func TestGetRawTargetedConsumeDuplicateReturnsGone(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	clipDir := filepath.Join(h.StoragePath, "traw04")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "hello.txt")
+	os.WriteFile(filePath, []byte("targeted"), 0644)
+
+	filename := "hello.txt"
+	target := "dev_target"
+	h.DB.CreateClip(&db.Clip{
+		ID:             "traw04",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      8,
+		Status:         db.ClipStatusTargetedPending,
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    filePath,
+		TargetDeviceID: &target,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/traw04/raw?device_id=dev_target", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first call: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/clips/traw04/raw?device_id=dev_target", nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusGone {
+		t.Fatalf("second call: expected 410, got %d: %s", w.Code, w.Body.String())
+	}
+
+	clip, err := h.DB.GetClipByID("traw04")
+	if err != nil {
+		t.Fatalf("get targeted clip after duplicate request: %v", err)
+	}
+	if clip == nil {
+		t.Fatal("expected targeted clip to still exist")
+	}
+	if clip.Status != db.ClipStatusTargetedDelivered {
+		t.Fatalf("expected targeted clip status %q, got %q", db.ClipStatusTargetedDelivered, clip.Status)
+	}
+}
+
 func TestGetRawRaceCondition(t *testing.T) {
 	h, r := setupTestHandler(t)
 
