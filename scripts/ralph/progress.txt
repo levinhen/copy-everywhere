@@ -7,7 +7,7 @@ Targeted Auto-Delivery Reliability
 US-069A: Server: track targeted delivery lifecycle state                 [ ]
 US-069B: Server: expose receiver connectivity on devices list            [x]
 US-070:  Server: confirm targeted delivery on successful raw consume     [x]
-US-071:  Server: fallback targeted clips back into recoverable queue     [ ]
+US-071:  Server: fallback targeted clips back into recoverable queue     [x]
 US-072:  Server: add targeted delivery diagnostics and regression cover  [ ]
 US-073A: macOS: surface self receiver status and SSE health              [ ]
 US-073B: macOS: show target device receiver readiness in picker          [ ]
@@ -24,6 +24,7 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - The repo root `prd.json` can mirror the active iteration for humans, but the autonomous loop follows `scripts/ralph/prd.json`
 - Targeted LAN delivery already uses `server`-stored clips plus SSE notify plus client `GET /clips/:id/raw`; do not introduce client-side inbound APIs unless a later PRD explicitly changes the architecture
 - Server delivery-state lifecycle starts targeted clips in `targeted_pending`; only untargeted clips use `ready` immediately, so new server/client work should not assume every sendable clip is `ready`
+- Timeout-driven targeted fallback is keyed off persisted `targeted_pending_at`; set it only when a clip actually enters `targeted_pending` (single upload or chunked complete), not when a chunked upload is first initialized
 - Server targeted SSE events are emitted from `server/handlers/clips.go` and `server/handlers/uploads.go`, and replayed on connect from `server/handlers/devices.go`
 - `/api/v1/devices` receiver presence is computed from the live `server/sse.Broker`, not persisted in SQLite; fresh active SSE subscriptions are `online`, stale active subscriptions are `degraded`, and no subscriber is `offline`
 - Targeted `GET /api/v1/clips/:id/raw` now requires `?device_id=<target>` and is the authoritative delivery acknowledgement path; only that addressed-device consume should transition a clip to `targeted_delivered`
@@ -68,4 +69,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Use `ConsumeTargetedClip()` when a code path must verify the addressed device and transition the clip to `targeted_delivered` atomically
   - Do not inline-delete consumed clip rows in `GetRaw`; cleanup should own deletion so duplicate-consume `410 Gone` behavior and targeted delivery state remain observable
   - Targeted raw-consume tests should cover missing `device_id`, wrong-device attempts, success, and duplicate consume behavior together because they share the same handler branch
+---
+## 2026-04-17 09:36:03 CST - US-071
+- Implemented timeout-driven targeted fallback on the server by persisting `targeted_pending_at`, transitioning stale `targeted_pending` clips to `targeted_fallback` during cleanup, and keeping fallback clips recoverable through the queue for the addressed device
+- Files changed: `CLAUDE.md`, `server/cleanup/cleanup.go`, `server/cleanup/cleanup_test.go`, `server/config/config.go`, `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/clips_test.go`, `server/handlers/uploads.go`, `server/handlers/uploads_test.go`, `server/main.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `go test ./db ./cleanup ./handlers` passed in `server/`; `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
+- Learnings for future iterations:
+  - Queue listing now intentionally exposes only untargeted `ready` clips plus targeted `targeted_fallback` clips, and `delivery_state` distinguishes normal queue items from fallback ones
+  - Use `TARGETED_FALLBACK_SECONDS` to tune when targeted auto-delivery falls back to manual recovery without changing clip TTL cleanup behavior
+  - Manual targeted recovery still uses `GET /clips/:id/raw?device_id=<target>` and reuses the same targeted consume path after fallback
 ---

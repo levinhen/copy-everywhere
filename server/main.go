@@ -35,7 +35,12 @@ func main() {
 	defer database.Close()
 
 	// Start cleanup goroutine (expired + consumed clips)
-	cleanup.Start(database, cfg.StoragePath, time.Duration(cfg.CleanupIntervalSeconds)*time.Second)
+	cleanup.Start(
+		database,
+		cfg.StoragePath,
+		time.Duration(cfg.CleanupIntervalSeconds)*time.Second,
+		time.Duration(cfg.TargetedFallbackSeconds)*time.Second,
+	)
 
 	broker := sse.NewBroker()
 

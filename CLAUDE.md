@@ -90,6 +90,7 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **SQLite single writer.** `db.Open` sets `SetMaxOpenConns(1)`. Don't crank it up — `modernc.org/sqlite` corrupts under concurrent writes otherwise.
 - **Tests use `t.TempDir()`** for isolated DB instances and `gin.New()` (no middleware) for handler isolation.
 - **Chunked-upload disk layout.** Parts land at `STORAGE_PATH/uploads/<upload_id>/part_N` (1-indexed). On `complete`, parts are merged into `STORAGE_PATH/<clip_id>/<filename>` and the parts dir is `os.RemoveAll`'d. The clip row is created at `init` with `status=uploading` and flipped to `ready` via `UpdateClip` on complete.
+- **Targeted fallback timing.** Timeout-driven targeted fallback uses persisted `clips.targeted_pending_at`, not `created_at`. Set it only when a clip actually enters `targeted_pending` (single upload or chunked complete), because chunked uploads can sit in `uploading` long before notification.
 
 **Shared protocol:**
 

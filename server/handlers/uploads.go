@@ -239,11 +239,14 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	// Update clip record
 	status := db.ClipStatusReady
+	var targetedPendingAt *time.Time
 	if clip.TargetDeviceID != nil {
 		status = db.ClipStatusTargetedPending
+		now := time.Now().UTC()
+		targetedPendingAt = &now
 	}
 
-	if err := h.DB.UpdateClip(uploadID, status, info.Size(), finalPath); err != nil {
+	if err := h.DB.UpdateClip(uploadID, status, info.Size(), finalPath, targetedPendingAt); err != nil {
 		log.Printf("ERROR: update clip: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return

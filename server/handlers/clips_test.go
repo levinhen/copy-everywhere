@@ -363,6 +363,9 @@ func TestUploadWithDeviceIDs(t *testing.T) {
 	if clip.Status != db.ClipStatusTargetedPending {
 		t.Errorf("expected targeted clip status %q, got %q", db.ClipStatusTargetedPending, clip.Status)
 	}
+	if clip.TargetedPendingAt == nil {
+		t.Error("expected targeted clip targeted_pending_at to be set")
+	}
 }
 
 func TestUploadWithoutDeviceIDs(t *testing.T) {
@@ -391,6 +394,9 @@ func TestUploadWithoutDeviceIDs(t *testing.T) {
 	}
 	if clip.Status != db.ClipStatusReady {
 		t.Errorf("expected untargeted clip status %q, got %q", db.ClipStatusReady, clip.Status)
+	}
+	if clip.TargetedPendingAt != nil {
+		t.Error("expected untargeted clip targeted_pending_at to be nil")
 	}
 }
 
@@ -480,6 +486,9 @@ func TestGetRawTargetedConsumeMarksDelivered(t *testing.T) {
 	}
 	if clip.Status != db.ClipStatusTargetedDelivered {
 		t.Fatalf("expected targeted clip status %q, got %q", db.ClipStatusTargetedDelivered, clip.Status)
+	}
+	if clip.TargetedPendingAt != nil {
+		t.Fatal("expected targeted clip targeted_pending_at to be cleared after delivery")
 	}
 }
 
@@ -619,6 +628,9 @@ func TestGetRawTargetedConsumeDuplicateReturnsGone(t *testing.T) {
 	if clip.Status != db.ClipStatusTargetedDelivered {
 		t.Fatalf("expected targeted clip status %q, got %q", db.ClipStatusTargetedDelivered, clip.Status)
 	}
+	if clip.TargetedPendingAt != nil {
+		t.Fatal("expected targeted clip targeted_pending_at to stay cleared after duplicate consume")
+	}
 }
 
 func TestGetRawRaceCondition(t *testing.T) {
@@ -674,19 +686,25 @@ func TestListQueue(t *testing.T) {
 		ID: "q00001", Type: "text", SizeBytes: 5, Status: "ready",
 		CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour),
 	})
-	// Unconsumed, targeted to dev_a — visible to dev_a only
+	// Targeted fallback to dev_a — visible to dev_a only
 	targetA := "dev_a"
 	h.DB.CreateClip(&db.Clip{
-		ID: "q00002", Type: "text", SizeBytes: 5, Status: "ready",
+		ID: "q00002", Type: "text", SizeBytes: 5, Status: db.ClipStatusTargetedFallback,
 		CreatedAt: now.Add(-1 * time.Minute), ExpiresAt: now.Add(time.Hour),
 		TargetDeviceID: &targetA,
 	})
-	// Unconsumed, targeted to dev_b — NOT visible to dev_a
+	// Targeted fallback to dev_b — NOT visible to dev_a
 	targetB := "dev_b"
 	h.DB.CreateClip(&db.Clip{
-		ID: "q00003", Type: "text", SizeBytes: 5, Status: "ready",
+		ID: "q00003", Type: "text", SizeBytes: 5, Status: db.ClipStatusTargetedFallback,
 		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
 		TargetDeviceID: &targetB,
+	})
+	// Targeted pending — NOT yet visible in queue
+	h.DB.CreateClip(&db.Clip{
+		ID: "q00006", Type: "text", SizeBytes: 5, Status: db.ClipStatusTargetedPending,
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+		TargetDeviceID: &targetA,
 	})
 	// Already consumed — NOT visible
 	consumed := now
@@ -709,7 +727,7 @@ func TestListQueue(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var clips []clipResponse
+	var clips []queueClipResponse
 	json.Unmarshal(w.Body.Bytes(), &clips)
 
 	if len(clips) != 2 {
@@ -722,6 +740,51 @@ func TestListQueue(t *testing.T) {
 	}
 	if clips[1].ID != "q00001" {
 		t.Errorf("expected second clip q00001, got %s", clips[1].ID)
+	}
+	if clips[0].DeliveryState != db.ClipStatusTargetedFallback {
+		t.Errorf("expected fallback delivery_state %q, got %q", db.ClipStatusTargetedFallback, clips[0].DeliveryState)
+	}
+	if clips[1].DeliveryState != "queue" {
+		t.Errorf("expected untargeted queue delivery_state %q, got %q", "queue", clips[1].DeliveryState)
+	}
+}
+
+func TestGetRawTargetedFallbackManualReceive(t *testing.T) {
+	h, r := setupTestHandler(t)
+
+	clipDir := filepath.Join(h.StoragePath, "traw05")
+	os.MkdirAll(clipDir, 0755)
+	filePath := filepath.Join(clipDir, "hello.txt")
+	os.WriteFile(filePath, []byte("fallback"), 0644)
+
+	filename := "hello.txt"
+	target := "dev_target"
+	h.DB.CreateClip(&db.Clip{
+		ID:             "traw05",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      8,
+		Status:         db.ClipStatusTargetedFallback,
+		CreatedAt:      time.Now().UTC(),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		StoragePath:    filePath,
+		TargetDeviceID: &target,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/clips/traw05/raw?device_id=dev_target", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	clip, err := h.DB.GetClipByID("traw05")
+	if err != nil {
+		t.Fatalf("get fallback clip after receive: %v", err)
+	}
+	if clip.Status != db.ClipStatusTargetedDelivered {
+		t.Fatalf("expected fallback receive to mark delivered, got %q", clip.Status)
 	}
 }
 

@@ -290,6 +290,9 @@ func TestInitUploadWithDeviceIDs(t *testing.T) {
 	if clip.Status != db.ClipStatusUploading {
 		t.Errorf("expected init upload status %q, got %q", db.ClipStatusUploading, clip.Status)
 	}
+	if clip.TargetedPendingAt != nil {
+		t.Error("expected init targeted upload targeted_pending_at to remain nil until completion")
+	}
 }
 
 func TestInitUploadWithoutDeviceIDs(t *testing.T) {
@@ -324,6 +327,9 @@ func TestInitUploadWithoutDeviceIDs(t *testing.T) {
 	}
 	if clip.Status != db.ClipStatusUploading {
 		t.Errorf("expected untargeted init upload status %q, got %q", db.ClipStatusUploading, clip.Status)
+	}
+	if clip.TargetedPendingAt != nil {
+		t.Error("expected untargeted init upload targeted_pending_at to be nil")
 	}
 }
 
@@ -377,6 +383,9 @@ func TestCompleteUploadTargetedKeepsPendingDeliveryState(t *testing.T) {
 	}
 	if clip.Status != db.ClipStatusTargetedPending {
 		t.Fatalf("expected completed targeted upload status %q, got %q", db.ClipStatusTargetedPending, clip.Status)
+	}
+	if clip.TargetedPendingAt == nil {
+		t.Fatal("expected completed targeted upload targeted_pending_at to be set")
 	}
 }
 

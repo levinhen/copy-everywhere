@@ -9,23 +9,33 @@ import (
 	"github.com/copy-everywhere/server/db"
 )
 
-// Start launches a background goroutine that cleans up expired and consumed clips every interval.
-func Start(database *db.DB, storagePath string, interval time.Duration) {
+// Start launches a background goroutine that falls back stale targeted clips and
+// cleans up expired and consumed clips every interval.
+func Start(database *db.DB, storagePath string, interval time.Duration, targetedFallbackAfter time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		// Run once immediately at startup
-		run(database, storagePath)
+		run(database, storagePath, targetedFallbackAfter)
 
 		for range ticker.C {
-			run(database, storagePath)
+			run(database, storagePath, targetedFallbackAfter)
 		}
 	}()
 }
 
-func run(database *db.DB, storagePath string) {
+func run(database *db.DB, storagePath string, targetedFallbackAfter time.Duration) {
 	deleted := 0
+
+	if targetedFallbackAfter > 0 {
+		fallbacks, err := database.FallbackTargetedClips(targetedFallbackAfter)
+		if err != nil {
+			log.Printf("CLEANUP: error falling back targeted clips: %v", err)
+		} else if fallbacks > 0 {
+			log.Printf("CLEANUP: moved %d targeted clips to fallback", fallbacks)
+		}
+	}
 
 	// Clean up expired clips (TTL-based)
 	expired, err := database.GetExpiredClips()
@@ -60,7 +70,7 @@ func deleteClips(database *db.DB, storagePath string, clips []*db.Clip) int {
 		}
 
 		// For uploading clips, also clean up the uploads directory
-		if clip.Status == "uploading" {
+		if clip.Status == db.ClipStatusUploading {
 			uploadDir := filepath.Join(storagePath, "uploads", clip.ID)
 			if err := os.RemoveAll(uploadDir); err != nil {
 				log.Printf("CLEANUP: error removing upload dir for clip %s: %v", clip.ID, err)
