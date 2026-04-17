@@ -16,7 +16,7 @@ US-074A: Windows: surface self receiver status and SSE health            [x]
 US-074B: Windows: target device readiness and fallback messaging         [x]
 US-074C: Windows: targeted auto-receive failure visible and recoverable  [x]
 US-075A: Android: expose foreground receiver status                      [x]
-US-075B: Android: preserve queue fallback on targeted failure            [ ]
+US-075B: Android: preserve queue fallback on targeted failure            [x]
 US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 
 ## Codebase Patterns
@@ -39,6 +39,7 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - Windows targeted SSE auto-receive should consume raw clips with `device_id=<self>` and show a queue-fallback toast only on real auto-receive failures, so targeted delivery acknowledgement and manual recovery use the same server path
 - Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
 - Android LAN receiver readiness should bind to the shared `CopyEverywhereService.receiverHealth` state so the foreground notification, main screen, and config screen all reflect the same live SSE connection and retry status
+- Android targeted raw consumes must pass `device_id=<self>` from both SSE auto-receive and manual queue recovery, otherwise targeted delivery acknowledgement fails and fallback clips cannot be recovered through the authoritative server path
 
 ---
 
@@ -157,4 +158,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Keep Android LAN receiver readiness in a shared `StateFlow` owned by `CopyEverywhereService` so notification text and Compose screens stay in sync with the actual SSE loop
   - Have `SseClient.connect()` report retry delay and disconnect reason to callers, otherwise reconnecting UI can only show a vague disconnected state with no backoff context
   - Reset the shared receiver-health state in `CopyEverywhereService.onDestroy()` so Compose does not keep showing stale “connected” state after the foreground service stops
+---
+## 2026-04-17 10:33:54 CST - US-075B
+- Implemented Android targeted fallback recovery by parsing server `delivery_state`, badging fallback queue rows, surfacing an inline recovery notice when targeted auto-receive fails, and routing both SSE auto-receive and manual queue receives through the `device_id=<self>` raw-consume path
+- Files changed: `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`, `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `./gradlew assembleDebug` could not run in `android/` because no Java runtime is installed on this machine (`Unable to locate a Java Runtime`); manual Android build verification is still required on a machine with Java/Android tooling
+- Learnings for future iterations:
+  - Keep Android fallback messaging in `CopyEverywhereService` so background SSE failures can update both the transfer notification and the foreground Compose UI through one shared `StateFlow`
+  - Parse server `delivery_state` into the queue model and label `targeted_fallback` rows directly in the list instead of trying to infer fallback from target-device fields
+  - Clear the shared fallback notice once the user manually recovers or dismisses the queued item so old targeted-failure warnings do not linger after recovery
 ---

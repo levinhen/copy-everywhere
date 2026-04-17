@@ -27,6 +27,7 @@ import com.copyeverywhere.app.data.BluetoothService
 import com.copyeverywhere.app.data.BluetoothSession
 import com.copyeverywhere.app.data.BluetoothTransferHeader
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
+import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.SseClient
 import com.copyeverywhere.app.data.TransferMode
@@ -113,6 +114,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         sseJob?.cancel()
         bluetoothService?.listener = null
         bluetoothService?.destroy()
+        targetedFallbackNotice.value = null
         receiverHealth.value = LanReceiverHealth(
             status = LanReceiverStatus.Unavailable,
             detail = "Foreground service is not running"
@@ -369,7 +371,14 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         try {
             val hostUrl = configStore.hostUrl.first()
             val accessToken = configStore.getAccessToken()
-            val downloaded = apiClient.downloadClipRaw(hostUrl, accessToken, clip.id)
+            val deviceId = configStore.deviceId.first()
+            val downloaded = apiClient.downloadClipRaw(
+                hostUrl = hostUrl,
+                accessToken = accessToken,
+                clipId = clip.id,
+                deviceId = deviceId
+            )
+            targetedFallbackNotice.value = null
 
             when (downloaded.metadata.type) {
                 "text" -> handleTextClip(downloaded.bytes)
@@ -379,10 +388,17 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
             Log.d(TAG, "Clip already consumed: ${clip.id}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to process clip ${clip.id}", e)
-            showTransferNotification("Receive failed", "Could not download clip: ${e.message}")
+            val recoveryMessage = buildTargetedFallbackMessage(clip)
+            targetedFallbackNotice.value = recoveryMessage
+            showTransferNotification("Auto-receive failed", recoveryMessage)
         } finally {
             releaseWakeLock()
         }
+    }
+
+    private fun buildTargetedFallbackMessage(clip: ClipResponse): String {
+        val filename = clip.filename.ifBlank { "Clip ${clip.id}" }
+        return "$filename remains available in queue for manual receive"
     }
 
     private fun handleTextClip(bytes: ByteArray) {
@@ -484,6 +500,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
                 detail = "Foreground service is not running"
             )
         )
+        val targetedFallbackNotice = MutableStateFlow<String?>(null)
 
         fun start(context: Context) {
             val intent = Intent(context, CopyEverywhereService::class.java)

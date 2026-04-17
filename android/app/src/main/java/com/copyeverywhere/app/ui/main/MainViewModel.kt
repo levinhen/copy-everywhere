@@ -17,6 +17,7 @@ import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.data.isTargetedFallback
 import com.copyeverywhere.app.service.CopyEverywhereService
 import com.copyeverywhere.app.service.LanReceiverHealth
 import com.copyeverywhere.app.service.LanReceiverStatus
@@ -52,6 +53,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 detail = "Foreground service is not running"
             )
         )
+    val targetedFallbackNotice: StateFlow<String?> = CopyEverywhereService.targetedFallbackNotice
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _textInput = MutableStateFlow("")
     val textInput: StateFlow<String> = _textInput.asStateFlow()
@@ -368,7 +371,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val host = configStore.hostUrl.first()
                 val token = configStore.getAccessToken()
-                val downloaded = apiClient.downloadClipRaw(host, token, clip.id)
+                val device = configStore.deviceId.first()
+                val downloaded = apiClient.downloadClipRaw(host, token, clip.id, deviceId = device)
 
                 when (downloaded.metadata.type) {
                     "text" -> {
@@ -385,9 +389,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Remove from queue
                 _queue.value = _queue.value.filter { it.id != clip.id }
+                if (clip.isTargetedFallback()) {
+                    CopyEverywhereService.targetedFallbackNotice.value = null
+                }
                 _receiveStatus.value = ReceiveStatus.Idle
             } catch (e: ClipAlreadyConsumedException) {
                 _queue.value = _queue.value.filter { it.id != clip.id }
+                if (clip.isTargetedFallback()) {
+                    CopyEverywhereService.targetedFallbackNotice.value = null
+                }
                 _receiveStatus.value = ReceiveStatus.Idle
                 Toast.makeText(getApplication(), "Already consumed", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
@@ -403,6 +413,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         CopyEverywhereService.showTransferNotificationStatic(
             getApplication(), "Transfer error", message
         )
+    }
+
+    fun dismissTargetedFallbackNotice() {
+        CopyEverywhereService.targetedFallbackNotice.value = null
     }
 
     private fun saveToDownloads(filename: String, mimeType: String, bytes: ByteArray) {

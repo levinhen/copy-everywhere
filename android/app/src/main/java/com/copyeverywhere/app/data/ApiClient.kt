@@ -60,8 +60,11 @@ data class ClipResponse(
     @SerializedName("content_type") val contentType: String = "",
     @SerializedName("created_at") val createdAt: String = "",
     @SerializedName("sender_device_id") val senderDeviceId: String? = null,
-    @SerializedName("target_device_id") val targetDeviceId: String? = null
+    @SerializedName("target_device_id") val targetDeviceId: String? = null,
+    @SerializedName("delivery_state") val deliveryState: String? = null
 )
+
+fun ClipResponse.isTargetedFallback(): Boolean = deliveryState == "targeted_fallback"
 
 data class UploadInitRequest(
     val filename: String,
@@ -467,6 +470,7 @@ class ApiClient {
         hostUrl: String,
         accessToken: String,
         clipId: String,
+        deviceId: String = "",
         expectedSize: Long = -1,
         progressCallback: (suspend (Double) -> Unit)? = null
     ): DownloadedClip = withContext(Dispatchers.IO) {
@@ -481,7 +485,16 @@ class ApiClient {
         val metadata = gson.fromJson(metaBody, ClipResponse::class.java)
 
         // Download raw content (atomically consumes)
-        val rawUrl = "${hostUrl.trimEnd('/')}/api/v1/clips/$clipId/raw"
+        val rawUrl = buildString {
+            append(hostUrl.trimEnd('/'))
+            append("/api/v1/clips/")
+            append(clipId)
+            append("/raw")
+            if (deviceId.isNotEmpty()) {
+                append("?device_id=")
+                append(deviceId)
+            }
+        }
         val rawRequest = buildRequest(rawUrl, accessToken).get().build()
         val rawResponse = client.newCall(rawRequest).execute()
 

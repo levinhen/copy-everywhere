@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.data.isTargetedFallback
 import com.copyeverywhere.app.service.LanReceiverHealth
 import com.copyeverywhere.app.service.LanReceiverStatus
 
@@ -67,6 +68,7 @@ fun MainScreen(
     val btReceiveProgress by viewModel.btReceiveProgress.collectAsState()
     val btReceiveFilename by viewModel.btReceiveFilename.collectAsState()
     val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
+    val targetedFallbackNotice by viewModel.targetedFallbackNotice.collectAsState()
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -174,6 +176,16 @@ fun MainScreen(
             if (transferMode == TransferMode.LanServer) {
                 item {
                     LanReceiverHealthCard(health = lanReceiverHealth)
+                }
+
+                val fallbackNotice = targetedFallbackNotice
+                if (fallbackNotice != null) {
+                    item {
+                        TargetedFallbackNoticeCard(
+                            message = fallbackNotice,
+                            onDismiss = viewModel::dismissTargetedFallbackNotice
+                        )
+                    }
                 }
 
                 item {
@@ -298,6 +310,32 @@ private fun BtReceiveProgressCard(
 }
 
 @Composable
+private fun TargetedFallbackNoticeCard(
+    message: String,
+    onDismiss: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                "Targeted auto-receive needs manual recovery",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.error
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedButton(onClick = onDismiss) {
+                Text("Dismiss")
+            }
+        }
+    }
+}
+
+@Composable
 private fun UploadProgressCard(
     progress: UploadProgress,
     onPause: () -> Unit,
@@ -358,8 +396,27 @@ private fun QueueItemCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(clip.filename, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (clip.isTargetedFallback()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            "Targeted fallback",
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    formatSize(clip.sizeBytes),
+                    if (clip.isTargetedFallback()) {
+                        "${formatSize(clip.sizeBytes)} - Automatic receive missed; tap to recover"
+                    } else {
+                        formatSize(clip.sizeBytes)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
