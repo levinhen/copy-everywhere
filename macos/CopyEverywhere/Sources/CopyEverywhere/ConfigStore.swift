@@ -10,10 +10,39 @@ struct ClipResult {
 }
 
 struct DeviceInfo: Identifiable, Equatable, Hashable {
+    enum ReceiverStatus: String, Equatable, Hashable {
+        case online
+        case degraded
+        case offline
+
+        init(serverValue: String?) {
+            switch serverValue {
+            case "online":
+                self = .online
+            case "degraded":
+                self = .degraded
+            default:
+                self = .offline
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .online:
+                return "Online"
+            case .degraded:
+                return "Degraded"
+            case .offline:
+                return "Offline"
+            }
+        }
+    }
+
     let id: String
     let name: String
     let platform: String
     let lastSeenAt: Date
+    let receiverStatus: ReceiverStatus
 }
 
 enum SSEConnectionState: Equatable {
@@ -107,6 +136,24 @@ final class ConfigStore: ObservableObject {
         case .bluetooth:
             return bluetoothConnectionStatus == .connected
                 && bluetoothService.activeSession?.isHandshakeComplete == true
+        }
+    }
+
+    var selectedTargetDevice: DeviceInfo? {
+        guard let targetDeviceID else { return nil }
+        return availableDevices.first { $0.id == targetDeviceID }
+    }
+
+    var selectedTargetFallbackWarning: String? {
+        guard transferMode == .lanServer, let device = selectedTargetDevice else { return nil }
+
+        switch device.receiverStatus {
+        case .online:
+            return nil
+        case .degraded:
+            return "\(device.name) is reconnecting or stale. This send may fall back to the queue instead of auto-delivering."
+        case .offline:
+            return "\(device.name) is offline for targeted auto-delivery. This send will likely wait in the queue until they reconnect or receive it manually."
         }
     }
 
@@ -1602,7 +1649,14 @@ final class ConfigStore: ObservableObject {
                 if id == deviceID { continue }
                 let lastSeenAtStr = json["last_seen_at"] as? String ?? ""
                 let lastSeenAt = isoFormatter.date(from: lastSeenAtStr) ?? Date()
-                devices.append(DeviceInfo(id: id, name: name, platform: platform, lastSeenAt: lastSeenAt))
+                let receiverStatus = DeviceInfo.ReceiverStatus(serverValue: json["receiver_status"] as? String)
+                devices.append(DeviceInfo(
+                    id: id,
+                    name: name,
+                    platform: platform,
+                    lastSeenAt: lastSeenAt,
+                    receiverStatus: receiverStatus
+                ))
             }
             availableDevices = devices
         } catch {

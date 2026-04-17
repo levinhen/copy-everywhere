@@ -89,12 +89,43 @@ struct ConfigView: View {
                     ForEach(configStore.availableDevices) { device in
                         HStack {
                             Text(platformIcon(device.platform))
-                            Text("\(device.name)")
+                            Circle()
+                                .fill(receiverStatusColor(device.receiverStatus))
+                                .frame(width: 8, height: 8)
+                            Text(device.name)
+                            Spacer()
+                            Text(device.receiverStatus.label)
+                                .foregroundColor(receiverStatusColor(device.receiverStatus))
                         }
                         .tag(device.id)
                     }
                 }
                 .labelsHidden()
+
+                if let targetDevice = configStore.selectedTargetDevice {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(receiverStatusColor(targetDevice.receiverStatus))
+                            .frame(width: 8, height: 8)
+                        Text("\(targetDevice.name) is \(targetDevice.receiverStatus.label.lowercased()) for targeted auto-delivery.")
+                            .font(.caption)
+                            .foregroundColor(targetDevice.receiverStatus == .online ? .secondary : receiverStatusColor(targetDevice.receiverStatus))
+                    }
+                }
+
+                if let warning = configStore.selectedTargetFallbackWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
             }
             .onAppear {
                 Task { await configStore.fetchDevices() }
@@ -214,6 +245,17 @@ struct ConfigView: View {
             return "Reconnecting"
         case .disconnected:
             return "Disconnected"
+        }
+    }
+
+    private func receiverStatusColor(_ status: DeviceInfo.ReceiverStatus) -> Color {
+        switch status {
+        case .online:
+            return .green
+        case .degraded:
+            return .orange
+        case .offline:
+            return .gray
         }
     }
 

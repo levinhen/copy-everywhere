@@ -60,6 +60,21 @@ struct MainPanelView: View {
                     }
                 }
             } else {
+                if let warning = configStore.selectedTargetFallbackWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
                 // Clipboard preview section
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Clipboard")

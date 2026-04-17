@@ -10,7 +10,7 @@ US-070:  Server: confirm targeted delivery on successful raw consume     [x]
 US-071:  Server: fallback targeted clips back into recoverable queue     [x]
 US-072:  Server: add targeted delivery diagnostics and regression cover  [x]
 US-073A: macOS: surface self receiver status and SSE health              [x]
-US-073B: macOS: show target device receiver readiness in picker          [ ]
+US-073B: macOS: show target device receiver readiness in picker          [x]
 US-073C: macOS: targeted auto-receive failure visible and recoverable    [ ]
 US-074A: Windows: surface self receiver status and SSE health            [ ]
 US-074B: Windows: target device readiness and fallback messaging         [ ]
@@ -98,4 +98,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Drive macOS targeted auto-delivery readiness from the SSE task lifecycle itself, not from whether host/token/device config exists
   - Keep reconnect detail user-visible during backoff so “reconnecting” explains when the next retry will happen instead of looking stuck
   - `connectSSE()` should treat an ended byte stream as a dropped connection so the retry state updates immediately
+---
+## 2026-04-17 10:04:28 CST - US-073B
+- Implemented macOS target-device readiness indicators by parsing `receiver_status` from `GET /api/v1/devices`, showing online/degraded/offline state in the picker, and surfacing the selected target's receiver health inline
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`
+- Learnings for future iterations:
+  - The macOS target picker should bind directly to server `receiver_status` so sender readiness reflects live `/api/v1/devices` data instead of stale local heuristics
+  - Selected offline or degraded targets need a send-surface warning, not just a picker badge, because most sends happen from `MainPanelView`
+  - Keep queue-mode selection (`targetDeviceID == nil`) free of readiness warnings so queue send remains the neutral fallback path
 ---
