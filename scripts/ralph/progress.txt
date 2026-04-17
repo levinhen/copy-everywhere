@@ -12,7 +12,7 @@ US-072:  Server: add targeted delivery diagnostics and regression cover  [x]
 US-073A: macOS: surface self receiver status and SSE health              [x]
 US-073B: macOS: show target device receiver readiness in picker          [x]
 US-073C: macOS: targeted auto-receive failure visible and recoverable    [x]
-US-074A: Windows: surface self receiver status and SSE health            [ ]
+US-074A: Windows: surface self receiver status and SSE health            [x]
 US-074B: Windows: target device readiness and fallback messaging         [ ]
 US-074C: Windows: targeted auto-receive failure visible and recoverable  [ ]
 US-075A: Android: expose foreground receiver status                      [ ]
@@ -34,6 +34,7 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - macOS LAN receiver readiness UI should bind to `ConfigStore.sseConnectionState` plus `sseStatusDetail`, because those are driven by the live SSE loop and retry backoff rather than by saved config alone
 - macOS targeted queue and SSE auto-receive should build raw clip URLs through a shared helper that appends `?device_id=<self>` so targeted fallback recovery and targeted delivery acknowledgement use the same server path
 - Windows targeted auto-receive lives in `windows/CopyEverywhere/MainWindow.xaml.cs`
+- Windows LAN receiver readiness UI should be driven from `MainWindow`'s live SSE loop state and retry detail, not from saved host/device config alone
 - Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
 
 ---
@@ -117,4 +118,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Parse server `delivery_state` into the macOS queue model so targeted fallback clips can be labeled distinctly from ordinary queue items
   - Route macOS manual receive and SSE auto-receive through the same raw clip URL helper so targeted fallback uses the required `device_id` acknowledgement path
   - Auto-receive failures should trigger a queue refresh instead of failing silently, otherwise fallback clips remain recoverable on the server but invisible in the client
+---
+## 2026-04-17 09:52:21 CST - US-074A
+- Implemented live Windows receiver-status UI for LAN mode by tracking SSE health in `MainWindow`, distinguishing connected, reconnecting, and disconnected states, and surfacing retry/backoff detail in both the config area and LAN queue panel
+- Files changed: `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `dotnet --version` failed (`dotnet: command not found`); `dotnet build` could not run on this machine because the .NET SDK is unavailable
+- Learnings for future iterations:
+  - Keep Windows SSE receiver readiness tied to the actual stream loop lifecycle so reconnecting state can show retry timing instead of inferring readiness from saved config
+  - Treat an ended SSE stream as a dropped connection and transition back to reconnecting immediately so the UI does not look falsely connected
+  - Mirror the same LAN receiver status in both config and queue surfaces because targeted auto-delivery trust depends on visibility before and after registration
 ---

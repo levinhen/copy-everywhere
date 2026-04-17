@@ -16,6 +16,13 @@ namespace CopyEverywhere;
 
 public partial class MainWindow : Window
 {
+    private enum SseConnectionState
+    {
+        Disconnected,
+        Reconnecting,
+        Connected
+    }
+
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
     private readonly MdnsDiscoveryService _mdnsService;
@@ -58,6 +65,8 @@ public partial class MainWindow : Window
     // SSE state
     private CancellationTokenSource? _sseCts;
     private System.Threading.Tasks.Task? _sseTask;
+    private SseConnectionState _sseConnectionState = SseConnectionState.Disconnected;
+    private string _sseStatusDetail = "Auto-receive is idle until this device registers with the server.";
 
     // Bluetooth scan state
     private bool _isScanning;
@@ -90,6 +99,7 @@ public partial class MainWindow : Window
         UpdateMainPanelState();
         UpdateDeviceInfoDisplay();
         UpdateAccessTokenVisibility();
+        UpdateReceiverStatusUI();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         InitializeTransferModeUI();
@@ -154,6 +164,8 @@ public partial class MainWindow : Window
         {
             DeviceInfoPanel.Visibility = Visibility.Collapsed;
         }
+
+        UpdateReceiverStatusUI();
     }
 
     private void FloatingBallCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -1097,6 +1109,9 @@ public partial class MainWindow : Window
         if (!_configStore.IsConfigured || string.IsNullOrEmpty(_configStore.DeviceId)) return;
 
         _sseCts = new CancellationTokenSource();
+        SetSseConnectionState(
+            SseConnectionState.Reconnecting,
+            "Connecting receiver channel for targeted auto-delivery...");
         _sseTask = SSELoopAsync(_sseCts.Token);
     }
 
@@ -1104,6 +1119,7 @@ public partial class MainWindow : Window
     {
         _sseCts?.Cancel();
         _sseTask = null;
+        SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
     }
 
     private async System.Threading.Tasks.Task SSELoopAsync(CancellationToken ct)
@@ -1132,13 +1148,19 @@ public partial class MainWindow : Window
                 using var reader = new StreamReader(stream);
 
                 backoff = TimeSpan.FromSeconds(1); // Reset on successful connection
+                SetSseConnectionState(
+                    SseConnectionState.Connected,
+                    "Receiver channel connected. This device is ready for targeted auto-delivery.");
                 var eventType = "";
                 var eventData = "";
 
                 while (!ct.IsCancellationRequested)
                 {
                     var line = await reader.ReadLineAsync();
-                    if (line == null) break; // Connection closed
+                    if (line == null)
+                    {
+                        throw new IOException("Receiver channel closed unexpectedly.");
+                    }
 
                     if (line.StartsWith("event:"))
                     {
@@ -1163,15 +1185,28 @@ public partial class MainWindow : Window
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                // Reconnect with exponential backoff
+                if (ct.IsCancellationRequested) break;
+
+                var retryDelay = backoff;
+                var reason = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "connection dropped"
+                    : ex.Message;
+                SetSseConnectionState(
+                    SseConnectionState.Reconnecting,
+                    $"Receiver channel offline: {reason} Retrying in {FormatRetryDelay(retryDelay)}.");
             }
 
             if (ct.IsCancellationRequested) break;
 
             await System.Threading.Tasks.Task.Delay(backoff, ct).ContinueWith(_ => { });
             backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, maxBackoff.TotalSeconds));
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
         }
     }
 
@@ -2123,6 +2158,7 @@ public partial class MainWindow : Window
     {
         var isBtMode = _configStore.TransferMode == TransferMode.Bluetooth;
         var showPanel = isBtMode || _configStore.IsConfigured;
+        UpdateReceiverStatusUI();
 
         if (showPanel)
         {
@@ -2152,6 +2188,115 @@ public partial class MainWindow : Window
             StopQueuePolling();
             StopSSE();
         }
+    }
+
+    private void SetSseConnectionState(SseConnectionState state, string detail)
+    {
+        void Apply()
+        {
+            _sseConnectionState = state;
+            _sseStatusDetail = detail;
+            UpdateReceiverStatusUI();
+        }
+
+        if (Dispatcher.CheckAccess())
+        {
+            Apply();
+        }
+        else
+        {
+            Dispatcher.Invoke(Apply);
+        }
+    }
+
+    private void UpdateReceiverStatusUI()
+    {
+        var effectiveState = _sseConnectionState;
+        var detail = _sseStatusDetail;
+
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            effectiveState = SseConnectionState.Disconnected;
+            detail = "LAN receiver is inactive while Bluetooth Direct mode is selected.";
+        }
+        else if (!_configStore.IsConfigured)
+        {
+            effectiveState = SseConnectionState.Disconnected;
+            detail = "Save a server URL to bring the receiver channel online.";
+        }
+        else if (string.IsNullOrEmpty(_configStore.DeviceId))
+        {
+            effectiveState = SseConnectionState.Disconnected;
+            detail = "This device is not registered yet. Save settings to register and enable auto-receive.";
+        }
+
+        SolidColorBrush dotBrush;
+        SolidColorBrush textBrush;
+        SolidColorBrush backgroundBrush;
+        string title;
+
+        switch (effectiveState)
+        {
+            case SseConnectionState.Connected:
+                dotBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+                textBrush = new SolidColorBrush(Color.FromRgb(21, 128, 61));
+                backgroundBrush = new SolidColorBrush(Color.FromRgb(220, 252, 231));
+                title = "Connected";
+                break;
+            case SseConnectionState.Reconnecting:
+                dotBrush = new SolidColorBrush(Color.FromRgb(234, 179, 8));
+                textBrush = new SolidColorBrush(Color.FromRgb(161, 98, 7));
+                backgroundBrush = new SolidColorBrush(Color.FromRgb(254, 249, 195));
+                title = "Reconnecting";
+                break;
+            default:
+                dotBrush = Brushes.Gray;
+                textBrush = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+                backgroundBrush = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+                title = "Disconnected";
+                break;
+        }
+
+        ReceiverStatusBorder.Background = backgroundBrush;
+        ReceiverStatusIcon.Foreground = dotBrush;
+        ReceiverStatusText.Text = $"Receiver Status: {title}";
+        ReceiverStatusText.Foreground = textBrush;
+        ReceiverStatusDetailText.Text = detail;
+        ReceiverStatusDetailText.Foreground = textBrush;
+
+        LanReceiverStatusBorder.Background = backgroundBrush;
+        LanReceiverStatusDot.Fill = dotBrush;
+        LanReceiverStatusLabel.Text = title;
+        LanReceiverStatusLabel.Foreground = textBrush;
+        LanReceiverStatusDetailText.Text = detail;
+        LanReceiverStatusDetailText.Foreground = textBrush;
+    }
+
+    private string CurrentDisconnectedSseDetail()
+    {
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            return "LAN receiver is inactive while Bluetooth Direct mode is selected.";
+        }
+
+        if (!_configStore.IsConfigured)
+        {
+            return "Save a server URL to bring the receiver channel online.";
+        }
+
+        if (string.IsNullOrEmpty(_configStore.DeviceId))
+        {
+            return "This device is not registered yet. Save settings to register and enable auto-receive.";
+        }
+
+        return "Receiver channel disconnected.";
+    }
+
+    private static string FormatRetryDelay(TimeSpan delay)
+    {
+        return delay.TotalSeconds >= 60
+            ? $"{delay.TotalMinutes:F0}m"
+            : $"{delay.TotalSeconds:F0}s";
     }
 
     // Refresh clipboard preview and queue when window is activated

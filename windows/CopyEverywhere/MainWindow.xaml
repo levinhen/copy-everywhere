@@ -143,6 +143,34 @@
                 </Border>
             </StackPanel>
 
+            <Border x:Name="ReceiverStatusBorder"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Margin="0,0,0,12"
+                    Background="#F3F4F6">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                        <TextBlock x:Name="ReceiverStatusIcon"
+                                   Text="&#x25CF;"
+                                   FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Foreground="Gray"
+                                   Margin="0,0,6,0"/>
+                        <TextBlock x:Name="ReceiverStatusText"
+                                   Text="Receiver Status: Disconnected"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   Foreground="#4B5563"/>
+                    </StackPanel>
+                    <TextBlock x:Name="ReceiverStatusDetailText"
+                               Text="Save a server URL to bring the receiver channel online."
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               Foreground="#4B5563"/>
+                </StackPanel>
+            </Border>
+
             <!-- Target Device Selector -->
             <TextBlock Text="Target Device" Style="{StaticResource FieldLabel}"/>
             <ComboBox x:Name="TargetDeviceComboBox"
@@ -405,6 +433,35 @@
                 <!-- Server Queue Section (LAN mode) -->
                 <StackPanel x:Name="LanQueueSection">
                     <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
+
+                    <Border x:Name="LanReceiverStatusBorder"
+                            Background="#F3F4F6"
+                            CornerRadius="4"
+                            Padding="8"
+                            Margin="0,0,0,8">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Ellipse x:Name="LanReceiverStatusDot"
+                                         Width="8"
+                                         Height="8"
+                                         Fill="Gray"
+                                         Margin="0,0,6,0"
+                                         VerticalAlignment="Center"/>
+                                <TextBlock x:Name="LanReceiverStatusLabel"
+                                           Text="Disconnected"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"
+                                           Foreground="#4B5563"/>
+                            </StackPanel>
+                            <TextBlock x:Name="LanReceiverStatusDetailText"
+                                       Text="Save a server URL to bring the receiver channel online."
+                                       FontSize="11"
+                                       Foreground="#4B5563"
+                                       Margin="14,4,0,0"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Border>
 
                     <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
                         <StackPanel x:Name="QueueListPanel">
