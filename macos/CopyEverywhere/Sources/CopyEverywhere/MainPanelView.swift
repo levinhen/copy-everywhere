@@ -75,6 +75,21 @@ struct MainPanelView: View {
                     .cornerRadius(8)
                 }
 
+                if let warning = configStore.autoReceiveWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .foregroundColor(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
                 // Clipboard preview section
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Clipboard")
@@ -588,6 +603,17 @@ struct MainPanelView: View {
                     .fontWeight(.medium)
                     .lineLimit(1)
                     .truncationMode(.middle)
+
+                if let badgeLabel = item.deliveryState.badgeLabel {
+                    Text(badgeLabel)
+                        .font(.caption2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.14))
+                        .cornerRadius(999)
+                }
 
                 HStack(spacing: 4) {
                     Text(configStore.formatBytes(item.sizeBytes))

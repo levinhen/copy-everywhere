@@ -52,12 +52,36 @@ enum SSEConnectionState: Equatable {
 }
 
 struct QueueItem: Identifiable, Equatable {
+    enum DeliveryState: Equatable {
+        case queue
+        case targetedFallback
+
+        init(serverValue: String?) {
+            switch serverValue {
+            case "targeted_fallback":
+                self = .targetedFallback
+            default:
+                self = .queue
+            }
+        }
+
+        var badgeLabel: String? {
+            switch self {
+            case .queue:
+                return nil
+            case .targetedFallback:
+                return "Fallback"
+            }
+        }
+    }
+
     let id: String
     let type: String
     let filename: String?
     let sizeBytes: Int64
     let createdAt: Date
     let expiresAt: Date
+    let deliveryState: DeliveryState
 
     var typeIcon: String {
         switch type {
@@ -110,6 +134,7 @@ final class ConfigStore: ObservableObject {
     @Published var toastMessage: String? = nil
     @Published var queueItems: [QueueItem] = []
     @Published var queueError: String? = nil
+    @Published var autoReceiveWarning: String? = nil
     @Published var availableDevices: [DeviceInfo] = []
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
@@ -1502,10 +1527,12 @@ final class ConfigStore: ObservableObject {
                     let filename = json["filename"] as? String
                     let createdAt = isoFormatter.date(from: createdAtStr) ?? Date()
                     let expiresAt = isoFormatter.date(from: expiresAtStr) ?? Date()
+                    let deliveryState = QueueItem.DeliveryState(serverValue: json["delivery_state"] as? String)
 
                     items.append(QueueItem(
                         id: id, type: type, filename: filename,
-                        sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt
+                        sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt,
+                        deliveryState: deliveryState
                     ))
                 }
                 queueItems = items
@@ -1524,7 +1551,7 @@ final class ConfigStore: ObservableObject {
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
-        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(item.id)/raw") else { return }
+        guard let rawURL = rawClipURL(for: item.id, baseURLString: urlString) else { return }
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
@@ -1613,6 +1640,34 @@ final class ConfigStore: ObservableObject {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             toastMessage = nil
+        }
+    }
+
+    private func rawClipURL(for clipID: String, baseURLString: String? = nil) -> URL? {
+        let trimmedBaseURL = (baseURLString ?? hostURL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard var components = URLComponents(string: "\(trimmedBaseURL)/api/v1/clips/\(clipID)/raw") else {
+            return nil
+        }
+
+        if !deviceID.isEmpty {
+            components.queryItems = [URLQueryItem(name: "device_id", value: deviceID)]
+        }
+
+        return components.url
+    }
+
+    private func showAutoReceiveWarning(_ message: String) {
+        autoReceiveWarning = message
+        dismissAutoReceiveWarningAfterDelay()
+    }
+
+    private func dismissAutoReceiveWarningAfterDelay() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            autoReceiveWarning = nil
         }
     }
 
@@ -1770,7 +1825,7 @@ final class ConfigStore: ObservableObject {
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
-        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(clipID)/raw") else { return }
+        guard let rawURL = rawClipURL(for: clipID, baseURLString: urlString) else { return }
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
@@ -1780,19 +1835,29 @@ final class ConfigStore: ObservableObject {
         do {
             if clipType == "text" {
                 let (responseData, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                guard httpResponse.statusCode == 200 else {
+                    await handleAutoReceiveFailure(statusCode: httpResponse.statusCode, clipID: clipID)
+                    return
+                }
                 if let text = String(data: responseData, encoding: .utf8) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
+                    autoReceiveWarning = nil
                     toastMessage = "Received text from sender"
                     dismissToastAfterDelay()
                     AppDelegate.sendNotification(body: "Received text from sender")
                 }
             } else if clipType == "image" {
                 let (responseData, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                guard httpResponse.statusCode == 200 else {
+                    await handleAutoReceiveFailure(statusCode: httpResponse.statusCode, clipID: clipID)
+                    return
+                }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setData(responseData, forType: .png)
+                autoReceiveWarning = nil
                 toastMessage = "Received image from sender"
                 dismissToastAfterDelay()
                 AppDelegate.sendNotification(body: "Received image from sender")
@@ -1804,7 +1869,11 @@ final class ConfigStore: ObservableObject {
                 let (tempURL, response) = try await session.download(for: request)
                 session.invalidateAndCancel()
 
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                guard httpResponse.statusCode == 200 else {
+                    await handleAutoReceiveFailure(statusCode: httpResponse.statusCode, clipID: clipID)
+                    return
+                }
 
                 let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent("Downloads")
@@ -1825,6 +1894,7 @@ final class ConfigStore: ObservableObject {
                 }
 
                 try fm.moveItem(at: tempURL, to: destURL)
+                autoReceiveWarning = nil
                 toastMessage = "Saved \(destURL.lastPathComponent) to Downloads"
                 dismissToastAfterDelay()
                 AppDelegate.sendNotification(body: "Saved \(destURL.lastPathComponent) to Downloads")
@@ -1834,8 +1904,19 @@ final class ConfigStore: ObservableObject {
             // Remove from local queue if present
             queueItems.removeAll { $0.id == clipID }
         } catch {
-            // Auto-receive failed silently — the item remains in the queue for manual receive
+            showAutoReceiveWarning("Targeted auto-delivery failed. The clip remains available in Queue for manual receive.")
+            await fetchQueue()
         }
+    }
+
+    private func handleAutoReceiveFailure(statusCode: Int, clipID: String) async {
+        if statusCode == 410 {
+            queueItems.removeAll { $0.id == clipID }
+            return
+        }
+
+        showAutoReceiveWarning("Targeted auto-delivery failed. The clip remains available in Queue for manual receive.")
+        await fetchQueue()
     }
 
     func formatBytes(_ bytes: Int64) -> String {
