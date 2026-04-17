@@ -16,6 +16,12 @@ struct DeviceInfo: Identifiable, Equatable, Hashable {
     let lastSeenAt: Date
 }
 
+enum SSEConnectionState: Equatable {
+    case disconnected
+    case reconnecting
+    case connected
+}
+
 struct QueueItem: Identifiable, Equatable {
     let id: String
     let type: String
@@ -78,6 +84,8 @@ final class ConfigStore: ObservableObject {
     @Published var availableDevices: [DeviceInfo] = []
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
+    @Published var sseConnectionState: SSEConnectionState = .disconnected
+    @Published var sseStatusDetail: String = "Configure a LAN server to enable targeted auto-delivery."
 
     // Bluetooth state
     @Published var transferMode: TransferMode = .lanServer
@@ -323,6 +331,10 @@ final class ConfigStore: ObservableObject {
         UserDefaults.standard.set(hostURL, forKey: hostKey)
         UserDefaults.standard.set(accessToken, forKey: tokenKey)
         isConfigured = !hostURL.isEmpty
+        if !isConfigured {
+            sseConnectionState = .disconnected
+            sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
+        }
         if isConfigured {
             Task {
                 await registerDevice()
@@ -365,18 +377,24 @@ final class ConfigStore: ObservableObject {
     }
 
     func clearConfig() {
+        stopSSE()
         UserDefaults.standard.removeObject(forKey: hostKey)
         UserDefaults.standard.removeObject(forKey: tokenKey)
         hostURL = ""
         accessToken = ""
         isConfigured = false
         connectionStatus = .idle
+        sseConnectionState = .disconnected
+        sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
     }
 
     private func loadPersistedConfig() {
         hostURL = UserDefaults.standard.string(forKey: hostKey) ?? ""
         accessToken = UserDefaults.standard.string(forKey: tokenKey) ?? ""
         isConfigured = !hostURL.isEmpty
+        if isConfigured {
+            sseStatusDetail = "Waiting to connect targeted auto-delivery."
+        }
     }
 
     private func setAuthHeader(_ request: inout URLRequest) {
@@ -1599,23 +1617,39 @@ final class ConfigStore: ObservableObject {
         // Don't start a second connection
         guard sseTask == nil else { return }
         sseRetryDelay = 1.0
+        sseConnectionState = .reconnecting
+        sseStatusDetail = "Connecting targeted auto-delivery…"
         sseTask = Task { await sseLoop() }
     }
 
     func stopSSE() {
         sseTask?.cancel()
         sseTask = nil
+        sseConnectionState = .disconnected
+        if transferMode != .lanServer {
+            sseStatusDetail = "LAN receiver paused while Bluetooth Direct is active."
+        } else if isConfigured {
+            sseStatusDetail = "Targeted auto-delivery disconnected."
+        } else {
+            sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
+        }
     }
 
     private func sseLoop() async {
         while !Task.isCancelled {
             do {
                 try await connectSSE()
+                if Task.isCancelled { return }
+                sseConnectionState = .reconnecting
+                sseStatusDetail = "Connection lost. Reconnecting targeted auto-delivery…"
             } catch is CancellationError {
                 return
             } catch {
                 // Reconnect with exponential backoff
                 if Task.isCancelled { return }
+                sseConnectionState = .reconnecting
+                let retrySeconds = Int(max(1, sseRetryDelay.rounded()))
+                sseStatusDetail = "Reconnect in \(retrySeconds)s after \(error.localizedDescription)."
                 try? await Task.sleep(nanoseconds: UInt64(sseRetryDelay * 1_000_000_000))
                 if Task.isCancelled { return }
                 sseRetryDelay = min(sseRetryDelay * 2, sseMaxRetryDelay)
@@ -1643,6 +1677,8 @@ final class ConfigStore: ObservableObject {
 
         // Connected successfully — reset backoff
         sseRetryDelay = 1.0
+        sseConnectionState = .connected
+        sseStatusDetail = "Connected for targeted auto-delivery."
 
         var eventType = ""
         var dataBuffer = ""
@@ -1664,6 +1700,8 @@ final class ConfigStore: ObservableObject {
             }
             // Ignore id:, comments (:), etc.
         }
+
+        throw URLError(.networkConnectionLost)
     }
 
     private func handleSSEClipEvent(_ jsonString: String) async {

@@ -9,7 +9,7 @@ US-069B: Server: expose receiver connectivity on devices list            [x]
 US-070:  Server: confirm targeted delivery on successful raw consume     [x]
 US-071:  Server: fallback targeted clips back into recoverable queue     [x]
 US-072:  Server: add targeted delivery diagnostics and regression cover  [x]
-US-073A: macOS: surface self receiver status and SSE health              [ ]
+US-073A: macOS: surface self receiver status and SSE health              [x]
 US-073B: macOS: show target device receiver readiness in picker          [ ]
 US-073C: macOS: targeted auto-receive failure visible and recoverable    [ ]
 US-074A: Windows: surface self receiver status and SSE health            [ ]
@@ -31,6 +31,7 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - Targeted `GET /api/v1/clips/:id/raw` now requires `?device_id=<target>` and is the authoritative delivery acknowledgement path; only that addressed-device consume should transition a clip to `targeted_delivered`
 - Consumed clip rows should remain in SQLite until cleanup runs so duplicate raw consumes keep returning `410 Gone` and targeted delivery state stays inspectable after the first successful read
 - macOS targeted auto-receive lives in `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`
+- macOS LAN receiver readiness UI should bind to `ConfigStore.sseConnectionState` plus `sseStatusDetail`, because those are driven by the live SSE loop and retry backoff rather than by saved config alone
 - Windows targeted auto-receive lives in `windows/CopyEverywhere/MainWindow.xaml.cs`
 - Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
 
@@ -88,4 +89,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Reconnect replay should only include still-unconsumed `targeted_pending` clips; fallback and delivered clips must stay out of SSE replay
   - Targeted lifecycle logs are most useful when they include clip ID, target device, and the transition point so server-side delivery traces can be reconstructed from logs alone
   - Reconnect regression tests should use `httptest.NewServer` and real stream disconnect/reconnect cycles, because recorder-based tests do not exercise SSE replay paths
+---
+## 2026-04-17 09:43:35 CST - US-073A
+- Implemented live macOS LAN receiver health state in `ConfigStore` and surfaced it in the configuration UI as connected, reconnecting, or disconnected with retry/backoff detail from the real SSE loop
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`
+- Learnings for future iterations:
+  - Drive macOS targeted auto-delivery readiness from the SSE task lifecycle itself, not from whether host/token/device config exists
+  - Keep reconnect detail user-visible during backoff so “reconnecting” explains when the next retry will happen instead of looking stuck
+  - `connectSSE()` should treat an ended byte stream as a dropped connection so the retry state updates immediately
 ---

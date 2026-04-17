@@ -43,6 +43,8 @@ struct ConfigView: View {
                 .textFieldStyle(.roundedBorder)
         }
 
+        receiverStatusSection
+
         // Only show token field when auth is required or unknown
         if configStore.serverAuthRequired != false {
             VStack(alignment: .leading, spacing: 8) {
@@ -119,6 +121,33 @@ struct ConfigView: View {
         connectionStatusView
     }
 
+    @ViewBuilder
+    private var receiverStatusSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("This Device Receiver")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(receiverStatusColor)
+                    .frame(width: 8, height: 8)
+                Text(receiverStatusTitle)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Spacer()
+            }
+
+            Text(configStore.sseStatusDetail)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(receiverStatusColor.opacity(0.1))
+        .cornerRadius(8)
+    }
+
     // MARK: - Bluetooth Section
 
     @ViewBuilder
@@ -163,6 +192,28 @@ struct ConfigView: View {
                     .lineLimit(2)
                     .font(.caption)
             }
+        }
+    }
+
+    private var receiverStatusColor: Color {
+        switch configStore.sseConnectionState {
+        case .connected:
+            return .green
+        case .reconnecting:
+            return .orange
+        case .disconnected:
+            return .gray
+        }
+    }
+
+    private var receiverStatusTitle: String {
+        switch configStore.sseConnectionState {
+        case .connected:
+            return "Connected"
+        case .reconnecting:
+            return "Reconnecting"
+        case .disconnected:
+            return "Disconnected"
         }
     }
 
