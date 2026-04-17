@@ -39,6 +39,7 @@ data class Device(
     @SerializedName("device_id") val deviceId: String,
     val name: String,
     val platform: String,
+    @SerializedName("receiver_status") val receiverStatus: String? = null,
     @SerializedName("last_seen_at") val lastSeenAt: String? = null,
     @SerializedName("created_at") val createdAt: String? = null
 )

@@ -4,7 +4,7 @@ Started: 2026-04-17
 ## Current Iteration
 Targeted Auto-Delivery Reliability
 
-US-069A: Server: track targeted delivery lifecycle state                 [ ]
+US-069A: Server: track targeted delivery lifecycle state                 [x]
 US-069B: Server: expose receiver connectivity on devices list            [x]
 US-070:  Server: confirm targeted delivery on successful raw consume     [x]
 US-071:  Server: fallback targeted clips back into recoverable queue     [x]
@@ -17,7 +17,7 @@ US-074B: Windows: target device readiness and fallback messaging         [x]
 US-074C: Windows: targeted auto-receive failure visible and recoverable  [x]
 US-075A: Android: expose foreground receiver status                      [x]
 US-075B: Android: preserve queue fallback on targeted failure            [x]
-US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
+US-076:  Shared UX: label queue mode vs targeted auto-delivery           [x]
 
 ## Codebase Patterns
 - Active Ralph run files live under `scripts/ralph/`; `ralph.sh` reads `scripts/ralph/prd.json` and `scripts/ralph/progress.txt`
@@ -40,6 +40,7 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
 - Android LAN receiver readiness should bind to the shared `CopyEverywhereService.receiverHealth` state so the foreground notification, main screen, and config screen all reflect the same live SSE connection and retry status
 - Android targeted raw consumes must pass `device_id=<self>` from both SSE auto-receive and manual queue recovery, otherwise targeted delivery acknowledgement fails and fallback clips cannot be recovered through the authoritative server path
+- Cross-platform delivery UX should use the same three user-facing states: `Queue mode`, `Targeted auto-delivery` (waiting on the target), and `Queue fallback` for `targeted_fallback` recovery items
 
 ---
 
@@ -167,4 +168,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Keep Android fallback messaging in `CopyEverywhereService` so background SSE failures can update both the transfer notification and the foreground Compose UI through one shared `StateFlow`
   - Parse server `delivery_state` into the queue model and label `targeted_fallback` rows directly in the list instead of trying to infer fallback from target-device fields
   - Clear the shared fallback notice once the user manually recovers or dismisses the queued item so old targeted-failure warnings do not linger after recovery
+---
+## 2026-04-17 10:15:12 CST - US-076
+- Implemented shared cross-platform delivery wording so macOS, Windows, and Android now label queue mode versus targeted auto-delivery explicitly, surface clearer post-send status, and badge `targeted_fallback` queue items as queue recovery
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift`, `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`; `git diff --check` passed; `dotnet build` could not run because `dotnet` is unavailable on this machine; `./gradlew assembleDebug` could not run because no Java runtime is installed; browser verification requested by the story could not be performed because no `dev-browser` skill/tool is configured in this session
+- Learnings for future iterations:
+  - Keep delivery copy aligned across macOS, Windows, and Android so queue-mode sends, targeted waiting state, and queue fallback recovery read as the same feature on every client
+  - When exposing Android target selection UX, parse server `receiver_status` into the shared `Device` model instead of inventing platform-local readiness heuristics
+  - Treat `targeted_fallback` rows as recovery affordances in queue UIs by pairing an explicit badge with a short “click/tap to recover” message
 ---

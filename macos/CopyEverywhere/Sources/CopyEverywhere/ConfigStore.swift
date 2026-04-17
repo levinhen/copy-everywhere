@@ -70,7 +70,7 @@ struct QueueItem: Identifiable, Equatable {
             case .queue:
                 return nil
             case .targetedFallback:
-                return "Fallback"
+                return "Queue fallback"
             }
         }
     }
@@ -179,6 +179,49 @@ final class ConfigStore: ObservableObject {
             return "\(device.name) is reconnecting or stale. This send may fall back to the queue instead of auto-delivering."
         case .offline:
             return "\(device.name) is offline for targeted auto-delivery. This send will likely wait in the queue until they reconnect or receive it manually."
+        }
+    }
+
+    var lanDeliveryModeTitle: String {
+        guard transferMode == .lanServer else { return "Bluetooth direct" }
+        return selectedTargetDevice == nil ? "Queue mode" : "Targeted auto-delivery"
+    }
+
+    var lanDeliveryModeDetail: String {
+        guard transferMode == .lanServer else {
+            return "Bluetooth sends transfer directly to the connected device."
+        }
+
+        guard let device = selectedTargetDevice else {
+            return "Sends stay in queue mode and remain available for manual receive on any registered device."
+        }
+
+        switch device.receiverStatus {
+        case .online:
+            return "\(device.name) is online. The clip will wait for that device to auto-receive it first."
+        case .degraded:
+            return "\(device.name) looks degraded. Automatic delivery may miss and then fall back to the queue."
+        case .offline:
+            return "\(device.name) is offline. Automatic delivery will likely miss and then fall back to the queue."
+        }
+    }
+
+    var sendSuccessDetail: String {
+        guard transferMode == .lanServer else {
+            return "Bluetooth direct transfer completed to the connected device."
+        }
+
+        guard let device = selectedTargetDevice else {
+            return "Queue mode: the clip is available for manual receive on any device."
+        }
+
+        switch device.receiverStatus {
+        case .online:
+            return "Targeted auto-delivery is waiting for \(device.name) to auto-receive the clip."
+        case .degraded:
+            return "Targeted auto-delivery notified \(device.name), but the clip may fall back to the queue."
+        case .offline:
+            return "Targeted auto-delivery targeted \(device.name), but the clip will likely fall back to the queue."
         }
     }
 

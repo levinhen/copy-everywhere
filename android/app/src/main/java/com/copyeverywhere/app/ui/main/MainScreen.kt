@@ -65,6 +65,7 @@ fun MainScreen(
     val uploadProgress by viewModel.uploadProgress.collectAsState()
     val receiveStatus by viewModel.receiveStatus.collectAsState()
     val transferMode by viewModel.transferMode.collectAsState()
+    val targetDeviceId by viewModel.targetDeviceId.collectAsState()
     val btReceiveProgress by viewModel.btReceiveProgress.collectAsState()
     val btReceiveFilename by viewModel.btReceiveFilename.collectAsState()
     val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
@@ -108,6 +109,10 @@ fun MainScreen(
             item {
                 Text("Send Text", style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
+                if (transferMode == TransferMode.LanServer) {
+                    DeliveryModeSummaryCard(targetDeviceId = targetDeviceId)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
                 OutlinedTextField(
                     value = textInput,
                     onValueChange = { viewModel.updateTextInput(it) },
@@ -151,7 +156,17 @@ fun MainScreen(
                         }
                     }
                     is SendStatus.Success -> {
-                        Text("Sent!", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (transferMode == TransferMode.Bluetooth) {
+                                "Bluetooth direct transfer complete."
+                            } else if (targetDeviceId.isBlank()) {
+                                "Queue mode: ready for manual receive."
+                            } else {
+                                "Targeted auto-delivery: waiting for the target device to auto-receive."
+                            },
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                     is SendStatus.Error -> {
                         Text(status.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -190,13 +205,13 @@ fun MainScreen(
 
                 item {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("Queue", style = MaterialTheme.typography.titleMedium)
+                    Text("Queue Mode & Recovery", style = MaterialTheme.typography.titleMedium)
                 }
 
                 if (queue.isEmpty()) {
                     item {
                         Text(
-                            "No pending clips",
+                            "Queue mode is empty",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -317,7 +332,7 @@ private fun TargetedFallbackNoticeCard(
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                "Targeted auto-receive needs manual recovery",
+                "Targeted auto-delivery fell back to queue",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.error
             )
@@ -331,6 +346,28 @@ private fun TargetedFallbackNoticeCard(
             OutlinedButton(onClick = onDismiss) {
                 Text("Dismiss")
             }
+        }
+    }
+}
+
+@Composable
+private fun DeliveryModeSummaryCard(targetDeviceId: String) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                if (targetDeviceId.isBlank()) "Queue mode" else "Targeted auto-delivery",
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                if (targetDeviceId.isBlank()) {
+                    "Sends stay available for manual receive on any device."
+                } else {
+                    "Sends notify the selected device first. If automatic delivery misses, the clip falls back to queue recovery."
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -404,7 +441,7 @@ private fun QueueItemCard(
                         shape = MaterialTheme.shapes.small
                     ) {
                         Text(
-                            "Targeted fallback",
+                            "Queue fallback",
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.labelSmall
                         )

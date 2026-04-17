@@ -114,7 +114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _textInput.value = ""
                 _sendStatus.value = SendStatus.Success
-                Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(getApplication(), successToastMessage(isFile = false), Toast.LENGTH_SHORT).show()
                 delay(2000)
                 _sendStatus.value = SendStatus.Idle
             } catch (e: Exception) {
@@ -175,7 +175,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uploadProgress.value = null
             _sendStatus.value = SendStatus.Success
-            Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Bluetooth direct file sent", Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
@@ -197,7 +197,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val target = targetDeviceId.value
             apiClient.sendFileClip(host, token, contentResolver, uri, sender, target)
             _sendStatus.value = SendStatus.Success
-            Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), successToastMessage(isFile = true), Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
@@ -241,7 +241,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     chunkedUploadState = null
                     chunkedUploadUri = null
                     _sendStatus.value = SendStatus.Success
-                    Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(getApplication(), successToastMessage(isFile = true), Toast.LENGTH_SHORT).show()
                     delay(2000)
                     _sendStatus.value = SendStatus.Idle
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -295,7 +295,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chunkedUploadState = null
                         chunkedUploadUri = null
                         _sendStatus.value = SendStatus.Success
-                        Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(getApplication(), successToastMessage(isFile = true), Toast.LENGTH_SHORT).show()
                         delay(2000)
                         _sendStatus.value = SendStatus.Idle
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -417,6 +417,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissTargetedFallbackNotice() {
         CopyEverywhereService.targetedFallbackNotice.value = null
+    }
+
+    private fun successToastMessage(isFile: Boolean): String {
+        return when {
+            transferMode.value == TransferMode.Bluetooth ->
+                if (isFile) "Bluetooth direct file sent" else "Bluetooth direct send complete"
+            targetDeviceId.value.isBlank() ->
+                if (isFile) "Queue mode file ready" else "Queue mode send ready"
+            else ->
+                if (isFile) "Targeted auto-delivery file sent" else "Targeted auto-delivery send ready"
+        }
     }
 
     private fun saveToDownloads(filename: String, mimeType: String, bytes: ByteArray) {

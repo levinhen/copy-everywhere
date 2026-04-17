@@ -90,6 +90,21 @@ struct MainPanelView: View {
                     .cornerRadius(8)
                 }
 
+                if configStore.transferMode == .lanServer {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(configStore.lanDeliveryModeTitle)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Text(configStore.lanDeliveryModeDetail)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(Color.accentColor.opacity(0.08))
+                    .cornerRadius(8)
+                }
+
                 // Clipboard preview section
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Clipboard")
@@ -145,9 +160,12 @@ struct MainPanelView: View {
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
-                                Text("Sent successfully!")
+                                Text(configStore.transferMode == .lanServer ? "Delivery request sent" : "Bluetooth transfer sent")
                                     .foregroundColor(.green)
                             }
+                            Text(configStore.sendSuccessDetail)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                             HStack {
                                 Text("Clip ID:")
                                     .foregroundColor(.secondary)
@@ -315,9 +333,12 @@ struct MainPanelView: View {
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
-                                Text("File sent!")
+                                Text(configStore.transferMode == .lanServer ? "File delivery request sent" : "Bluetooth file sent")
                                     .foregroundColor(.green)
                             }
+                            Text(configStore.sendSuccessDetail)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                             Group {
                                 HStack {
                                     Text("Clip ID:")
@@ -435,7 +456,7 @@ struct MainPanelView: View {
                     // Server queue section
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Queue")
+                            Text("Queue Mode & Recovery")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                             Spacer()
@@ -616,10 +637,11 @@ struct MainPanelView: View {
                 }
 
                 HStack(spacing: 4) {
-                    Text(configStore.formatBytes(item.sizeBytes))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text(item.age)
+                    Text(
+                        item.deliveryState == .targetedFallback
+                            ? "Automatic delivery missed; click Receive to recover"
+                            : "\(configStore.formatBytes(item.sizeBytes)) • \(item.age)"
+                    )
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

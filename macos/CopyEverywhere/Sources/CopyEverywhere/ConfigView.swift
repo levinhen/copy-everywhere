@@ -107,10 +107,14 @@ struct ConfigView: View {
                         Circle()
                             .fill(receiverStatusColor(targetDevice.receiverStatus))
                             .frame(width: 8, height: 8)
-                        Text("\(targetDevice.name) is \(targetDevice.receiverStatus.label.lowercased()) for targeted auto-delivery.")
+                        Text("Targeted auto-delivery to \(targetDevice.name) is \(targetDevice.receiverStatus.label.lowercased()).")
                             .font(.caption)
                             .foregroundColor(targetDevice.receiverStatus == .online ? .secondary : receiverStatusColor(targetDevice.receiverStatus))
                     }
+                } else {
+                    Text("Queue mode keeps clips available for manual receive on any device.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
 
                 if let warning = configStore.selectedTargetFallbackWarning {

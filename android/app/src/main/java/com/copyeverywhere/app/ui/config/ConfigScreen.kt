@@ -223,6 +223,12 @@ fun ConfigScreen(
                     onSelect = { viewModel.updateTargetDeviceId(it) }
                 )
 
+                DeliveryModeCard(
+                    selectedDevice = devices
+                        .filter { it.deviceId != deviceId }
+                        .find { it.deviceId == targetDeviceId }
+                )
+
                 Spacer(modifier = Modifier.height(4.dp))
 
                 // Test Connection button
@@ -570,7 +576,8 @@ private fun TargetDeviceDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedDevice = devices.find { it.deviceId == selectedDeviceId }
-    val displayText = selectedDevice?.let { "${it.name} (${it.platform})" } ?: if (selectedDeviceId.isNotBlank()) selectedDeviceId else "Select target device"
+    val displayText = selectedDevice?.let { "${it.name} (${it.platform})" }
+        ?: if (selectedDeviceId.isNotBlank()) selectedDeviceId else "Queue mode (any device)"
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -590,6 +597,13 @@ private fun TargetDeviceDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            DropdownMenuItem(
+                text = { Text("Queue mode (any device)") },
+                onClick = {
+                    onSelect("")
+                    expanded = false
+                }
+            )
             if (devices.isEmpty()) {
                 DropdownMenuItem(
                     text = { Text("No devices available") },
@@ -599,7 +613,15 @@ private fun TargetDeviceDropdown(
             } else {
                 devices.forEach { device ->
                     DropdownMenuItem(
-                        text = { Text("${device.name} (${device.platform})") },
+                        text = {
+                            Text(
+                                buildString {
+                                    append("${device.name} (${device.platform})")
+                                    append(" • ")
+                                    append(device.receiverStatusLabel())
+                                }
+                            )
+                        },
                         onClick = {
                             onSelect(device.deviceId)
                             expanded = false
@@ -608,6 +630,45 @@ private fun TargetDeviceDropdown(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DeliveryModeCard(
+    selectedDevice: com.copyeverywhere.app.data.Device?
+) {
+    val title = if (selectedDevice == null) "Queue mode" else "Targeted auto-delivery"
+    val detail = if (selectedDevice == null) {
+        "Sends stay in queue mode and remain available for manual receive on any device."
+    } else {
+        when (selectedDevice.receiverStatus) {
+            "online" -> "${selectedDevice.name} is online. Sends wait for that device to auto-receive first."
+            "degraded" -> "${selectedDevice.name} looks degraded. Sends may miss automatic delivery and fall back to queue."
+            else -> "${selectedDevice.name} is offline. Sends will likely miss automatic delivery and fall back to queue."
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun com.copyeverywhere.app.data.Device.receiverStatusLabel(): String {
+    return when (receiverStatus) {
+        "online" -> "online"
+        "degraded" -> "degraded"
+        else -> "offline"
     }
 }
 

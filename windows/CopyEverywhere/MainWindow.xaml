@@ -172,7 +172,7 @@
             </Border>
 
             <!-- Target Device Selector -->
-            <TextBlock Text="Target Device" Style="{StaticResource FieldLabel}"/>
+            <TextBlock Text="Delivery Target" Style="{StaticResource FieldLabel}"/>
             <ComboBox x:Name="TargetDeviceComboBox"
                       Margin="0,0,0,12"
                       Padding="6,4"
@@ -449,7 +449,7 @@
 
                 <!-- Server Queue Section (LAN mode) -->
                 <StackPanel x:Name="LanQueueSection">
-                    <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
+                    <TextBlock Text="Queue Mode &amp; Recovery" Style="{StaticResource SectionHeader}"/>
 
                     <Border x:Name="LanReceiverStatusBorder"
                             Background="#F3F4F6"

@@ -955,7 +955,7 @@ public partial class MainWindow : Window
         {
             QueueListPanel.Children.Add(new TextBlock
             {
-                Text = "Queue is empty \u2014 copy something and click the icon.",
+                Text = "Queue mode is empty \u2014 send something to make it available for manual receive.",
                 Foreground = new SolidColorBrush(Colors.Gray),
                 FontSize = 12,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -996,7 +996,9 @@ public partial class MainWindow : Window
 
         var metadataText = new TextBlock
         {
-            Text = $"{FormatBytes(item.SizeBytes)} • {FormatAge(item.CreatedAt)}",
+            Text = item.DeliveryState == "targeted_fallback"
+                ? "Automatic delivery missed; click Receive to recover"
+                : $"{FormatBytes(item.SizeBytes)} • {FormatAge(item.CreatedAt)}",
             FontSize = 11,
             Foreground = new SolidColorBrush(Colors.Gray),
             Margin = new Thickness(0, 2, 0, 0),
@@ -1014,7 +1016,7 @@ public partial class MainWindow : Window
                 Margin = new Thickness(0, 4, 0, 0),
                 Child = new TextBlock
                 {
-                    Text = "Fallback",
+                    Text = "Queue fallback",
                     FontSize = 10,
                     FontWeight = FontWeights.SemiBold,
                     Foreground = new SolidColorBrush(Color.FromRgb(194, 65, 12)),
@@ -1152,7 +1154,7 @@ public partial class MainWindow : Window
             _isUpdatingTargetDeviceList = true;
             var devices = await _apiClient.GetDevicesAsync();
             TargetDeviceComboBox.Items.Clear();
-            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue \u2014 any device)", Tag = "" });
+            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue mode \u2014 any device)", Tag = "" });
 
             var selectedIndex = 0;
             var index = 1;
@@ -1240,7 +1242,12 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(_configStore.TargetDeviceId))
         {
-            TargetDeviceStatusBorder.Visibility = Visibility.Collapsed;
+            TargetDeviceStatusBorder.Visibility = Visibility.Visible;
+            TargetDeviceStatusBorder.Background = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+            TargetDeviceStatusText.Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+            TargetDeviceStatusDetailText.Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+            TargetDeviceStatusText.Text = "Delivery mode: Queue mode";
+            TargetDeviceStatusDetailText.Text = "Clips stay available for manual receive on any device.";
             return;
         }
 
@@ -1257,10 +1264,10 @@ public partial class MainWindow : Window
         TargetDeviceStatusBorder.Background = background;
         TargetDeviceStatusText.Foreground = brush;
         TargetDeviceStatusDetailText.Foreground = brush;
-        TargetDeviceStatusText.Text = $"Target receiver: {ReceiverStatusLabel(status)}";
+        TargetDeviceStatusText.Text = "Delivery mode: Targeted auto-delivery";
         TargetDeviceStatusDetailText.Text = isOnline
-            ? "This device looks ready for targeted auto-delivery."
-            : "Automatic delivery may miss this device and fall back into the queue.";
+            ? "The selected device looks ready. This clip will wait for that device to auto-receive first."
+            : "Automatic delivery may miss this device and then fall back into the queue.";
     }
 
     private string? TargetSendWarningMessage()
@@ -1268,9 +1275,9 @@ public partial class MainWindow : Window
         return _configStore.TargetDeviceReceiverStatus switch
         {
             ReceiverStatus.Degraded when !string.IsNullOrEmpty(_configStore.TargetDeviceId) =>
-                "Target receiver is degraded. This send may fall back to the queue instead of auto-delivering.",
+                "Targeted auto-delivery is degraded. This send may fall back to queue recovery instead of auto-delivering.",
             ReceiverStatus.Offline when !string.IsNullOrEmpty(_configStore.TargetDeviceId) =>
-                "Target receiver is offline. This send will likely wait for queue fallback instead of auto-delivering.",
+                "Targeted auto-delivery is offline. This send will likely fall back to queue recovery instead of auto-delivering.",
             _ => null,
         };
     }
@@ -1288,14 +1295,14 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(_configStore.TargetDeviceId))
         {
-            return "Queued for manual receive on any device.";
+            return "Queue mode: available for manual receive on any device.";
         }
 
         return _configStore.TargetDeviceReceiverStatus switch
         {
-            ReceiverStatus.Online => "Target receiver is online for automatic delivery.",
-            ReceiverStatus.Degraded => "Target receiver is degraded, so this clip may fall back to the queue.",
-            _ => "Target receiver is offline, so this clip may fall back to the queue.",
+            ReceiverStatus.Online => "Targeted auto-delivery: waiting for the selected device to auto-receive.",
+            ReceiverStatus.Degraded => "Targeted auto-delivery: the selected device may miss and fall back to queue recovery.",
+            _ => "Targeted auto-delivery: the selected device is offline, so queue fallback is likely.",
         };
     }
 
@@ -1484,8 +1491,8 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() =>
         {
             ShowToastNotification(
-                "Auto-delivery fell back to queue",
-                $"Couldn't auto-receive {clipLabel}. It remains available in the queue for manual receive.");
+                "Targeted auto-delivery fell back to queue",
+                $"Couldn't auto-receive {clipLabel}. It remains available in queue recovery for manual receive.");
             _ = RefreshQueueAsync();
         });
     }
