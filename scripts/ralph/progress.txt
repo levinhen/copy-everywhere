@@ -8,7 +8,7 @@ US-069A: Server: track targeted delivery lifecycle state                 [ ]
 US-069B: Server: expose receiver connectivity on devices list            [x]
 US-070:  Server: confirm targeted delivery on successful raw consume     [x]
 US-071:  Server: fallback targeted clips back into recoverable queue     [x]
-US-072:  Server: add targeted delivery diagnostics and regression cover  [ ]
+US-072:  Server: add targeted delivery diagnostics and regression cover  [x]
 US-073A: macOS: surface self receiver status and SSE health              [ ]
 US-073B: macOS: show target device receiver readiness in picker          [ ]
 US-073C: macOS: targeted auto-receive failure visible and recoverable    [ ]
@@ -26,6 +26,7 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
 - Server delivery-state lifecycle starts targeted clips in `targeted_pending`; only untargeted clips use `ready` immediately, so new server/client work should not assume every sendable clip is `ready`
 - Timeout-driven targeted fallback is keyed off persisted `targeted_pending_at`; set it only when a clip actually enters `targeted_pending` (single upload or chunked complete), not when a chunked upload is first initialized
 - Server targeted SSE events are emitted from `server/handlers/clips.go` and `server/handlers/uploads.go`, and replayed on connect from `server/handlers/devices.go`
+- SSE reconnect replay should query `targeted_pending` clips from SQLite in oldest-first order so reconnects preserve delivery attempts without turning replay into a new delivery state
 - `/api/v1/devices` receiver presence is computed from the live `server/sse.Broker`, not persisted in SQLite; fresh active SSE subscriptions are `online`, stale active subscriptions are `degraded`, and no subscriber is `offline`
 - Targeted `GET /api/v1/clips/:id/raw` now requires `?device_id=<target>` and is the authoritative delivery acknowledgement path; only that addressed-device consume should transition a clip to `targeted_delivered`
 - Consumed clip rows should remain in SQLite until cleanup runs so duplicate raw consumes keep returning `410 Gone` and targeted delivery state stays inspectable after the first successful read
@@ -78,4 +79,13 @@ US-076:  Shared UX: label queue mode vs targeted auto-delivery           [ ]
   - Queue listing now intentionally exposes only untargeted `ready` clips plus targeted `targeted_fallback` clips, and `delivery_state` distinguishes normal queue items from fallback ones
   - Use `TARGETED_FALLBACK_SECONDS` to tune when targeted auto-delivery falls back to manual recovery without changing clip TTL cleanup behavior
   - Manual targeted recovery still uses `GET /clips/:id/raw?device_id=<target>` and reuses the same targeted consume path after fallback
+---
+## 2026-04-17 09:40:25 CST - US-072
+- Added targeted-delivery diagnostics on the server for targeted clip creation, SSE notify, replay-on-reconnect, raw consume confirmation, fallback transition, and expiry cleanup; also restored SSE reconnect replay for pending targeted clips
+- Files changed: `server/cleanup/cleanup.go`, `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/devices.go`, `server/handlers/devices_test.go`, `server/handlers/uploads.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `go test ./db ./handlers ./cleanup` passed in `server/`; `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
+- Learnings for future iterations:
+  - Reconnect replay should only include still-unconsumed `targeted_pending` clips; fallback and delivered clips must stay out of SSE replay
+  - Targeted lifecycle logs are most useful when they include clip ID, target device, and the transition point so server-side delivery traces can be reconstructed from logs alone
+  - Reconnect regression tests should use `httptest.NewServer` and real stream disconnect/reconnect cycles, because recorder-based tests do not exercise SSE replay paths
 ---

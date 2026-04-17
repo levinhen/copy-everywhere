@@ -69,6 +69,16 @@ func clipToQueueResponse(c *db.Clip) *queueClipResponse {
 	}
 }
 
+func targetedLogFields(clip *db.Clip) (targetDeviceID string, senderDeviceID string) {
+	if clip.TargetDeviceID != nil {
+		targetDeviceID = *clip.TargetDeviceID
+	}
+	if clip.SenderDeviceID != nil {
+		senderDeviceID = *clip.SenderDeviceID
+	}
+	return targetDeviceID, senderDeviceID
+}
+
 // Upload handles POST /api/v1/clips
 func (h *ClipHandler) Upload(c *gin.Context) {
 	clipType := c.PostForm("type")
@@ -159,12 +169,18 @@ func (h *ClipHandler) Upload(c *gin.Context) {
 		return
 	}
 
+	if clip.TargetDeviceID != nil {
+		targetDeviceID, senderDeviceID := targetedLogFields(clip)
+		log.Printf("TARGETED: created clip %s status=%s target=%s sender=%s size=%d", clip.ID, clip.Status, targetDeviceID, senderDeviceID, clip.SizeBytes)
+	}
+
 	// Notify SSE subscribers if this clip targets a specific device
 	if clip.TargetDeviceID != nil && h.Broker != nil {
 		fname := ""
 		if clip.Filename != nil {
 			fname = *clip.Filename
 		}
+		log.Printf("TARGETED: notifying device %s for clip %s via SSE", *clip.TargetDeviceID, clip.ID)
 		h.Broker.Notify(*clip.TargetDeviceID, sse.ClipEvent{
 			ClipID:    clip.ID,
 			Type:      clip.Type,
@@ -287,6 +303,10 @@ func (h *ClipHandler) GetRaw(c *gin.Context) {
 	if !claimed {
 		c.JSON(http.StatusGone, gin.H{"error": "already_consumed"})
 		return
+	}
+
+	if clip.TargetDeviceID != nil {
+		log.Printf("TARGETED: raw consume confirmed delivery for clip %s by device %s", clip.ID, c.Query("device_id"))
 	}
 
 	// Determine content type

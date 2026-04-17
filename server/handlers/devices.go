@@ -32,6 +32,19 @@ type deviceResponse struct {
 	ReceiverStatus string    `json:"receiver_status"`
 }
 
+func clipToEvent(clip *db.Clip) sse.ClipEvent {
+	filename := ""
+	if clip.Filename != nil {
+		filename = *clip.Filename
+	}
+	return sse.ClipEvent{
+		ClipID:    clip.ID,
+		Type:      clip.Type,
+		Filename:  filename,
+		SizeBytes: clip.SizeBytes,
+	}
+}
+
 func (h *DeviceHandler) Register(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -107,20 +120,39 @@ func (h *DeviceHandler) Stream(c *gin.Context) {
 
 	// Use client disconnect context
 	ctx := c.Request.Context()
+	eventID := 0
+
+	pending, err := h.DB.ListPendingTargetedClips(deviceID)
+	if err != nil {
+		log.Printf("ERROR: list pending targeted clips for replay: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+		return
+	}
 
 	// Send initial comment to confirm connection
 	fmt.Fprintf(c.Writer, ": connected\n\n")
 	flusher.Flush()
 	h.Broker.MarkAlive(deviceID)
+	log.Printf("SSE: device %s connected", deviceID)
+	for _, clip := range pending {
+		eventID++
+		event := clipToEvent(clip)
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(c.Writer, "id: %d\n", eventID)
+		fmt.Fprintf(c.Writer, "event: clip\n")
+		fmt.Fprintf(c.Writer, "data: %s\n\n", data)
+		flusher.Flush()
+		h.Broker.MarkAlive(deviceID)
+		log.Printf("TARGETED: replayed pending clip %s to device %s on SSE connect", clip.ID, deviceID)
+	}
 
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
 
-	eventID := 0
-
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("SSE: device %s disconnected", deviceID)
 			return
 		case event := <-ch:
 			eventID++
@@ -133,6 +165,7 @@ func (h *DeviceHandler) Stream(c *gin.Context) {
 		case <-heartbeat.C:
 			_, err := io.WriteString(c.Writer, ": heartbeat\n\n")
 			if err != nil {
+				log.Printf("SSE: device %s heartbeat write failed: %v", deviceID, err)
 				return
 			}
 			flusher.Flush()

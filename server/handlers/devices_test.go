@@ -375,6 +375,75 @@ func TestStreamSSEReceivesClipEvent(t *testing.T) {
 	}
 }
 
+func TestStreamSSEReplaysPendingTargetedClipOnReconnect(t *testing.T) {
+	h, r := setupDeviceTestHandler(t)
+
+	target := "devReplay"
+	filename := "clipboard.txt"
+	if err := h.DB.CreateClip(&db.Clip{
+		ID:             "replay1",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      12,
+		Status:         db.ClipStatusTargetedPending,
+		CreatedAt:      time.Now().UTC().Add(-time.Minute),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		TargetDeviceID: &target,
+	}); err != nil {
+		t.Fatalf("create targeted clip: %v", err)
+	}
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	readReplayEvent := func() sse.ClipEvent {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/devices/"+target+"/stream", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("stream request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		done := make(chan sse.ClipEvent, 1)
+		go func() {
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.HasPrefix(line, "data: ") {
+					var event sse.ClipEvent
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
+						t.Errorf("unmarshal replay event: %v", err)
+						return
+					}
+					done <- event
+					return
+				}
+			}
+		}()
+
+		select {
+		case event := <-done:
+			return event
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for replay event")
+			return sse.ClipEvent{}
+		}
+	}
+
+	first := readReplayEvent()
+	second := readReplayEvent()
+
+	if first.ClipID != "replay1" {
+		t.Fatalf("expected first replay clip replay1, got %s", first.ClipID)
+	}
+	if second.ClipID != "replay1" {
+		t.Fatalf("expected second replay clip replay1, got %s", second.ClipID)
+	}
+}
+
 func TestStreamSSEMultipleSubscribers(t *testing.T) {
 	h, r := setupDeviceTestHandler(t)
 

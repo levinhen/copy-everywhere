@@ -29,11 +29,18 @@ func run(database *db.DB, storagePath string, targetedFallbackAfter time.Duratio
 	deleted := 0
 
 	if targetedFallbackAfter > 0 {
+		staleTargeted, fetchErr := database.GetStaleTargetedClips(targetedFallbackAfter)
+		if fetchErr != nil {
+			log.Printf("CLEANUP: error listing stale targeted clips: %v", fetchErr)
+		}
 		fallbacks, err := database.FallbackTargetedClips(targetedFallbackAfter)
 		if err != nil {
 			log.Printf("CLEANUP: error falling back targeted clips: %v", err)
 		} else if fallbacks > 0 {
 			log.Printf("CLEANUP: moved %d targeted clips to fallback", fallbacks)
+			for _, clip := range staleTargeted {
+				log.Printf("TARGETED: fallback triggered for clip %s target=%s", clip.ID, deref(clip.TargetDeviceID))
+			}
 		}
 	}
 
@@ -42,7 +49,7 @@ func run(database *db.DB, storagePath string, targetedFallbackAfter time.Duratio
 	if err != nil {
 		log.Printf("CLEANUP: error fetching expired clips: %v", err)
 	} else {
-		deleted += deleteClips(database, storagePath, expired)
+		deleted += deleteClips(database, storagePath, expired, "expired")
 	}
 
 	// Clean up consumed clips older than 60 seconds (safety net for inline-delete edge cases)
@@ -50,7 +57,7 @@ func run(database *db.DB, storagePath string, targetedFallbackAfter time.Duratio
 	if err != nil {
 		log.Printf("CLEANUP: error fetching consumed clips: %v", err)
 	} else {
-		deleted += deleteClips(database, storagePath, consumed)
+		deleted += deleteClips(database, storagePath, consumed, "consumed")
 	}
 
 	if deleted > 0 {
@@ -58,9 +65,13 @@ func run(database *db.DB, storagePath string, targetedFallbackAfter time.Duratio
 	}
 }
 
-func deleteClips(database *db.DB, storagePath string, clips []*db.Clip) int {
+func deleteClips(database *db.DB, storagePath string, clips []*db.Clip, reason string) int {
 	deleted := 0
 	for _, clip := range clips {
+		if reason == "expired" {
+			log.Printf("TARGETED: expiring clip %s status=%s target=%s", clip.ID, clip.Status, deref(clip.TargetDeviceID))
+		}
+
 		// Delete file/directory from disk
 		if clip.StoragePath != "" {
 			dir := filepath.Dir(clip.StoragePath)
@@ -85,4 +96,11 @@ func deleteClips(database *db.DB, storagePath string, clips []*db.Clip) int {
 		deleted++
 	}
 	return deleted
+}
+
+func deref(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

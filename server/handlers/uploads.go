@@ -257,6 +257,17 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	// Re-read updated clip
 	clip, _ = h.DB.GetClipByID(uploadID)
+	if clip != nil && clip.TargetDeviceID != nil {
+		targetDeviceID := ""
+		if clip.TargetDeviceID != nil {
+			targetDeviceID = *clip.TargetDeviceID
+		}
+		senderDeviceID := ""
+		if clip.SenderDeviceID != nil {
+			senderDeviceID = *clip.SenderDeviceID
+		}
+		log.Printf("TARGETED: created clip %s status=%s target=%s sender=%s size=%d via chunked upload", clip.ID, clip.Status, targetDeviceID, senderDeviceID, clip.SizeBytes)
+	}
 
 	// Notify SSE subscribers if this clip targets a specific device
 	if clip != nil && clip.TargetDeviceID != nil && h.Broker != nil {
@@ -264,6 +275,7 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 		if clip.Filename != nil {
 			fname = *clip.Filename
 		}
+		log.Printf("TARGETED: notifying device %s for clip %s via SSE", *clip.TargetDeviceID, clip.ID)
 		h.Broker.Notify(*clip.TargetDeviceID, sse.ClipEvent{
 			ClipID:    clip.ID,
 			Type:      clip.Type,

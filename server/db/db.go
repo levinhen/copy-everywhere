@@ -283,6 +283,35 @@ func (d *DB) ListQueueClips(deviceID string) ([]*Clip, error) {
 	return clips, rows.Err()
 }
 
+// ListPendingTargetedClips returns non-expired, unconsumed targeted_pending
+// clips addressed to the given device. Results are oldest first so reconnect
+// replay preserves original send order.
+func (d *DB) ListPendingTargetedClips(deviceID string) ([]*Clip, error) {
+	rows, err := d.conn.Query(`
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, targeted_pending_at, consumed_at
+		FROM clips
+		WHERE consumed_at IS NULL
+		  AND expires_at > ?
+		  AND status = ?
+		  AND target_device_id = ?
+		ORDER BY created_at ASC
+	`, time.Now().UTC(), ClipStatusTargetedPending, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clips []*Clip
+	for rows.Next() {
+		clip := &Clip{}
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.TargetedPendingAt, &clip.ConsumedAt); err != nil {
+			return nil, err
+		}
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
+}
+
 // ConsumeClip atomically marks an untargeted clip as consumed. Returns true if
 // the clip was successfully claimed (i.e. it was not already consumed).
 // Returns false if another caller already consumed it.
@@ -360,6 +389,35 @@ func (d *DB) FallbackTargetedClips(olderThan time.Duration) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// GetStaleTargetedClips returns targeted_pending clips old enough to fall back.
+func (d *DB) GetStaleTargetedClips(olderThan time.Duration) ([]*Clip, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	rows, err := d.conn.Query(`
+		SELECT id, type, filename, size_bytes, status, created_at, expires_at, storage_path, target_device_id, sender_device_id, targeted_pending_at, consumed_at
+		FROM clips
+		WHERE consumed_at IS NULL
+		  AND status = ?
+		  AND target_device_id IS NOT NULL
+		  AND targeted_pending_at IS NOT NULL
+		  AND targeted_pending_at < ?
+		ORDER BY targeted_pending_at ASC
+	`, ClipStatusTargetedPending, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var clips []*Clip
+	for rows.Next() {
+		clip := &Clip{}
+		if err := rows.Scan(&clip.ID, &clip.Type, &clip.Filename, &clip.SizeBytes, &clip.Status, &clip.CreatedAt, &clip.ExpiresAt, &clip.StoragePath, &clip.TargetDeviceID, &clip.SenderDeviceID, &clip.TargetedPendingAt, &clip.ConsumedAt); err != nil {
+			return nil, err
+		}
+		clips = append(clips, clip)
+	}
+	return clips, rows.Err()
 }
 
 // GetStorageStats returns count and total size of all clips.

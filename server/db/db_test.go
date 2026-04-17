@@ -558,6 +558,35 @@ func TestListQueueClips(t *testing.T) {
 	}
 }
 
+func TestListPendingTargetedClips(t *testing.T) {
+	d := setupTestDB(t)
+	now := time.Now().UTC()
+	targetA := "dev_a"
+	targetB := "dev_b"
+	consumed := now.Add(-time.Minute)
+
+	d.CreateClip(&Clip{ID: "pt0001", Type: "text", SizeBytes: 5, Status: ClipStatusTargetedPending, CreatedAt: now.Add(-3 * time.Minute), ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetA})
+	d.CreateClip(&Clip{ID: "pt0002", Type: "text", SizeBytes: 5, Status: ClipStatusTargetedPending, CreatedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetA})
+	d.CreateClip(&Clip{ID: "pt0003", Type: "text", SizeBytes: 5, Status: ClipStatusTargetedFallback, CreatedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetA})
+	d.CreateClip(&Clip{ID: "pt0004", Type: "text", SizeBytes: 5, Status: ClipStatusTargetedPending, CreatedAt: now, ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetB})
+	d.CreateClip(&Clip{ID: "pt0005", Type: "text", SizeBytes: 5, Status: ClipStatusTargetedPending, CreatedAt: now, ExpiresAt: now.Add(time.Hour), TargetDeviceID: &targetA, ConsumedAt: &consumed})
+	d.CreateClip(&Clip{ID: "pt0006", Type: "text", SizeBytes: 5, Status: ClipStatusTargetedPending, CreatedAt: now, ExpiresAt: now.Add(-time.Hour), TargetDeviceID: &targetA})
+
+	clips, err := d.ListPendingTargetedClips(targetA)
+	if err != nil {
+		t.Fatalf("list pending targeted: %v", err)
+	}
+	if len(clips) != 2 {
+		t.Fatalf("expected 2 pending targeted clips, got %d", len(clips))
+	}
+	if clips[0].ID != "pt0001" {
+		t.Fatalf("expected pt0001 first, got %s", clips[0].ID)
+	}
+	if clips[1].ID != "pt0002" {
+		t.Fatalf("expected pt0002 second, got %s", clips[1].ID)
+	}
+}
+
 func TestConsumeClip(t *testing.T) {
 	d := setupTestDB(t)
 
