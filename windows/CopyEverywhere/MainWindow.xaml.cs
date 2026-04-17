@@ -1304,6 +1304,7 @@ public partial class MainWindow : Window
         if (_sseTask != null) return; // Already running
         if (!_configStore.IsConfigured || string.IsNullOrEmpty(_configStore.DeviceId)) return;
 
+        LogSseDiagnostic("starting receiver channel");
         _sseCts = new CancellationTokenSource();
         SetSseConnectionState(
             SseConnectionState.Reconnecting,
@@ -1315,6 +1316,7 @@ public partial class MainWindow : Window
     {
         _sseCts?.Cancel();
         _sseTask = null;
+        LogSseDiagnostic("receiver channel stopped");
         SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
     }
 
@@ -1344,6 +1346,7 @@ public partial class MainWindow : Window
                 using var reader = new StreamReader(stream);
 
                 backoff = TimeSpan.FromSeconds(1); // Reset on successful connection
+                LogSseDiagnostic("receiver channel connected");
                 SetSseConnectionState(
                     SseConnectionState.Connected,
                     "Receiver channel connected. This device is ready for targeted auto-delivery.");
@@ -1389,6 +1392,7 @@ public partial class MainWindow : Window
                 var reason = string.IsNullOrWhiteSpace(ex.Message)
                     ? "connection dropped"
                     : ex.Message;
+                LogSseDiagnostic($"receiver channel disconnected: {reason}. retrying in {FormatRetryDelay(retryDelay)}");
                 SetSseConnectionState(
                     SseConnectionState.Reconnecting,
                     $"Receiver channel offline: {reason} Retrying in {FormatRetryDelay(retryDelay)}.");
@@ -1419,20 +1423,22 @@ public partial class MainWindow : Window
 
             if (type == "file")
             {
-                var downloadsPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-                var savePath = Path.Combine(downloadsPath, filename ?? $"clip_{clipId}");
+                var savePath = BuildUniqueDownloadsPath(filename ?? $"clip_{clipId}");
 
-                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath);
+                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath, _configStore.DeviceId);
                 if (success)
                 {
                     Dispatcher.Invoke(() =>
                         ShowToastNotification("File received", $"Saved {Path.GetFileName(savePath)} to Downloads"));
                 }
+                else
+                {
+                    LogSseDiagnostic($"targeted clip {clipId} was already consumed before auto-receive completed");
+                }
             }
             else
             {
-                var result = await _apiClient.ConsumeClipRawAsync(clipId);
+                var result = await _apiClient.ConsumeClipRawAsync(clipId, _configStore.DeviceId);
                 if (result != null)
                 {
                     var (data, contentType) = result.Value;
@@ -1457,15 +1463,59 @@ public partial class MainWindow : Window
                         }
                     });
                 }
+                else
+                {
+                    LogSseDiagnostic($"targeted clip {clipId} was already consumed before auto-receive completed");
+                }
             }
 
             // Refresh queue after receiving
             Dispatcher.Invoke(() => _ = RefreshQueueAsync());
         }
-        catch
+        catch (Exception ex)
         {
-            // Best effort
+            LogSseDiagnostic($"targeted auto-receive failed: {ex.Message}");
+            ShowTargetedAutoReceiveFallbackWarning("targeted clip");
         }
+    }
+
+    private void ShowTargetedAutoReceiveFallbackWarning(string clipLabel)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            ShowToastNotification(
+                "Auto-delivery fell back to queue",
+                $"Couldn't auto-receive {clipLabel}. It remains available in the queue for manual receive.");
+            _ = RefreshQueueAsync();
+        });
+    }
+
+    private static string BuildUniqueDownloadsPath(string filename)
+    {
+        var downloadsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        var savePath = Path.Combine(downloadsPath, filename);
+
+        if (!File.Exists(savePath))
+        {
+            return savePath;
+        }
+
+        var ext = Path.GetExtension(savePath);
+        var nameWithoutExt = Path.GetFileNameWithoutExtension(savePath);
+        var counter = 1;
+        do
+        {
+            savePath = Path.Combine(downloadsPath, $"{nameWithoutExt} ({counter}){ext}");
+            counter++;
+        } while (File.Exists(savePath));
+
+        return savePath;
+    }
+
+    private static void LogSseDiagnostic(string message)
+    {
+        Debug.WriteLine($"[SSE] {message}");
     }
 
     // --- Bluetooth ---
