@@ -178,6 +178,23 @@
                       Padding="6,4"
                       SelectionChanged="TargetDeviceComboBox_SelectionChanged"/>
 
+            <Border x:Name="TargetDeviceStatusBorder"
+                    Visibility="Collapsed"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Margin="0,0,0,12">
+                <StackPanel>
+                    <TextBlock x:Name="TargetDeviceStatusText"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap"/>
+                    <TextBlock x:Name="TargetDeviceStatusDetailText"
+                               FontSize="11"
+                               Margin="0,4,0,0"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
             <!-- Floating Ball Toggle -->
             <CheckBox x:Name="FloatingBallCheckBox"
                       Content="Show floating drop target"

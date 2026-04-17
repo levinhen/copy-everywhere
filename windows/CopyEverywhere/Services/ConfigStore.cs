@@ -42,6 +42,13 @@ public enum BluetoothConnectionStatus
     Error
 }
 
+public enum ReceiverStatus
+{
+    Online,
+    Degraded,
+    Offline
+}
+
 public class ConfigStore : INotifyPropertyChanged
 {
     private const string CredentialTargetHost = "CopyEverywhere_HostURL";
@@ -68,6 +75,7 @@ public class ConfigStore : INotifyPropertyChanged
     private BluetoothConnectionStatus _bluetoothConnectionStatus = BluetoothConnectionStatus.Disconnected;
     private string? _bluetoothConnectedDeviceName;
     private string? _bluetoothErrorMessage;
+    private ReceiverStatus _targetDeviceReceiverStatus = ReceiverStatus.Offline;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -153,6 +161,12 @@ public class ConfigStore : INotifyPropertyChanged
     {
         get => _bluetoothErrorMessage;
         set { _bluetoothErrorMessage = value; OnPropertyChanged(); }
+    }
+
+    public ReceiverStatus TargetDeviceReceiverStatus
+    {
+        get => _targetDeviceReceiverStatus;
+        set { _targetDeviceReceiverStatus = value; OnPropertyChanged(); }
     }
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl);

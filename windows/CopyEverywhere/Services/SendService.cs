@@ -24,6 +24,21 @@ public class SendService
     private string? SenderDeviceId => string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId;
     private string? TargetDeviceId => string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId;
 
+    private string SendModeMessage()
+    {
+        if (string.IsNullOrEmpty(TargetDeviceId))
+        {
+            return "Queued for manual receive on any device";
+        }
+
+        return _configStore.TargetDeviceReceiverStatus switch
+        {
+            ReceiverStatus.Online => "Target receiver is online for automatic delivery",
+            ReceiverStatus.Degraded => "Target receiver is degraded, so the clip may fall back to queue",
+            _ => "Target receiver is offline, so the clip may fall back to queue",
+        };
+    }
+
     /// <summary>
     /// Progress callback for Bluetooth sends. UI can subscribe to show progress.
     /// Reports 0.0–1.0.
@@ -41,7 +56,7 @@ public class SendService
         var clip = await _apiClient.SendTextClipAsync(text, SenderDeviceId, TargetDeviceId);
         if (clip != null)
         {
-            ShowToast("Sent text", $"Sent text ({text.Length} chars)");
+            ShowToast("Sent text", $"Sent text ({text.Length} chars). {SendModeMessage()}.");
         }
         else
         {
@@ -85,7 +100,7 @@ public class SendService
             var clip = await _apiClient.CompleteChunkedUploadAsync(initResult.UploadId);
             if (clip != null)
             {
-                ShowToast("Sent file", $"Sent {filename}");
+                ShowToast("Sent file", $"Sent {filename}. {SendModeMessage()}.");
             }
             else
             {
@@ -97,7 +112,7 @@ public class SendService
             var clip = await _apiClient.SendFileAsync(filePath, senderDeviceId: SenderDeviceId, targetDeviceId: TargetDeviceId);
             if (clip != null)
             {
-                ShowToast("Sent file", $"Sent {filename}");
+                ShowToast("Sent file", $"Sent {filename}. {SendModeMessage()}.");
             }
             else
             {
