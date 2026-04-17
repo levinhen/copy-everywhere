@@ -23,6 +23,15 @@ type registerRequest struct {
 	Platform string `json:"platform" binding:"required"`
 }
 
+type deviceResponse struct {
+	ID             string    `json:"device_id"`
+	Name           string    `json:"name"`
+	Platform       string    `json:"platform"`
+	LastSeenAt     time.Time `json:"last_seen_at"`
+	CreatedAt      time.Time `json:"created_at"`
+	ReceiverStatus string    `json:"receiver_status"`
+}
+
 func (h *DeviceHandler) Register(c *gin.Context) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -52,10 +61,27 @@ func (h *DeviceHandler) List(c *gin.Context) {
 	}
 
 	if devices == nil {
-		devices = []*db.Device{}
+		c.JSON(http.StatusOK, []deviceResponse{})
+		return
 	}
 
-	c.JSON(http.StatusOK, devices)
+	response := make([]deviceResponse, 0, len(devices))
+	for _, device := range devices {
+		status := sse.ReceiverStatusOffline
+		if h.Broker != nil {
+			status = h.Broker.ReceiverStatus(device.ID)
+		}
+		response = append(response, deviceResponse{
+			ID:             device.ID,
+			Name:           device.Name,
+			Platform:       device.Platform,
+			LastSeenAt:     device.LastSeenAt,
+			CreatedAt:      device.CreatedAt,
+			ReceiverStatus: string(status),
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // Stream handles GET /api/v1/devices/:id/stream — Server-Sent Events for targeted clips.
@@ -85,6 +111,7 @@ func (h *DeviceHandler) Stream(c *gin.Context) {
 	// Send initial comment to confirm connection
 	fmt.Fprintf(c.Writer, ": connected\n\n")
 	flusher.Flush()
+	h.Broker.MarkAlive(deviceID)
 
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
@@ -102,12 +129,14 @@ func (h *DeviceHandler) Stream(c *gin.Context) {
 			fmt.Fprintf(c.Writer, "event: clip\n")
 			fmt.Fprintf(c.Writer, "data: %s\n\n", data)
 			flusher.Flush()
+			h.Broker.MarkAlive(deviceID)
 		case <-heartbeat.C:
 			_, err := io.WriteString(c.Writer, ": heartbeat\n\n")
 			if err != nil {
 				return
 			}
 			flusher.Flush()
+			h.Broker.MarkAlive(deviceID)
 		}
 	}
 }

@@ -144,7 +144,7 @@ func TestListDevices(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var empty []db.Device
+	var empty []map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &empty)
 	if len(empty) != 0 {
 		t.Fatalf("expected 0 devices, got %d", len(empty))
@@ -162,7 +162,7 @@ func TestListDevices(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var devices []db.Device
+	var devices []map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &devices)
 	if len(devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(devices))
@@ -186,10 +186,92 @@ func TestListDevicesResponseShape(t *testing.T) {
 	}
 
 	dev := devices[0]
-	for _, key := range []string{"device_id", "name", "platform", "last_seen_at"} {
+	for _, key := range []string{"device_id", "name", "platform", "last_seen_at", "receiver_status"} {
 		if _, ok := dev[key]; !ok {
 			t.Fatalf("expected key %s in response", key)
 		}
+	}
+
+	if dev["receiver_status"] != "offline" {
+		t.Fatalf("expected offline receiver_status by default, got %v", dev["receiver_status"])
+	}
+}
+
+func TestListDevicesReceiverStatusTransitions(t *testing.T) {
+	h, r := setupDeviceTestHandler(t)
+
+	device, err := h.DB.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	readReceiverStatus := func() string {
+		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		var devices []map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &devices); err != nil {
+			t.Fatalf("unmarshal devices: %v", err)
+		}
+		if len(devices) != 1 {
+			t.Fatalf("expected 1 device, got %d", len(devices))
+		}
+
+		status, _ := devices[0]["receiver_status"].(string)
+		return status
+	}
+
+	if status := readReceiverStatus(); status != "offline" {
+		t.Fatalf("expected offline before subscribe, got %s", status)
+	}
+
+	ch := h.Broker.Subscribe(device.ID)
+	if status := readReceiverStatus(); status != "online" {
+		t.Fatalf("expected online with fresh subscriber, got %s", status)
+	}
+
+	h.Broker.MarkAlive(device.ID)
+	h.Broker.Unsubscribe(device.ID, ch)
+	if status := readReceiverStatus(); status != "offline" {
+		t.Fatalf("expected offline after unsubscribe, got %s", status)
+	}
+}
+
+func TestListDevicesReceiverStatusStaleHeartbeat(t *testing.T) {
+	h, r := setupDeviceTestHandler(t)
+
+	device, err := h.DB.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	now := time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC)
+	h.Broker = sse.NewBrokerWithPresenceTTL(func() time.Time { return now }, 35*time.Second)
+
+	ch := h.Broker.Subscribe(device.ID)
+	defer h.Broker.Unsubscribe(device.ID, ch)
+
+	req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+	w := httptest.NewRecorder()
+
+	now = now.Add(36 * time.Second)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var devices []map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &devices); err != nil {
+		t.Fatalf("unmarshal devices: %v", err)
+	}
+	if devices[0]["receiver_status"] != "degraded" {
+		t.Fatalf("expected degraded receiver_status, got %v", devices[0]["receiver_status"])
 	}
 }
 
