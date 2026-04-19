@@ -1,0 +1,216 @@
+{
+  "project": "CopyEverywhere",
+  "branchName": "ralph/targeted-auto-delivery-reliability",
+  "description": "Make targeted device sends reliably auto-deliver through the existing relay-server plus SSE architecture, with explicit receiver presence, delivery state, fallback-to-queue behavior, and clear cross-platform status UI.",
+  "userStories": [
+    {
+      "id": "US-069A",
+      "title": "Server: track targeted delivery lifecycle state",
+      "description": "As a developer, I need persisted delivery lifecycle state for targeted clips so the product can distinguish notification, delivery, and fallback instead of treating them as the same event.",
+      "acceptanceCriteria": [
+        "Add persisted delivery state for targeted clips covering at least targeted_pending, targeted_delivered, targeted_fallback, and failed",
+        "A targeted clip is not marked delivered only because an SSE event was emitted",
+        "Untargeted clip behavior remains unchanged",
+        "go test ./... passes",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-069B",
+      "title": "Server: expose receiver connectivity on devices list",
+      "description": "As a sender, I want each device to report whether its auto-receive channel is actually online so I can tell whether targeted delivery is likely to complete automatically.",
+      "acceptanceCriteria": [
+        "GET /api/v1/devices includes receiver status for each device",
+        "Receiver status distinguishes at least online, degraded, and offline",
+        "Online status is derived from an active and fresh SSE subscription for that device",
+        "Server tests cover connect, disconnect, and stale-heartbeat transitions",
+        "go test ./... passes",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-070",
+      "title": "Server: confirm targeted delivery on successful raw consume",
+      "description": "As a receiving client, I need the server to treat successful raw consumption by the addressed device as the delivery confirmation so targeted delivery has one authoritative success condition.",
+      "acceptanceCriteria": [
+        "Successful GET /api/v1/clips/:id/raw by the addressed device marks the targeted clip as delivered",
+        "Duplicate or wrong-device consume attempts do not mark the clip delivered",
+        "Handler comments and API behavior document raw consume as the targeted delivery acknowledgement",
+        "go test ./... passes",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-071",
+      "title": "Server: fallback targeted clips back into recoverable queue state",
+      "description": "As a user, I want targeted clips that fail auto-delivery to remain available for manual receive instead of disappearing silently.",
+      "acceptanceCriteria": [
+        "If a targeted clip is not consumed within a configurable timeout after notification, it moves to targeted_fallback",
+        "Fallback clips remain visible to the target device in the queue",
+        "Queue responses distinguish fallback items from normal untargeted queue items",
+        "Server tests cover timeout-triggered fallback and later manual receive",
+        "go test ./... passes",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-072",
+      "title": "Server: add targeted delivery diagnostics and regression coverage",
+      "description": "As a developer, I need logs and tests around targeted auto-delivery so failures can be diagnosed and regressions caught quickly.",
+      "acceptanceCriteria": [
+        "Server logs targeted clip creation, SSE notify, raw consume success, fallback trigger, and expiry",
+        "Tests cover online delivery, replay after reconnect, fallback after timeout, and duplicate consume returning 410 Gone",
+        "go test ./... passes",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-073A",
+      "title": "macOS: surface self receiver status and SSE health",
+      "description": "As a macOS user, I want to see whether this device is currently ready for targeted auto-delivery so I can trust the direct-send behavior.",
+      "acceptanceCriteria": [
+        "Config or main panel shows self receiver status: connected, reconnecting, or disconnected",
+        "Status is driven by the real SSE connection state rather than static config presence",
+        "Reconnect backoff state is visible while SSE is retrying",
+        "swift build succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-073B",
+      "title": "macOS: show target device receiver readiness in picker",
+      "description": "As a macOS sender, I want the target device picker to show whether the selected destination is online for automatic delivery before I send content.",
+      "acceptanceCriteria": [
+        "Target device picker shows receiver status for each device returned by GET /api/v1/devices",
+        "Offline or degraded targets are visually distinct from online targets",
+        "Sending to an offline or degraded target warns that the item may fall back to queue",
+        "swift build succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-073C",
+      "title": "macOS: make targeted auto-receive failure visible and recoverable",
+      "description": "As a macOS receiver, I want failed targeted auto-delivery to tell me the item is still recoverable from the queue instead of failing silently.",
+      "acceptanceCriteria": [
+        "On targeted auto-receive failure, the app shows a non-intrusive warning that the item remains in queue",
+        "Queue UI marks targeted fallback items distinctly from normal queue items",
+        "Successful text and image targeted receives still update NSPasteboard and file receives still save to Downloads",
+        "swift build succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-074A",
+      "title": "Windows: surface self receiver status and SSE health",
+      "description": "As a Windows user, I want to see whether this device is actively connected for targeted auto-delivery so I can trust direct sends.",
+      "acceptanceCriteria": [
+        "Main or config UI shows self receiver status: connected, reconnecting, or disconnected",
+        "Status reflects live SSE loop state and reconnect attempts",
+        "dotnet build succeeds on a Windows host",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-074B",
+      "title": "Windows: show target device receiver readiness and fallback messaging",
+      "description": "As a Windows sender, I want target selection and send feedback to explain whether automatic delivery is expected or whether the clip will fall back to queue.",
+      "acceptanceCriteria": [
+        "Target device selector shows receiver status for each candidate device",
+        "Sending to an offline or degraded target warns about queue fallback",
+        "Queue rows distinguish fallback items from normal queue items",
+        "dotnet build succeeds on a Windows host",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-074C",
+      "title": "Windows: make targeted auto-receive failure visible and recoverable",
+      "description": "As a Windows receiver, I want failed targeted auto-delivery to surface clear fallback status instead of silently doing nothing.",
+      "acceptanceCriteria": [
+        "On targeted auto-receive failure, the app shows a toast or inline warning that the item remains in queue",
+        "Successful targeted text and image receives still update Clipboard and file receives still save to Downloads",
+        "SSE disconnect and reconnect events are logged for diagnostics",
+        "dotnet build succeeds on a Windows host",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-075A",
+      "title": "Android: expose foreground receiver status for targeted auto-delivery",
+      "description": "As an Android user, I want the app to indicate whether the foreground service is currently able to auto-receive targeted clips so I know whether direct delivery is armed.",
+      "acceptanceCriteria": [
+        "Foreground service or settings UI exposes receiver status based on active SSE health",
+        "Status distinguishes connected, reconnecting, and unavailable states",
+        "./gradlew assembleDebug succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-075B",
+      "title": "Android: preserve queue fallback when targeted auto-delivery fails",
+      "description": "As an Android receiver, I want targeted clips to stay manually recoverable if auto-delivery fails because the service, auth, or connectivity is not healthy.",
+      "acceptanceCriteria": [
+        "On targeted auto-delivery failure, the app shows that the clip remains available in queue",
+        "Queue UI distinguishes fallback items from normal queue items",
+        "Successful targeted text receives still update ClipboardManager and file receives still save to Downloads",
+        "./gradlew assembleDebug succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-076",
+      "title": "Shared UX: label queue mode versus targeted auto-delivery mode",
+      "description": "As a user, I want the product to clearly distinguish queue send from targeted auto-delivery so the behavior is understandable before and after each send.",
+      "acceptanceCriteria": [
+        "UI labels queue mode and targeted auto-delivery mode explicitly across macOS, Windows, and Android",
+        "Send feedback distinguishes delivered automatically, waiting for target device, and delivered to queue fallback",
+        "Queue UI marks fallback items distinctly from untargeted queue items",
+        "Verify in browser using dev-browser skill",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": true,
+      "notes": ""
+    }
+  ]
+}

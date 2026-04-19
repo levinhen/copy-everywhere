@@ -4,16 +4,14 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Source of truth
 
-- Active iteration:
-  - PRD doc: [tasks/prd-targeted-auto-delivery-reliability.md](tasks/prd-targeted-auto-delivery-reliability.md)
-  - Machine-readable PRD: [prd.json](prd.json) and [scripts/ralph/prd.json](scripts/ralph/prd.json)
-  - Progress log: [scripts/ralph/progress.txt](scripts/ralph/progress.txt)
-- Four earlier iterations have shipped and are now archived:
+- There is currently no active iteration PRD. Start a new PRD before resuming Ralph-driven story work.
+- Five earlier iterations have shipped and are now archived:
   - **MVP (US-001 … US-017)** under [archive/mvp/](archive/mvp/) — initial clipboard-relay feature set.
   - **Queue + frictionless UX (US-018 … US-034)** under [archive/queue-and-frictionless-ux/](archive/queue-and-frictionless-ux/) — device registration, targeted queue, SSE push, drag-and-drop, auto-receive.
   - **LAN & Bluetooth (US-035 … US-050)** under [archive/lan-and-bluetooth/](archive/lan-and-bluetooth/) — LAN self-hosted server, mDNS discovery, MenuBarExtra host app, Bluetooth RFCOMM peer-to-peer mode.
   - **Android Client (US-051 … US-068)** under [archive/android-client/](archive/android-client/) — Kotlin + Jetpack Compose Android client with LAN server mode, Bluetooth RFCOMM, share sheet, foreground service, boot receiver.
-- The human-readable root `prd.json` may mirror the active iteration, but the Ralph loop reads from [scripts/ralph/ralph.sh](scripts/ralph/ralph.sh), which consumes [scripts/ralph/prd.json](scripts/ralph/prd.json) and [scripts/ralph/progress.txt](scripts/ralph/progress.txt).
+  - **Targeted Auto-Delivery Reliability (US-069A … US-076)** under [archive/targeted-auto-delivery-reliability/](archive/targeted-auto-delivery-reliability/) — explicit targeted delivery state, receiver health, fallback recovery, and cross-platform delivery UX.
+- When an iteration is active, the Ralph loop reads from [scripts/ralph/ralph.sh](scripts/ralph/ralph.sh), which consumes [scripts/ralph/prd.json](scripts/ralph/prd.json) and [scripts/ralph/progress.txt](scripts/ralph/progress.txt).
 - This repo is driven by the Ralph autonomous agent loop ([scripts/ralph/ralph.sh](scripts/ralph/ralph.sh) + [scripts/ralph/CLAUDE.md](scripts/ralph/CLAUDE.md)). One commit ≈ one user story; commit messages follow `feat: [US-XXX] - [Title]`. The hard-won "do this / don't do that" list lives in the **Conventions and gotchas** section below — add to it (don't replace) when you discover a new reusable pattern.
 
 ## User workflow preference

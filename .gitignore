@@ -11,7 +11,12 @@ scripts/ralph/
 
 # Ralph runtime state
 progress.txt
-archive/
+archive/*
+!archive/targeted-auto-delivery-reliability/
+archive/targeted-auto-delivery-reliability/*
+!archive/targeted-auto-delivery-reliability/prd-targeted-auto-delivery-reliability.md
+!archive/targeted-auto-delivery-reliability/prd.json
+!archive/targeted-auto-delivery-reliability/progress.txt
 
 # Server runtime data (SQLite DB + uploaded files)
 server/data/
