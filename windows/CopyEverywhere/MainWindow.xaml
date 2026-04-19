@@ -66,10 +66,28 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
     <Grid Margin="16">
         <StackPanel>
-            <!-- Header -->
-            <TextBlock Text="CopyEverywhere" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
-            <TextBlock Text="Cross-device clipboard &amp; file transfer" Foreground="Gray" FontSize="11" Margin="0,0,0,16"/>
+            <!-- Header with settings toggle -->
+            <Grid Margin="0,0,0,16">
+                <StackPanel HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <TextBlock Text="CopyEverywhere" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Text="Cross-device clipboard &amp; file transfer" Foreground="Gray" FontSize="11"/>
+                </StackPanel>
+                <Button x:Name="GearButton"
+                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Width="32" Height="32"
+                        Background="Transparent" BorderThickness="0"
+                        Cursor="Hand"
+                        ToolTip="Settings"
+                        Click="GearButton_Click">
+                    <TextBlock x:Name="GearButtonIcon"
+                               Text="&#xE713;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="18"/>
+                </Button>
+            </Grid>
 
+            <!-- Settings (gated by gear button) -->
+            <StackPanel x:Name="ConfigSectionsPanel" Visibility="Collapsed">
             <!-- Server Configuration -->
             <TextBlock Text="Server Configuration" Style="{StaticResource SectionHeader}"/>
 
@@ -390,8 +408,8 @@
                 </StackPanel>
             </StackPanel>
 
-            <!-- Separator before main content -->
-            <Separator Margin="0,4,0,16"/>
+            </StackPanel>
+            <!-- /ConfigSectionsPanel -->
 
             <!-- Send Clipboard Section -->
             <StackPanel x:Name="ClipboardPanel" Visibility="Collapsed">
@@ -609,9 +627,10 @@
 
             <!-- Not configured placeholder -->
             <TextBlock x:Name="MainPanelPlaceholder"
-                       Text="Configure server connection above to get started."
+                       Text="Click the gear icon at the top right to configure your connection."
                        Foreground="Gray"
                        FontSize="12"
+                       TextWrapping="Wrap"
                        HorizontalAlignment="Center"/>
         </StackPanel>
     </Grid>

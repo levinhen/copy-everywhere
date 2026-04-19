@@ -18,4 +18,32 @@
     <PackageReference Include="Zeroconf" Version="3.6.11" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <GoServerSource>$(MSBuildThisFileDirectory)..\..\server</GoServerSource>
+    <GoServerOutput>$(OutDir)copyeverywhere-server.exe</GoServerOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <GoServerInputs Include="$(GoServerSource)\**\*.go" Exclude="$(GoServerSource)\**\*_test.go" />
+    <GoServerInputs Include="$(GoServerSource)\go.mod" />
+    <GoServerInputs Include="$(GoServerSource)\go.sum" />
+  </ItemGroup>
+
+  <Target Name="BuildGoServer" BeforeTargets="Build"
+          Inputs="@(GoServerInputs)"
+          Outputs="$(GoServerOutput)">
+    <Exec Command="go version" IgnoreExitCode="true" ConsoleToMSBuild="true"
+          StandardOutputImportance="Low" StandardErrorImportance="Low">
+      <Output TaskParameter="ExitCode" PropertyName="_GoExitCode" />
+    </Exec>
+    <Warning Condition=" '$(_GoExitCode)' != '0' "
+             Text="Go toolchain not found in PATH — skipping copyeverywhere-server.exe build. Install Go from https://go.dev/dl/ to enable the embedded server." />
+    <Message Condition=" '$(_GoExitCode)' == '0' " Importance="High"
+             Text="go build -> $(GoServerOutput)" />
+    <Exec Condition=" '$(_GoExitCode)' == '0' "
+          Command='go build -o "$(GoServerOutput)" .'
+          WorkingDirectory="$(GoServerSource)"
+          EnvironmentVariables="GOOS=windows;GOARCH=amd64" />
+  </Target>
+
 </Project>

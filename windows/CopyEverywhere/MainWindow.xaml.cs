@@ -65,6 +65,11 @@ public partial class MainWindow : Window
     private bool _isScanning;
     private List<DeviceInformation> _discoveredBtDevices = new();
 
+    // Settings view toggle (gear button)
+    private bool _inSettingsView;
+    private const string GearGlyph = "\uE713";   // Settings
+    private const string BackGlyph = "\uE72B";   // ChevronLeft
+
     public MainWindow(ServerConfig serverConfig, ServerProcess serverProcess)
     {
         _serverConfig = serverConfig;
@@ -92,7 +97,11 @@ public partial class MainWindow : Window
         // PasswordBox doesn't support binding, so set manually
         AccessTokenBox.Password = _configStore.AccessToken;
 
+        // First-launch users land on the settings view; configured users land on the main panel.
+        _inSettingsView = !_configStore.IsConfigured && _configStore.TransferMode == TransferMode.LanServer;
+
         UpdateMainPanelState();
+        UpdateViewMode();
         UpdateDeviceInfoDisplay();
         UpdateAccessTokenVisibility();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
@@ -2133,33 +2142,64 @@ public partial class MainWindow : Window
         var isBtMode = _configStore.TransferMode == TransferMode.Bluetooth;
         var showPanel = isBtMode || _configStore.IsConfigured;
 
+        // Background services run independent of which view (settings vs main) is on screen,
+        // so SSE/queue updates keep flowing while the user is on the settings page.
+        if (showPanel && !isBtMode)
+        {
+            StartQueuePolling();
+            _ = LoadDeviceListAsync();
+            StartSSE();
+        }
+        else if (!showPanel)
+        {
+            StopQueuePolling();
+            StopSSE();
+        }
+
+        // Visibility for the main panel itself is driven by UpdateViewMode().
+        if (_inSettingsView) return;
+
         if (showPanel)
         {
             MainPanelPlaceholder.Visibility = Visibility.Collapsed;
             ClipboardPanel.Visibility = Visibility.Visible;
             RefreshClipboardPreview();
 
-            // Toggle queue vs BT status sections
             LanQueueSection.Visibility = isBtMode ? Visibility.Collapsed : Visibility.Visible;
             BtStatusSection.Visibility = isBtMode ? Visibility.Visible : Visibility.Collapsed;
 
             if (isBtMode)
-            {
                 UpdateBtStatusPanel();
-            }
-            else
-            {
-                StartQueuePolling();
-                _ = LoadDeviceListAsync();
-                StartSSE();
-            }
         }
         else
         {
             MainPanelPlaceholder.Visibility = Visibility.Visible;
             ClipboardPanel.Visibility = Visibility.Collapsed;
-            StopQueuePolling();
-            StopSSE();
+        }
+    }
+
+    private void GearButton_Click(object sender, RoutedEventArgs e)
+    {
+        _inSettingsView = !_inSettingsView;
+        UpdateViewMode();
+    }
+
+    private void UpdateViewMode()
+    {
+        if (_inSettingsView)
+        {
+            ConfigSectionsPanel.Visibility = Visibility.Visible;
+            ClipboardPanel.Visibility = Visibility.Collapsed;
+            MainPanelPlaceholder.Visibility = Visibility.Collapsed;
+            GearButtonIcon.Text = BackGlyph;
+            GearButton.ToolTip = "Back";
+        }
+        else
+        {
+            ConfigSectionsPanel.Visibility = Visibility.Collapsed;
+            GearButtonIcon.Text = GearGlyph;
+            GearButton.ToolTip = "Settings";
+            UpdateMainPanelState();
         }
     }
 
