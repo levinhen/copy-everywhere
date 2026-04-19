@@ -228,6 +228,24 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         _serverAuthRequired.value = server.authRequired
     }
 
+    fun useManualLanFallback() {
+        viewModelScope.launch {
+            configStore.useManualLanFallback()
+        }
+    }
+
+    fun isSelectedDiscoveredServer(
+        currentHostUrl: String,
+        selectedServer: StoredLanServerSelection?,
+        server: DiscoveredServer
+    ): Boolean {
+        return configStore.isSelectedDiscoveredServer(
+            currentHostUrl = currentHostUrl,
+            selectedServer = selectedServer,
+            server = server
+        )
+    }
+
     // --- Bluetooth scanning and pairing ---
 
     @SuppressLint("MissingPermission")

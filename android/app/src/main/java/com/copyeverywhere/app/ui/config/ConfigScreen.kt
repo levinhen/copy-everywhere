@@ -60,7 +60,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.copyeverywhere.app.data.DiscoveredServer
+import com.copyeverywhere.app.data.LanEndpointSource
 import com.copyeverywhere.app.data.PairedBluetoothDevice
+import com.copyeverywhere.app.data.StoredLanServerSelection
 import com.copyeverywhere.app.data.TransferMode
 import com.copyeverywhere.app.service.LanReceiverHealth
 import com.copyeverywhere.app.service.LanReceiverStatus
@@ -82,6 +84,8 @@ fun ConfigScreen(
     val discoveredServers by viewModel.discoveredServers.collectAsState()
     val transferMode by viewModel.transferMode.collectAsState()
     val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
+    val lanEndpointSource by viewModel.lanEndpointSource.collectAsState()
+    val selectedLanServer by viewModel.selectedLanServer.collectAsState()
 
     Scaffold(
         topBar = {
@@ -175,6 +179,14 @@ fun ConfigScreen(
 
                 LanReceiverHealthCard(health = lanReceiverHealth)
 
+                LanEndpointSourceCard(
+                    source = lanEndpointSource,
+                    selectedServer = selectedLanServer,
+                    discoveredServerCount = discoveredServers.size,
+                    manualHostUrl = hostUrl,
+                    onUseManualFallback = { viewModel.useManualLanFallback() }
+                )
+
                 // Host URL
                 OutlinedTextField(
                     value = hostUrl,
@@ -188,6 +200,15 @@ fun ConfigScreen(
                 // Discovered Servers
                 DiscoveredServersList(
                     servers = discoveredServers,
+                    selectedServer = selectedLanServer,
+                    currentHostUrl = hostUrl,
+                    isSelected = { server ->
+                        viewModel.isSelectedDiscoveredServer(
+                            currentHostUrl = hostUrl,
+                            selectedServer = selectedLanServer,
+                            server = server
+                        )
+                    },
                     onSelect = { viewModel.selectDiscoveredServer(it) }
                 )
 
@@ -491,6 +512,9 @@ private fun LanReceiverHealthCard(health: LanReceiverHealth) {
 @Composable
 private fun DiscoveredServersList(
     servers: List<DiscoveredServer>,
+    selectedServer: StoredLanServerSelection?,
+    currentHostUrl: String,
+    isSelected: (DiscoveredServer) -> Boolean,
     onSelect: (DiscoveredServer) -> Unit
 ) {
     if (servers.isEmpty()) {
@@ -512,13 +536,25 @@ private fun DiscoveredServersList(
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (servers.size > 1 && selectedServer == null && currentHostUrl.isBlank()) {
+            Text(
+                text = "Multiple servers are available. Pick one here or keep using a manual URL.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         servers.forEach { server ->
+            val selected = isSelected(server)
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onSelect(server) },
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    containerColor = if (selected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant
+                    }
                 )
             ) {
                 Row(
@@ -535,10 +571,30 @@ private fun DiscoveredServersList(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = server.name,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = server.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (selected) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                                    shape = MaterialTheme.shapes.small
+                                ) {
+                                    Text(
+                                        text = "Selected",
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
+                            }
+                        }
                         Text(
                             text = buildString {
                                 append("${server.host}:${server.port}")
@@ -546,11 +602,101 @@ private fun DiscoveredServersList(
                                 server.authRequired?.let { auth ->
                                     append(if (auth) " \u00B7 auth required" else " \u00B7 no auth")
                                 }
+                                server.serverId?.takeIf { it.isNotBlank() }?.let { append(" \u00B7 id $it") }
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LanEndpointSourceCard(
+    source: LanEndpointSource,
+    selectedServer: StoredLanServerSelection?,
+    discoveredServerCount: Int,
+    manualHostUrl: String,
+    onUseManualFallback: () -> Unit
+) {
+    val title = when (source) {
+        LanEndpointSource.AutoDiscovered -> "Current source: auto discovered"
+        LanEndpointSource.RestoredSelection -> "Current source: restored selection"
+        LanEndpointSource.ManualFallback -> "Current source: manual fallback"
+    }
+    val detail = when (source) {
+        LanEndpointSource.AutoDiscovered -> {
+            if (selectedServer != null) {
+                "Using ${selectedServer.name} from LAN discovery. This updates automatically if its IP changes."
+            } else {
+                "Using the only discovered LAN server."
+            }
+        }
+        LanEndpointSource.RestoredSelection -> {
+            if (selectedServer != null) {
+                "Restored ${selectedServer.name} by server ID after discovery matched it again."
+            } else {
+                "A previously selected LAN server was restored from discovery."
+            }
+        }
+        LanEndpointSource.ManualFallback -> {
+            when {
+                manualHostUrl.isBlank() && discoveredServerCount == 0 ->
+                    "No LAN server selected yet. Discovery will keep scanning in the background."
+                manualHostUrl.isBlank() ->
+                    "Choose a discovered server below or enter a manual URL."
+                else ->
+                    "Using the manual Host URL. Discovery will not replace it unless you pick a discovered server."
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            selectedServer?.let { server ->
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "${server.name} \u00B7 ${server.host}:${server.port} \u00B7 id ${server.serverId}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (discoveredServerCount > 1 && selectedServer == null && manualHostUrl.isBlank()) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = "More than one LAN server is available, so the app is waiting for you to choose instead of auto-picking one.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (source != LanEndpointSource.ManualFallback) {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(onClick = onUseManualFallback) {
+                    Icon(Icons.Default.LinkOff, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Use Manual URL Instead")
                 }
             }
         }
