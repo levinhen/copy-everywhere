@@ -28,7 +28,15 @@ enum class LanEndpointSource(val wireValue: String) {
 
     companion object {
         fun fromWireValue(value: String?): LanEndpointSource =
-            entries.firstOrNull { it.wireValue == value } ?: ManualFallback
+            when (value) {
+                AutoDiscovered.wireValue,
+                AutoDiscovered.name -> AutoDiscovered
+                RestoredSelection.wireValue,
+                RestoredSelection.name -> RestoredSelection
+                ManualFallback.wireValue,
+                ManualFallback.name -> ManualFallback
+                else -> ManualFallback
+            }
     }
 }
 
@@ -132,6 +140,79 @@ class ConfigStore(private val context: Context) {
         }
     }
 
+    suspend fun selectDiscoveredServer(
+        server: DiscoveredServer,
+        source: LanEndpointSource = LanEndpointSource.RestoredSelection
+    ) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.HOST_URL] = buildServerUrl(server.host, server.port)
+            prefs[Keys.LAN_ENDPOINT_SOURCE] = source.wireValue
+            if (!server.serverId.isNullOrBlank()) {
+                prefs[Keys.SELECTED_LAN_SERVER] = gson.toJson(
+                    StoredLanServerSelection(
+                        serverId = server.serverId,
+                        name = server.name,
+                        host = server.host,
+                        port = server.port,
+                        source = source
+                    )
+                )
+            } else {
+                prefs.remove(Keys.SELECTED_LAN_SERVER)
+            }
+        }
+    }
+
+    suspend fun updateManualHostUrl(url: String) {
+        val trimmedUrl = normalizeHostUrl(url)
+        context.dataStore.edit { prefs ->
+            prefs[Keys.HOST_URL] = trimmedUrl
+
+            val selectedServer = prefs[Keys.SELECTED_LAN_SERVER]?.let { json ->
+                runCatching { gson.fromJson(json, StoredLanServerSelection::class.java) }.getOrNull()
+            }
+
+            if (trimmedUrl.isBlank()) {
+                prefs.remove(Keys.SELECTED_LAN_SERVER)
+                prefs[Keys.LAN_ENDPOINT_SOURCE] = LanEndpointSource.ManualFallback.wireValue
+                return@edit
+            }
+
+            if (selectedServer == null) {
+                prefs[Keys.LAN_ENDPOINT_SOURCE] = LanEndpointSource.ManualFallback.wireValue
+                return@edit
+            }
+
+            val selectedUrl = buildServerUrl(selectedServer.host, selectedServer.port)
+            if (!trimmedUrl.equals(normalizeHostUrl(selectedUrl), ignoreCase = true)) {
+                prefs.remove(Keys.SELECTED_LAN_SERVER)
+                prefs[Keys.LAN_ENDPOINT_SOURCE] = LanEndpointSource.ManualFallback.wireValue
+            }
+        }
+    }
+
+    suspend fun useManualLanFallback() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(Keys.SELECTED_LAN_SERVER)
+            prefs[Keys.LAN_ENDPOINT_SOURCE] = LanEndpointSource.ManualFallback.wireValue
+        }
+    }
+
+    fun isSelectedDiscoveredServer(
+        currentHostUrl: String,
+        selectedServer: StoredLanServerSelection?,
+        server: DiscoveredServer
+    ): Boolean {
+        if (!server.serverId.isNullOrBlank() && !selectedServer?.serverId.isNullOrBlank()) {
+            return server.serverId == selectedServer?.serverId
+        }
+
+        return normalizeHostUrl(currentHostUrl).equals(
+            normalizeHostUrl(buildServerUrl(server.host, server.port)),
+            ignoreCase = true
+        )
+    }
+
     val pairedBluetoothDevices: Flow<List<PairedBluetoothDevice>> = context.dataStore.data.map {
         val json = it[Keys.PAIRED_BLUETOOTH_DEVICES] ?: "[]"
         try {
@@ -187,4 +268,10 @@ class ConfigStore(private val context: Context) {
     fun setAccessToken(token: String) {
         encryptedPrefs.edit().putString("access_token", token).apply()
     }
+
+    private fun normalizeHostUrl(value: String): String =
+        value.trim().trimEnd('/')
+
+    private fun buildServerUrl(host: String, port: Int): String =
+        "http://$host:$port"
 }

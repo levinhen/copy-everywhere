@@ -147,7 +147,7 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateHostUrl(url: String) {
-        viewModelScope.launch { configStore.setHostUrl(url) }
+        viewModelScope.launch { configStore.updateManualHostUrl(url) }
     }
 
     fun updateDeviceName(name: String) {
@@ -228,21 +228,11 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectDiscoveredServer(server: DiscoveredServer) {
-        val url = "http://${server.host}:${server.port}"
         viewModelScope.launch {
-            configStore.setHostUrl(url)
-            configStore.setLanEndpointSource(LanEndpointSource.RestoredSelection)
-            server.serverId?.let {
-                configStore.setSelectedLanServer(
-                    StoredLanServerSelection(
-                        serverId = it,
-                        name = server.name,
-                        host = server.host,
-                        port = server.port,
-                        source = LanEndpointSource.RestoredSelection
-                    )
-                )
-            }
+            configStore.selectDiscoveredServer(
+                server = server,
+                source = LanEndpointSource.RestoredSelection
+            )
         }
         _serverAuthRequired.value = server.authRequired
     }

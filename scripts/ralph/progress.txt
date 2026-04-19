@@ -10,6 +10,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - On Windows LAN config, route discovered selection, manual Host URL edits, and save-time normalization through `ConfigStore` helpers so `SelectedLanServer.ServerId` stays authoritative while `HostUrl` remains only the last-known/manual endpoint.
 - On Windows startup restore, keep mDNS browsing running from launch but apply discovery-driven HostUrl rewrites only while `TransferMode == LanServer`; restore by `SelectedLanServer.ServerId`, and only auto-pick when discovery finds exactly one server and there is no saved/manual URL fallback.
 - On Windows LAN config screens, derive discovery guidance from `LanEndpointSource`, `SelectedLanServer`, and current Bonjour result count, and expose an explicit manual-fallback action instead of making users edit `HostUrl` just to clear discovered selection state.
+- On Android LAN config, persist discovered selection and manual Host URL edits through `ConfigStore` helpers so `StoredLanServerSelection.serverId` remains the durable match key, snake_case source values stay compatible on disk, and manual text edits clear stale discovered selection state before later restore/UI stories build on it.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -118,4 +119,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - Explicit manual fallback needs its own helper because users may want to keep the same URL text while discarding the discovered `server_id` binding.
   - Useful context
   - `UseManualLanFallback()` now gives later fallback/reliability stories a single UI-safe hook for clearing discovered selection metadata before save.
+---
+## 2026-04-19 12:00 CST - US-094A
+- Persisted Android LAN discovered selections through new `ConfigStore` helpers so `server_id`, last-known display metadata, and `LanEndpointSource` now stay in sync, while manual Host URL edits clear stale discovered selection state back to `manual_fallback`.
+- Files changed: `android/app/src/main/java/com/copyeverywhere/app/data/ConfigStore.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/liyunhan/Library/Android/sdk ./gradlew assembleDebug` passed; `git diff --check` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - Android LAN selection state stays coherent when discovered selection, manual Host URL edits, and future manual-fallback actions all route through `ConfigStore` helper methods instead of ad hoc DataStore writes in the ViewModel.
+  - Gotchas encountered
+  - `LanEndpointSource` now needs compatibility parsing for both the shared snake_case contract values and any older enum-name strings already on disk, otherwise persisted discovery state silently falls back to manual mode after upgrades.
+  - Useful context
+  - `ConfigStore.selectDiscoveredServer(...)`, `updateManualHostUrl(...)`, and `isSelectedDiscoveredServer(...)` are now in place for `US-094B` and `US-094C` to build startup restore logic and selection highlighting without reworking persistence again.
 ---
