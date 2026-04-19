@@ -60,6 +60,51 @@ struct MainPanelView: View {
                     }
                 }
             } else {
+                if let warning = configStore.selectedTargetFallbackWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
+                if let warning = configStore.autoReceiveWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .foregroundColor(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
+                if configStore.transferMode == .lanServer {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(configStore.lanDeliveryModeTitle)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Text(configStore.lanDeliveryModeDetail)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(Color.accentColor.opacity(0.08))
+                    .cornerRadius(8)
+                }
+
                 // Clipboard preview section
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Clipboard")
@@ -115,9 +160,12 @@ struct MainPanelView: View {
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
-                                Text("Sent successfully!")
+                                Text(configStore.transferMode == .lanServer ? "Delivery request sent" : "Bluetooth transfer sent")
                                     .foregroundColor(.green)
                             }
+                            Text(configStore.sendSuccessDetail)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                             HStack {
                                 Text("Clip ID:")
                                     .foregroundColor(.secondary)
@@ -285,9 +333,12 @@ struct MainPanelView: View {
                             HStack {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundColor(.green)
-                                Text("File sent!")
+                                Text(configStore.transferMode == .lanServer ? "File delivery request sent" : "Bluetooth file sent")
                                     .foregroundColor(.green)
                             }
+                            Text(configStore.sendSuccessDetail)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
                             Group {
                                 HStack {
                                     Text("Clip ID:")
@@ -405,7 +456,7 @@ struct MainPanelView: View {
                     // Server queue section
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Queue")
+                            Text("Queue Mode & Recovery")
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                             Spacer()
@@ -574,11 +625,23 @@ struct MainPanelView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                HStack(spacing: 4) {
-                    Text(configStore.formatBytes(item.sizeBytes))
+                if let badgeLabel = item.deliveryState.badgeLabel {
+                    Text(badgeLabel)
                         .font(.caption2)
-                        .foregroundColor(.secondary)
-                    Text(item.age)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.14))
+                        .cornerRadius(999)
+                }
+
+                HStack(spacing: 4) {
+                    Text(
+                        item.deliveryState == .targetedFallback
+                            ? "Automatic delivery missed; click Receive to recover"
+                            : "\(configStore.formatBytes(item.sizeBytes)) • \(item.age)"
+                    )
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }

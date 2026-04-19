@@ -10,19 +10,78 @@ struct ClipResult {
 }
 
 struct DeviceInfo: Identifiable, Equatable, Hashable {
+    enum ReceiverStatus: String, Equatable, Hashable {
+        case online
+        case degraded
+        case offline
+
+        init(serverValue: String?) {
+            switch serverValue {
+            case "online":
+                self = .online
+            case "degraded":
+                self = .degraded
+            default:
+                self = .offline
+            }
+        }
+
+        var label: String {
+            switch self {
+            case .online:
+                return "Online"
+            case .degraded:
+                return "Degraded"
+            case .offline:
+                return "Offline"
+            }
+        }
+    }
+
     let id: String
     let name: String
     let platform: String
     let lastSeenAt: Date
+    let receiverStatus: ReceiverStatus
+}
+
+enum SSEConnectionState: Equatable {
+    case disconnected
+    case reconnecting
+    case connected
 }
 
 struct QueueItem: Identifiable, Equatable {
+    enum DeliveryState: Equatable {
+        case queue
+        case targetedFallback
+
+        init(serverValue: String?) {
+            switch serverValue {
+            case "targeted_fallback":
+                self = .targetedFallback
+            default:
+                self = .queue
+            }
+        }
+
+        var badgeLabel: String? {
+            switch self {
+            case .queue:
+                return nil
+            case .targetedFallback:
+                return "Queue fallback"
+            }
+        }
+    }
+
     let id: String
     let type: String
     let filename: String?
     let sizeBytes: Int64
     let createdAt: Date
     let expiresAt: Date
+    let deliveryState: DeliveryState
 
     var typeIcon: String {
         switch type {
@@ -75,9 +134,12 @@ final class ConfigStore: ObservableObject {
     @Published var toastMessage: String? = nil
     @Published var queueItems: [QueueItem] = []
     @Published var queueError: String? = nil
+    @Published var autoReceiveWarning: String? = nil
     @Published var availableDevices: [DeviceInfo] = []
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
+    @Published var sseConnectionState: SSEConnectionState = .disconnected
+    @Published var sseStatusDetail: String = "Configure a LAN server to enable targeted auto-delivery."
 
     // Bluetooth state
     @Published var transferMode: TransferMode = .lanServer
@@ -99,6 +161,67 @@ final class ConfigStore: ObservableObject {
         case .bluetooth:
             return bluetoothConnectionStatus == .connected
                 && bluetoothService.activeSession?.isHandshakeComplete == true
+        }
+    }
+
+    var selectedTargetDevice: DeviceInfo? {
+        guard let targetDeviceID else { return nil }
+        return availableDevices.first { $0.id == targetDeviceID }
+    }
+
+    var selectedTargetFallbackWarning: String? {
+        guard transferMode == .lanServer, let device = selectedTargetDevice else { return nil }
+
+        switch device.receiverStatus {
+        case .online:
+            return nil
+        case .degraded:
+            return "\(device.name) is reconnecting or stale. This send may fall back to the queue instead of auto-delivering."
+        case .offline:
+            return "\(device.name) is offline for targeted auto-delivery. This send will likely wait in the queue until they reconnect or receive it manually."
+        }
+    }
+
+    var lanDeliveryModeTitle: String {
+        guard transferMode == .lanServer else { return "Bluetooth direct" }
+        return selectedTargetDevice == nil ? "Queue mode" : "Targeted auto-delivery"
+    }
+
+    var lanDeliveryModeDetail: String {
+        guard transferMode == .lanServer else {
+            return "Bluetooth sends transfer directly to the connected device."
+        }
+
+        guard let device = selectedTargetDevice else {
+            return "Sends stay in queue mode and remain available for manual receive on any registered device."
+        }
+
+        switch device.receiverStatus {
+        case .online:
+            return "\(device.name) is online. The clip will wait for that device to auto-receive it first."
+        case .degraded:
+            return "\(device.name) looks degraded. Automatic delivery may miss and then fall back to the queue."
+        case .offline:
+            return "\(device.name) is offline. Automatic delivery will likely miss and then fall back to the queue."
+        }
+    }
+
+    var sendSuccessDetail: String {
+        guard transferMode == .lanServer else {
+            return "Bluetooth direct transfer completed to the connected device."
+        }
+
+        guard let device = selectedTargetDevice else {
+            return "Queue mode: the clip is available for manual receive on any device."
+        }
+
+        switch device.receiverStatus {
+        case .online:
+            return "Targeted auto-delivery is waiting for \(device.name) to auto-receive the clip."
+        case .degraded:
+            return "Targeted auto-delivery notified \(device.name), but the clip may fall back to the queue."
+        case .offline:
+            return "Targeted auto-delivery targeted \(device.name), but the clip will likely fall back to the queue."
         }
     }
 
@@ -323,6 +446,10 @@ final class ConfigStore: ObservableObject {
         UserDefaults.standard.set(hostURL, forKey: hostKey)
         UserDefaults.standard.set(accessToken, forKey: tokenKey)
         isConfigured = !hostURL.isEmpty
+        if !isConfigured {
+            sseConnectionState = .disconnected
+            sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
+        }
         if isConfigured {
             Task {
                 await registerDevice()
@@ -365,18 +492,24 @@ final class ConfigStore: ObservableObject {
     }
 
     func clearConfig() {
+        stopSSE()
         UserDefaults.standard.removeObject(forKey: hostKey)
         UserDefaults.standard.removeObject(forKey: tokenKey)
         hostURL = ""
         accessToken = ""
         isConfigured = false
         connectionStatus = .idle
+        sseConnectionState = .disconnected
+        sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
     }
 
     private func loadPersistedConfig() {
         hostURL = UserDefaults.standard.string(forKey: hostKey) ?? ""
         accessToken = UserDefaults.standard.string(forKey: tokenKey) ?? ""
         isConfigured = !hostURL.isEmpty
+        if isConfigured {
+            sseStatusDetail = "Waiting to connect targeted auto-delivery."
+        }
     }
 
     private func setAuthHeader(_ request: inout URLRequest) {
@@ -1437,10 +1570,12 @@ final class ConfigStore: ObservableObject {
                     let filename = json["filename"] as? String
                     let createdAt = isoFormatter.date(from: createdAtStr) ?? Date()
                     let expiresAt = isoFormatter.date(from: expiresAtStr) ?? Date()
+                    let deliveryState = QueueItem.DeliveryState(serverValue: json["delivery_state"] as? String)
 
                     items.append(QueueItem(
                         id: id, type: type, filename: filename,
-                        sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt
+                        sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt,
+                        deliveryState: deliveryState
                     ))
                 }
                 queueItems = items
@@ -1459,7 +1594,7 @@ final class ConfigStore: ObservableObject {
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
-        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(item.id)/raw") else { return }
+        guard let rawURL = rawClipURL(for: item.id, baseURLString: urlString) else { return }
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
@@ -1551,6 +1686,34 @@ final class ConfigStore: ObservableObject {
         }
     }
 
+    private func rawClipURL(for clipID: String, baseURLString: String? = nil) -> URL? {
+        let trimmedBaseURL = (baseURLString ?? hostURL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+
+        guard var components = URLComponents(string: "\(trimmedBaseURL)/api/v1/clips/\(clipID)/raw") else {
+            return nil
+        }
+
+        if !deviceID.isEmpty {
+            components.queryItems = [URLQueryItem(name: "device_id", value: deviceID)]
+        }
+
+        return components.url
+    }
+
+    private func showAutoReceiveWarning(_ message: String) {
+        autoReceiveWarning = message
+        dismissAutoReceiveWarningAfterDelay()
+    }
+
+    private func dismissAutoReceiveWarningAfterDelay() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            autoReceiveWarning = nil
+        }
+    }
+
     // MARK: - Device List
 
     func fetchDevices() async {
@@ -1584,7 +1747,14 @@ final class ConfigStore: ObservableObject {
                 if id == deviceID { continue }
                 let lastSeenAtStr = json["last_seen_at"] as? String ?? ""
                 let lastSeenAt = isoFormatter.date(from: lastSeenAtStr) ?? Date()
-                devices.append(DeviceInfo(id: id, name: name, platform: platform, lastSeenAt: lastSeenAt))
+                let receiverStatus = DeviceInfo.ReceiverStatus(serverValue: json["receiver_status"] as? String)
+                devices.append(DeviceInfo(
+                    id: id,
+                    name: name,
+                    platform: platform,
+                    lastSeenAt: lastSeenAt,
+                    receiverStatus: receiverStatus
+                ))
             }
             availableDevices = devices
         } catch {
@@ -1599,23 +1769,39 @@ final class ConfigStore: ObservableObject {
         // Don't start a second connection
         guard sseTask == nil else { return }
         sseRetryDelay = 1.0
+        sseConnectionState = .reconnecting
+        sseStatusDetail = "Connecting targeted auto-delivery…"
         sseTask = Task { await sseLoop() }
     }
 
     func stopSSE() {
         sseTask?.cancel()
         sseTask = nil
+        sseConnectionState = .disconnected
+        if transferMode != .lanServer {
+            sseStatusDetail = "LAN receiver paused while Bluetooth Direct is active."
+        } else if isConfigured {
+            sseStatusDetail = "Targeted auto-delivery disconnected."
+        } else {
+            sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
+        }
     }
 
     private func sseLoop() async {
         while !Task.isCancelled {
             do {
                 try await connectSSE()
+                if Task.isCancelled { return }
+                sseConnectionState = .reconnecting
+                sseStatusDetail = "Connection lost. Reconnecting targeted auto-delivery…"
             } catch is CancellationError {
                 return
             } catch {
                 // Reconnect with exponential backoff
                 if Task.isCancelled { return }
+                sseConnectionState = .reconnecting
+                let retrySeconds = Int(max(1, sseRetryDelay.rounded()))
+                sseStatusDetail = "Reconnect in \(retrySeconds)s after \(error.localizedDescription)."
                 try? await Task.sleep(nanoseconds: UInt64(sseRetryDelay * 1_000_000_000))
                 if Task.isCancelled { return }
                 sseRetryDelay = min(sseRetryDelay * 2, sseMaxRetryDelay)
@@ -1643,6 +1829,8 @@ final class ConfigStore: ObservableObject {
 
         // Connected successfully — reset backoff
         sseRetryDelay = 1.0
+        sseConnectionState = .connected
+        sseStatusDetail = "Connected for targeted auto-delivery."
 
         var eventType = ""
         var dataBuffer = ""
@@ -1664,6 +1852,8 @@ final class ConfigStore: ObservableObject {
             }
             // Ignore id:, comments (:), etc.
         }
+
+        throw URLError(.networkConnectionLost)
     }
 
     private func handleSSEClipEvent(_ jsonString: String) async {
@@ -1678,7 +1868,7 @@ final class ConfigStore: ObservableObject {
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
-        guard let rawURL = URL(string: "\(urlString)/api/v1/clips/\(clipID)/raw") else { return }
+        guard let rawURL = rawClipURL(for: clipID, baseURLString: urlString) else { return }
 
         var request = URLRequest(url: rawURL)
         request.httpMethod = "GET"
@@ -1688,19 +1878,29 @@ final class ConfigStore: ObservableObject {
         do {
             if clipType == "text" {
                 let (responseData, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                guard httpResponse.statusCode == 200 else {
+                    await handleAutoReceiveFailure(statusCode: httpResponse.statusCode, clipID: clipID)
+                    return
+                }
                 if let text = String(data: responseData, encoding: .utf8) {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
+                    autoReceiveWarning = nil
                     toastMessage = "Received text from sender"
                     dismissToastAfterDelay()
                     AppDelegate.sendNotification(body: "Received text from sender")
                 }
             } else if clipType == "image" {
                 let (responseData, response) = try await URLSession.shared.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                guard httpResponse.statusCode == 200 else {
+                    await handleAutoReceiveFailure(statusCode: httpResponse.statusCode, clipID: clipID)
+                    return
+                }
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setData(responseData, forType: .png)
+                autoReceiveWarning = nil
                 toastMessage = "Received image from sender"
                 dismissToastAfterDelay()
                 AppDelegate.sendNotification(body: "Received image from sender")
@@ -1712,7 +1912,11 @@ final class ConfigStore: ObservableObject {
                 let (tempURL, response) = try await session.download(for: request)
                 session.invalidateAndCancel()
 
-                guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else { return }
+                guard let httpResponse = response as? HTTPURLResponse else { return }
+                guard httpResponse.statusCode == 200 else {
+                    await handleAutoReceiveFailure(statusCode: httpResponse.statusCode, clipID: clipID)
+                    return
+                }
 
                 let downloadsURL = FileManager.default.homeDirectoryForCurrentUser
                     .appendingPathComponent("Downloads")
@@ -1733,6 +1937,7 @@ final class ConfigStore: ObservableObject {
                 }
 
                 try fm.moveItem(at: tempURL, to: destURL)
+                autoReceiveWarning = nil
                 toastMessage = "Saved \(destURL.lastPathComponent) to Downloads"
                 dismissToastAfterDelay()
                 AppDelegate.sendNotification(body: "Saved \(destURL.lastPathComponent) to Downloads")
@@ -1742,8 +1947,19 @@ final class ConfigStore: ObservableObject {
             // Remove from local queue if present
             queueItems.removeAll { $0.id == clipID }
         } catch {
-            // Auto-receive failed silently — the item remains in the queue for manual receive
+            showAutoReceiveWarning("Targeted auto-delivery failed. The clip remains available in Queue for manual receive.")
+            await fetchQueue()
         }
+    }
+
+    private func handleAutoReceiveFailure(statusCode: Int, clipID: String) async {
+        if statusCode == 410 {
+            queueItems.removeAll { $0.id == clipID }
+            return
+        }
+
+        showAutoReceiveWarning("Targeted auto-delivery failed. The clip remains available in Queue for manual receive.")
+        await fetchQueue()
     }
 
     func formatBytes(_ bytes: Int64) -> String {

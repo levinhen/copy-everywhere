@@ -89,7 +89,7 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		Type:           "file",
 		Filename:       &req.Filename,
 		SizeBytes:      req.SizeBytes,
-		Status:         "uploading",
+		Status:         db.ClipStatusUploading,
 		CreatedAt:      now,
 		ExpiresAt:      now.Add(time.Duration(h.TTLHours) * time.Hour),
 		StoragePath:    partsDir,
@@ -238,7 +238,15 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 	}
 
 	// Update clip record
-	if err := h.DB.UpdateClip(uploadID, "ready", info.Size(), finalPath); err != nil {
+	status := db.ClipStatusReady
+	var targetedPendingAt *time.Time
+	if clip.TargetDeviceID != nil {
+		status = db.ClipStatusTargetedPending
+		now := time.Now().UTC()
+		targetedPendingAt = &now
+	}
+
+	if err := h.DB.UpdateClip(uploadID, status, info.Size(), finalPath, targetedPendingAt); err != nil {
 		log.Printf("ERROR: update clip: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		return
@@ -249,6 +257,17 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 
 	// Re-read updated clip
 	clip, _ = h.DB.GetClipByID(uploadID)
+	if clip != nil && clip.TargetDeviceID != nil {
+		targetDeviceID := ""
+		if clip.TargetDeviceID != nil {
+			targetDeviceID = *clip.TargetDeviceID
+		}
+		senderDeviceID := ""
+		if clip.SenderDeviceID != nil {
+			senderDeviceID = *clip.SenderDeviceID
+		}
+		log.Printf("TARGETED: created clip %s status=%s target=%s sender=%s size=%d via chunked upload", clip.ID, clip.Status, targetDeviceID, senderDeviceID, clip.SizeBytes)
+	}
 
 	// Notify SSE subscribers if this clip targets a specific device
 	if clip != nil && clip.TargetDeviceID != nil && h.Broker != nil {
@@ -256,6 +275,7 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 		if clip.Filename != nil {
 			fname = *clip.Filename
 		}
+		log.Printf("TARGETED: notifying device %s for clip %s via SSE", *clip.TargetDeviceID, clip.ID)
 		h.Broker.Notify(*clip.TargetDeviceID, sse.ClipEvent{
 			ClipID:    clip.ID,
 			Type:      clip.Type,

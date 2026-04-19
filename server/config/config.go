@@ -7,26 +7,28 @@ import (
 )
 
 type Config struct {
-	AuthEnabled            bool
-	AccessToken            string
-	Port                   string
-	BindAddress            string
-	StoragePath            string
-	MaxClipSizeMB          int
-	TTLHours               int
-	CleanupIntervalSeconds int
+	AuthEnabled             bool
+	AccessToken             string
+	Port                    string
+	BindAddress             string
+	StoragePath             string
+	MaxClipSizeMB           int
+	TTLHours                int
+	CleanupIntervalSeconds  int
+	TargetedFallbackSeconds int
 }
 
 func Load() *Config {
 	return &Config{
-		AuthEnabled:            getEnvBool("AUTH_ENABLED", false),
-		AccessToken:            getEnv("ACCESS_TOKEN", ""),
-		Port:                   getEnv("PORT", "8080"),
-		BindAddress:            getEnv("BIND_ADDRESS", "0.0.0.0"),
-		StoragePath:            getEnv("STORAGE_PATH", "./data"),
-		MaxClipSizeMB:          getEnvInt("MAX_CLIP_SIZE_MB", 500),
-		TTLHours:               getEnvInt("TTL_HOURS", 1),
-		CleanupIntervalSeconds: getEnvInt("CLEANUP_INTERVAL_SECONDS", 30),
+		AuthEnabled:             getEnvBool("AUTH_ENABLED", false),
+		AccessToken:             getEnv("ACCESS_TOKEN", ""),
+		Port:                    getEnv("PORT", "8080"),
+		BindAddress:             getEnv("BIND_ADDRESS", "0.0.0.0"),
+		StoragePath:             getEnv("STORAGE_PATH", "./data"),
+		MaxClipSizeMB:           getEnvInt("MAX_CLIP_SIZE_MB", 500),
+		TTLHours:                getEnvInt("TTL_HOURS", 1),
+		CleanupIntervalSeconds:  getEnvInt("CLEANUP_INTERVAL_SECONDS", 30),
+		TargetedFallbackSeconds: getEnvInt("TARGETED_FALLBACK_SECONDS", 30),
 	}
 }
 

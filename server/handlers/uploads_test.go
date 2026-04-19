@@ -287,6 +287,12 @@ func TestInitUploadWithDeviceIDs(t *testing.T) {
 	if clip.SenderDeviceID == nil || *clip.SenderDeviceID != sender {
 		t.Errorf("expected sender_device_id=%s, got %v", sender, clip.SenderDeviceID)
 	}
+	if clip.Status != db.ClipStatusUploading {
+		t.Errorf("expected init upload status %q, got %q", db.ClipStatusUploading, clip.Status)
+	}
+	if clip.TargetedPendingAt != nil {
+		t.Error("expected init targeted upload targeted_pending_at to remain nil until completion")
+	}
 }
 
 func TestInitUploadWithoutDeviceIDs(t *testing.T) {
@@ -318,6 +324,68 @@ func TestInitUploadWithoutDeviceIDs(t *testing.T) {
 	}
 	if clip.SenderDeviceID != nil {
 		t.Errorf("expected nil sender_device_id, got %v", clip.SenderDeviceID)
+	}
+	if clip.Status != db.ClipStatusUploading {
+		t.Errorf("expected untargeted init upload status %q, got %q", db.ClipStatusUploading, clip.Status)
+	}
+	if clip.TargetedPendingAt != nil {
+		t.Error("expected untargeted init upload targeted_pending_at to be nil")
+	}
+}
+
+func TestCompleteUploadTargetedKeepsPendingDeliveryState(t *testing.T) {
+	uh, _, r := setupUploadTestHandler(t)
+
+	target := "dev12345"
+	initBody, _ := json.Marshal(initUploadRequest{
+		Filename:       "targeted.dat",
+		SizeBytes:      600,
+		ChunkSize:      300,
+		TargetDeviceID: &target,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/uploads/init", bytes.NewReader(initBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("init: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var initResp initUploadResponse
+	json.Unmarshal(w.Body.Bytes(), &initResp)
+
+	for i := 1; i <= 2; i++ {
+		chunkData := bytes.Repeat([]byte{byte('A' + i - 1)}, 300)
+		req = httptest.NewRequest(http.MethodPut,
+			fmt.Sprintf("/api/v1/uploads/%s/parts/%d", initResp.UploadID, i),
+			bytes.NewReader(chunkData))
+		w = httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("upload part %d: expected 200, got %d: %s", i, w.Code, w.Body.String())
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/v1/uploads/%s/complete", initResp.UploadID), nil)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	clip, err := uh.DB.GetClipByID(initResp.UploadID)
+	if err != nil {
+		t.Fatalf("get clip: %v", err)
+	}
+	if clip.Status != db.ClipStatusTargetedPending {
+		t.Fatalf("expected completed targeted upload status %q, got %q", db.ClipStatusTargetedPending, clip.Status)
+	}
+	if clip.TargetedPendingAt == nil {
+		t.Fatal("expected completed targeted upload targeted_pending_at to be set")
 	}
 }
 

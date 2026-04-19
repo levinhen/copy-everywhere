@@ -144,7 +144,7 @@ func TestListDevices(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var empty []db.Device
+	var empty []map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &empty)
 	if len(empty) != 0 {
 		t.Fatalf("expected 0 devices, got %d", len(empty))
@@ -162,7 +162,7 @@ func TestListDevices(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var devices []db.Device
+	var devices []map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &devices)
 	if len(devices) != 2 {
 		t.Fatalf("expected 2 devices, got %d", len(devices))
@@ -186,10 +186,92 @@ func TestListDevicesResponseShape(t *testing.T) {
 	}
 
 	dev := devices[0]
-	for _, key := range []string{"device_id", "name", "platform", "last_seen_at"} {
+	for _, key := range []string{"device_id", "name", "platform", "last_seen_at", "receiver_status"} {
 		if _, ok := dev[key]; !ok {
 			t.Fatalf("expected key %s in response", key)
 		}
+	}
+
+	if dev["receiver_status"] != "offline" {
+		t.Fatalf("expected offline receiver_status by default, got %v", dev["receiver_status"])
+	}
+}
+
+func TestListDevicesReceiverStatusTransitions(t *testing.T) {
+	h, r := setupDeviceTestHandler(t)
+
+	device, err := h.DB.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	readReceiverStatus := func() string {
+		req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+
+		var devices []map[string]interface{}
+		if err := json.Unmarshal(w.Body.Bytes(), &devices); err != nil {
+			t.Fatalf("unmarshal devices: %v", err)
+		}
+		if len(devices) != 1 {
+			t.Fatalf("expected 1 device, got %d", len(devices))
+		}
+
+		status, _ := devices[0]["receiver_status"].(string)
+		return status
+	}
+
+	if status := readReceiverStatus(); status != "offline" {
+		t.Fatalf("expected offline before subscribe, got %s", status)
+	}
+
+	ch := h.Broker.Subscribe(device.ID)
+	if status := readReceiverStatus(); status != "online" {
+		t.Fatalf("expected online with fresh subscriber, got %s", status)
+	}
+
+	h.Broker.MarkAlive(device.ID)
+	h.Broker.Unsubscribe(device.ID, ch)
+	if status := readReceiverStatus(); status != "offline" {
+		t.Fatalf("expected offline after unsubscribe, got %s", status)
+	}
+}
+
+func TestListDevicesReceiverStatusStaleHeartbeat(t *testing.T) {
+	h, r := setupDeviceTestHandler(t)
+
+	device, err := h.DB.RegisterDevice("Mac", "macos")
+	if err != nil {
+		t.Fatalf("register device: %v", err)
+	}
+
+	now := time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC)
+	h.Broker = sse.NewBrokerWithPresenceTTL(func() time.Time { return now }, 35*time.Second)
+
+	ch := h.Broker.Subscribe(device.ID)
+	defer h.Broker.Unsubscribe(device.ID, ch)
+
+	req := httptest.NewRequest("GET", "/api/v1/devices", nil)
+	w := httptest.NewRecorder()
+
+	now = now.Add(36 * time.Second)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var devices []map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &devices); err != nil {
+		t.Fatalf("unmarshal devices: %v", err)
+	}
+	if devices[0]["receiver_status"] != "degraded" {
+		t.Fatalf("expected degraded receiver_status, got %v", devices[0]["receiver_status"])
 	}
 }
 
@@ -290,6 +372,75 @@ func TestStreamSSEReceivesClipEvent(t *testing.T) {
 	}
 	if event.SizeBytes != 42 {
 		t.Fatalf("expected size_bytes 42, got %d", event.SizeBytes)
+	}
+}
+
+func TestStreamSSEReplaysPendingTargetedClipOnReconnect(t *testing.T) {
+	h, r := setupDeviceTestHandler(t)
+
+	target := "devReplay"
+	filename := "clipboard.txt"
+	if err := h.DB.CreateClip(&db.Clip{
+		ID:             "replay1",
+		Type:           "text",
+		Filename:       &filename,
+		SizeBytes:      12,
+		Status:         db.ClipStatusTargetedPending,
+		CreatedAt:      time.Now().UTC().Add(-time.Minute),
+		ExpiresAt:      time.Now().UTC().Add(time.Hour),
+		TargetDeviceID: &target,
+	}); err != nil {
+		t.Fatalf("create targeted clip: %v", err)
+	}
+
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+
+	readReplayEvent := func() sse.ClipEvent {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/api/v1/devices/"+target+"/stream", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("stream request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		done := make(chan sse.ClipEvent, 1)
+		go func() {
+			for scanner.Scan() {
+				line := scanner.Text()
+				if strings.HasPrefix(line, "data: ") {
+					var event sse.ClipEvent
+					if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
+						t.Errorf("unmarshal replay event: %v", err)
+						return
+					}
+					done <- event
+					return
+				}
+			}
+		}()
+
+		select {
+		case event := <-done:
+			return event
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for replay event")
+			return sse.ClipEvent{}
+		}
+	}
+
+	first := readReplayEvent()
+	second := readReplayEvent()
+
+	if first.ClipID != "replay1" {
+		t.Fatalf("expected first replay clip replay1, got %s", first.ClipID)
+	}
+	if second.ClipID != "replay1" {
+		t.Fatalf("expected second replay clip replay1, got %s", second.ClipID)
 	}
 }
 

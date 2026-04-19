@@ -27,6 +27,7 @@ import com.copyeverywhere.app.data.BluetoothService
 import com.copyeverywhere.app.data.BluetoothSession
 import com.copyeverywhere.app.data.BluetoothTransferHeader
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
+import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.SseClient
 import com.copyeverywhere.app.data.TransferMode
@@ -40,6 +41,17 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+
+enum class LanReceiverStatus {
+    Connected,
+    Reconnecting,
+    Unavailable
+}
+
+data class LanReceiverHealth(
+    val status: LanReceiverStatus,
+    val detail: String
+)
 
 class CopyEverywhereService : Service(), BluetoothService.Listener {
 
@@ -102,6 +114,11 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         sseJob?.cancel()
         bluetoothService?.listener = null
         bluetoothService?.destroy()
+        targetedFallbackNotice.value = null
+        receiverHealth.value = LanReceiverHealth(
+            status = LanReceiverStatus.Unavailable,
+            detail = "Foreground service is not running"
+        )
         releaseWakeLockFully()
         scope.cancel()
         super.onDestroy()
@@ -191,17 +208,37 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
             val deviceId = configStore.deviceId.first()
 
             if (hostUrl.isEmpty() || deviceId.isEmpty()) {
-                updateServiceNotification("Not configured")
+                updateLanReceiverHealth(
+                    LanReceiverStatus.Unavailable,
+                    "Configure host URL and device ID to enable LAN auto-receive"
+                )
                 return@launch
             }
+
+            updateLanReceiverHealth(
+                LanReceiverStatus.Reconnecting,
+                "Connecting to LAN receiver channel..."
+            )
 
             sseClient.connect(
                 hostUrl = hostUrl,
                 accessToken = accessToken,
                 deviceId = deviceId,
                 onEvent = { event -> handleSseEvent(event) },
-                onConnected = { updateServiceNotification("Connected — listening for clips") },
-                onDisconnected = { updateServiceNotification("Reconnecting...") }
+                onConnected = {
+                    updateLanReceiverHealth(
+                        LanReceiverStatus.Connected,
+                        "Connected and ready for targeted auto-delivery"
+                    )
+                },
+                onDisconnected = { retryDelayMs, error ->
+                    val retrySeconds = (retryDelayMs / 1000).coerceAtLeast(1)
+                    val reason = error?.message?.takeIf { it.isNotBlank() } ?: "connection dropped"
+                    updateLanReceiverHealth(
+                        LanReceiverStatus.Reconnecting,
+                        "Reconnecting in ${retrySeconds}s after $reason"
+                    )
+                }
             )
         }
     }
@@ -209,7 +246,10 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     fun stopSse() {
         sseJob?.cancel()
         sseJob = null
-        updateServiceNotification("Disconnected")
+        updateLanReceiverHealth(
+            LanReceiverStatus.Unavailable,
+            "LAN receiver stopped"
+        )
     }
 
     /**
@@ -221,8 +261,11 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         when (mode) {
             TransferMode.LanServer -> {
                 stopBluetoothServer()
+                updateLanReceiverHealth(
+                    LanReceiverStatus.Reconnecting,
+                    "Starting LAN receiver..."
+                )
                 startSse()
-                updateServiceNotification("LAN — Listening for clips...")
             }
             TransferMode.Bluetooth -> {
                 stopSse()
@@ -328,7 +371,14 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         try {
             val hostUrl = configStore.hostUrl.first()
             val accessToken = configStore.getAccessToken()
-            val downloaded = apiClient.downloadClipRaw(hostUrl, accessToken, clip.id)
+            val deviceId = configStore.deviceId.first()
+            val downloaded = apiClient.downloadClipRaw(
+                hostUrl = hostUrl,
+                accessToken = accessToken,
+                clipId = clip.id,
+                deviceId = deviceId
+            )
+            targetedFallbackNotice.value = null
 
             when (downloaded.metadata.type) {
                 "text" -> handleTextClip(downloaded.bytes)
@@ -338,10 +388,17 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
             Log.d(TAG, "Clip already consumed: ${clip.id}")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to process clip ${clip.id}", e)
-            showTransferNotification("Receive failed", "Could not download clip: ${e.message}")
+            val recoveryMessage = buildTargetedFallbackMessage(clip)
+            targetedFallbackNotice.value = recoveryMessage
+            showTransferNotification("Auto-receive failed", recoveryMessage)
         } finally {
             releaseWakeLock()
         }
+    }
+
+    private fun buildTargetedFallbackMessage(clip: ClipResponse): String {
+        val filename = clip.filename.ifBlank { "Clip ${clip.id}" }
+        return "$filename remains available in queue for manual receive"
     }
 
     private fun handleTextClip(bytes: ByteArray) {
@@ -417,6 +474,16 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         showTransferNotificationStatic(this, title, text)
     }
 
+    private fun updateLanReceiverHealth(status: LanReceiverStatus, detail: String) {
+        receiverHealth.value = LanReceiverHealth(status, detail)
+        val headline = when (status) {
+            LanReceiverStatus.Connected -> "LAN receiver connected"
+            LanReceiverStatus.Reconnecting -> "LAN receiver reconnecting"
+            LanReceiverStatus.Unavailable -> "LAN receiver unavailable"
+        }
+        updateServiceNotification("$headline — $detail")
+    }
+
     companion object {
         private const val TAG = "CopyEverywhereService"
         const val CHANNEL_SERVICE = "copyeverywhere_service"
@@ -426,6 +493,14 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         /** Live reference to the running service instance, or null if not running. */
         var instance: CopyEverywhereService? = null
             private set
+
+        val receiverHealth = MutableStateFlow(
+            LanReceiverHealth(
+                status = LanReceiverStatus.Unavailable,
+                detail = "Foreground service is not running"
+            )
+        )
+        val targetedFallbackNotice = MutableStateFlow<String?>(null)
 
         fun start(context: Context) {
             val intent = Intent(context, CopyEverywhereService::class.java)

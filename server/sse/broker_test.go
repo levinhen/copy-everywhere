@@ -73,9 +73,13 @@ func TestUnsubscribeRemoves(t *testing.T) {
 	// Map should be cleaned up
 	b.mu.RLock()
 	_, exists := b.subscribers["dev1"]
+	_, hasPresence := b.presence["dev1"]
 	b.mu.RUnlock()
 	if exists {
 		t.Fatal("expected device entry to be cleaned up")
+	}
+	if hasPresence {
+		t.Fatal("expected device presence to be cleaned up")
 	}
 }
 
@@ -110,5 +114,35 @@ done:
 	}
 	if count > 16 {
 		t.Fatalf("expected at most 16 (buffer size), got %d", count)
+	}
+}
+
+func TestReceiverStatusTransitions(t *testing.T) {
+	now := time.Date(2026, 4, 17, 0, 0, 0, 0, time.UTC)
+	b := NewBrokerWithPresenceTTL(func() time.Time { return now }, 10*time.Second)
+
+	if status := b.ReceiverStatus("dev1"); status != ReceiverStatusOffline {
+		t.Fatalf("expected offline without subscriber, got %s", status)
+	}
+
+	ch := b.Subscribe("dev1")
+
+	if status := b.ReceiverStatus("dev1"); status != ReceiverStatusOnline {
+		t.Fatalf("expected online immediately after subscribe, got %s", status)
+	}
+
+	now = now.Add(11 * time.Second)
+	if status := b.ReceiverStatus("dev1"); status != ReceiverStatusDegraded {
+		t.Fatalf("expected degraded after stale heartbeat, got %s", status)
+	}
+
+	b.MarkAlive("dev1")
+	if status := b.ReceiverStatus("dev1"); status != ReceiverStatusOnline {
+		t.Fatalf("expected online after heartbeat refresh, got %s", status)
+	}
+
+	b.Unsubscribe("dev1", ch)
+	if status := b.ReceiverStatus("dev1"); status != ReceiverStatusOffline {
+		t.Fatalf("expected offline after disconnect, got %s", status)
 	}
 }

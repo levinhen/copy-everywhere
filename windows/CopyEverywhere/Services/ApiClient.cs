@@ -47,6 +47,9 @@ public class ClipResponse
 
     [JsonPropertyName("expires_at")]
     public DateTime ExpiresAt { get; set; }
+
+    [JsonPropertyName("delivery_state")]
+    public string DeliveryState { get; set; } = "queue";
 }
 
 public class ApiClient : IDisposable
@@ -243,11 +246,14 @@ public class ApiClient : IDisposable
     /// Atomically consume a clip via GET /clips/:id/raw.
     /// Returns (bytes, contentType) on success, or null if 410 Gone (already consumed).
     /// </summary>
-    public async Task<(byte[] data, string? contentType)?> ConsumeClipRawAsync(string clipId, CancellationToken ct = default)
+    public async Task<(byte[] data, string? contentType)?> ConsumeClipRawAsync(string clipId, string? deviceId = null, CancellationToken ct = default)
     {
         SetAuthHeader();
 
-        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/{clipId}/raw", ct);
+        var query = string.IsNullOrWhiteSpace(deviceId)
+            ? ""
+            : $"?device_id={Uri.EscapeDataString(deviceId)}";
+        var response = await _httpClient.GetAsync($"{BaseUrl}/api/v1/clips/{clipId}/raw{query}", ct);
         if (response.StatusCode == HttpStatusCode.Gone)
             return null;
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -263,13 +269,16 @@ public class ApiClient : IDisposable
     /// Atomically consume a clip and save it to a file path (for large files).
     /// Returns true on success, false if 410 Gone.
     /// </summary>
-    public async Task<bool> ConsumeClipToFileAsync(string clipId, string savePath, CancellationToken ct = default)
+    public async Task<bool> ConsumeClipToFileAsync(string clipId, string savePath, string? deviceId = null, CancellationToken ct = default)
     {
         using var downloadClient = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
         SetAuthHeader(downloadClient);
+        var query = string.IsNullOrWhiteSpace(deviceId)
+            ? ""
+            : $"?device_id={Uri.EscapeDataString(deviceId)}";
 
         using var response = await downloadClient.GetAsync(
-            $"{BaseUrl}/api/v1/clips/{clipId}/raw",
+            $"{BaseUrl}/api/v1/clips/{clipId}/raw{query}",
             HttpCompletionOption.ResponseHeadersRead,
             ct);
 
@@ -488,6 +497,9 @@ public class DeviceInfo
 
     [JsonPropertyName("last_seen_at")]
     public DateTime LastSeenAt { get; set; }
+
+    [JsonPropertyName("receiver_status")]
+    public string ReceiverStatus { get; set; } = "offline";
 }
 
 public class SSEClipEvent

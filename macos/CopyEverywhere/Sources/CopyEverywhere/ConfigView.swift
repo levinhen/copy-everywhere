@@ -43,6 +43,8 @@ struct ConfigView: View {
                 .textFieldStyle(.roundedBorder)
         }
 
+        receiverStatusSection
+
         // Only show token field when auth is required or unknown
         if configStore.serverAuthRequired != false {
             VStack(alignment: .leading, spacing: 8) {
@@ -87,12 +89,47 @@ struct ConfigView: View {
                     ForEach(configStore.availableDevices) { device in
                         HStack {
                             Text(platformIcon(device.platform))
-                            Text("\(device.name)")
+                            Circle()
+                                .fill(receiverStatusColor(device.receiverStatus))
+                                .frame(width: 8, height: 8)
+                            Text(device.name)
+                            Spacer()
+                            Text(device.receiverStatus.label)
+                                .foregroundColor(receiverStatusColor(device.receiverStatus))
                         }
                         .tag(device.id)
                     }
                 }
                 .labelsHidden()
+
+                if let targetDevice = configStore.selectedTargetDevice {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(receiverStatusColor(targetDevice.receiverStatus))
+                            .frame(width: 8, height: 8)
+                        Text("Targeted auto-delivery to \(targetDevice.name) is \(targetDevice.receiverStatus.label.lowercased()).")
+                            .font(.caption)
+                            .foregroundColor(targetDevice.receiverStatus == .online ? .secondary : receiverStatusColor(targetDevice.receiverStatus))
+                    }
+                } else {
+                    Text("Queue mode keeps clips available for manual receive on any device.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let warning = configStore.selectedTargetFallbackWarning {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
             }
             .onAppear {
                 Task { await configStore.fetchDevices() }
@@ -117,6 +154,33 @@ struct ConfigView: View {
         }
 
         connectionStatusView
+    }
+
+    @ViewBuilder
+    private var receiverStatusSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("This Device Receiver")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(receiverStatusColor)
+                    .frame(width: 8, height: 8)
+                Text(receiverStatusTitle)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                Spacer()
+            }
+
+            Text(configStore.sseStatusDetail)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(receiverStatusColor.opacity(0.1))
+        .cornerRadius(8)
     }
 
     // MARK: - Bluetooth Section
@@ -163,6 +227,39 @@ struct ConfigView: View {
                     .lineLimit(2)
                     .font(.caption)
             }
+        }
+    }
+
+    private var receiverStatusColor: Color {
+        switch configStore.sseConnectionState {
+        case .connected:
+            return .green
+        case .reconnecting:
+            return .orange
+        case .disconnected:
+            return .gray
+        }
+    }
+
+    private var receiverStatusTitle: String {
+        switch configStore.sseConnectionState {
+        case .connected:
+            return "Connected"
+        case .reconnecting:
+            return "Reconnecting"
+        case .disconnected:
+            return "Disconnected"
+        }
+    }
+
+    private func receiverStatusColor(_ status: DeviceInfo.ReceiverStatus) -> Color {
+        switch status {
+        case .online:
+            return .green
+        case .degraded:
+            return .orange
+        case .offline:
+            return .gray
         }
     }
 

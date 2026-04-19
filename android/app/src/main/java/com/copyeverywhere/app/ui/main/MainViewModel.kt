@@ -17,7 +17,10 @@ import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.data.isTargetedFallback
 import com.copyeverywhere.app.service.CopyEverywhereService
+import com.copyeverywhere.app.service.LanReceiverHealth
+import com.copyeverywhere.app.service.LanReceiverStatus
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,6 +44,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
     val transferMode: StateFlow<TransferMode> = configStore.transferMode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TransferMode.LanServer)
+    val lanReceiverHealth: StateFlow<LanReceiverHealth> = CopyEverywhereService.receiverHealth
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            LanReceiverHealth(
+                status = LanReceiverStatus.Unavailable,
+                detail = "Foreground service is not running"
+            )
+        )
+    val targetedFallbackNotice: StateFlow<String?> = CopyEverywhereService.targetedFallbackNotice
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _textInput = MutableStateFlow("")
     val textInput: StateFlow<String> = _textInput.asStateFlow()
@@ -100,7 +114,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _textInput.value = ""
                 _sendStatus.value = SendStatus.Success
-                Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(getApplication(), successToastMessage(isFile = false), Toast.LENGTH_SHORT).show()
                 delay(2000)
                 _sendStatus.value = SendStatus.Idle
             } catch (e: Exception) {
@@ -161,7 +175,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _uploadProgress.value = null
             _sendStatus.value = SendStatus.Success
-            Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Bluetooth direct file sent", Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
@@ -183,7 +197,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val target = targetDeviceId.value
             apiClient.sendFileClip(host, token, contentResolver, uri, sender, target)
             _sendStatus.value = SendStatus.Success
-            Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), successToastMessage(isFile = true), Toast.LENGTH_SHORT).show()
             delay(2000)
             _sendStatus.value = SendStatus.Idle
         } catch (e: Exception) {
@@ -227,7 +241,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     chunkedUploadState = null
                     chunkedUploadUri = null
                     _sendStatus.value = SendStatus.Success
-                    Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(getApplication(), successToastMessage(isFile = true), Toast.LENGTH_SHORT).show()
                     delay(2000)
                     _sendStatus.value = SendStatus.Idle
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -281,7 +295,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         chunkedUploadState = null
                         chunkedUploadUri = null
                         _sendStatus.value = SendStatus.Success
-                        Toast.makeText(getApplication(), "Sent!", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(getApplication(), successToastMessage(isFile = true), Toast.LENGTH_SHORT).show()
                         delay(2000)
                         _sendStatus.value = SendStatus.Idle
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -357,7 +371,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val host = configStore.hostUrl.first()
                 val token = configStore.getAccessToken()
-                val downloaded = apiClient.downloadClipRaw(host, token, clip.id)
+                val device = configStore.deviceId.first()
+                val downloaded = apiClient.downloadClipRaw(host, token, clip.id, deviceId = device)
 
                 when (downloaded.metadata.type) {
                     "text" -> {
@@ -374,9 +389,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Remove from queue
                 _queue.value = _queue.value.filter { it.id != clip.id }
+                if (clip.isTargetedFallback()) {
+                    CopyEverywhereService.targetedFallbackNotice.value = null
+                }
                 _receiveStatus.value = ReceiveStatus.Idle
             } catch (e: ClipAlreadyConsumedException) {
                 _queue.value = _queue.value.filter { it.id != clip.id }
+                if (clip.isTargetedFallback()) {
+                    CopyEverywhereService.targetedFallbackNotice.value = null
+                }
                 _receiveStatus.value = ReceiveStatus.Idle
                 Toast.makeText(getApplication(), "Already consumed", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
@@ -392,6 +413,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         CopyEverywhereService.showTransferNotificationStatic(
             getApplication(), "Transfer error", message
         )
+    }
+
+    fun dismissTargetedFallbackNotice() {
+        CopyEverywhereService.targetedFallbackNotice.value = null
+    }
+
+    private fun successToastMessage(isFile: Boolean): String {
+        return when {
+            transferMode.value == TransferMode.Bluetooth ->
+                if (isFile) "Bluetooth direct file sent" else "Bluetooth direct send complete"
+            targetDeviceId.value.isBlank() ->
+                if (isFile) "Queue mode file ready" else "Queue mode send ready"
+            else ->
+                if (isFile) "Targeted auto-delivery file sent" else "Targeted auto-delivery send ready"
+        }
     }
 
     private fun saveToDownloads(filename: String, mimeType: String, bytes: ByteArray) {

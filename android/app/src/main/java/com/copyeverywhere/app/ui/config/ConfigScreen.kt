@@ -42,6 +42,7 @@ import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -61,6 +62,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.copyeverywhere.app.data.DiscoveredServer
 import com.copyeverywhere.app.data.PairedBluetoothDevice
 import com.copyeverywhere.app.data.TransferMode
+import com.copyeverywhere.app.service.LanReceiverHealth
+import com.copyeverywhere.app.service.LanReceiverStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -78,6 +81,7 @@ fun ConfigScreen(
     val devices by viewModel.devices.collectAsState()
     val discoveredServers by viewModel.discoveredServers.collectAsState()
     val transferMode by viewModel.transferMode.collectAsState()
+    val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
 
     // Start/stop mDNS discovery with screen lifecycle (only in LAN mode)
     DisposableEffect(transferMode) {
@@ -177,6 +181,8 @@ fun ConfigScreen(
                     color = MaterialTheme.colorScheme.primary
                 )
 
+                LanReceiverHealthCard(health = lanReceiverHealth)
+
                 // Host URL
                 OutlinedTextField(
                     value = hostUrl,
@@ -215,6 +221,12 @@ fun ConfigScreen(
                     selectedDeviceId = targetDeviceId,
                     devices = devices.filter { it.deviceId != deviceId },
                     onSelect = { viewModel.updateTargetDeviceId(it) }
+                )
+
+                DeliveryModeCard(
+                    selectedDevice = devices
+                        .filter { it.deviceId != deviceId }
+                        .find { it.deviceId == targetDeviceId }
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -432,6 +444,61 @@ fun ConfigScreen(
 }
 
 @Composable
+private fun LanReceiverHealthCard(health: LanReceiverHealth) {
+    val (containerColor, contentColor, headline) = when (health.status) {
+        LanReceiverStatus.Connected -> Triple(
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            "Receiver connected"
+        )
+        LanReceiverStatus.Reconnecting -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            "Receiver reconnecting"
+        )
+        LanReceiverStatus.Unavailable -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "Receiver unavailable"
+        )
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Surface(
+                color = containerColor,
+                contentColor = contentColor,
+                shape = MaterialTheme.shapes.small
+            ) {
+                Text(
+                    text = headline,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = health.detail,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (health.status == LanReceiverStatus.Reconnecting) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Targeted clips will auto-receive again after the SSE channel reconnects.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun DiscoveredServersList(
     servers: List<DiscoveredServer>,
     onSelect: (DiscoveredServer) -> Unit
@@ -509,7 +576,8 @@ private fun TargetDeviceDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedDevice = devices.find { it.deviceId == selectedDeviceId }
-    val displayText = selectedDevice?.let { "${it.name} (${it.platform})" } ?: if (selectedDeviceId.isNotBlank()) selectedDeviceId else "Select target device"
+    val displayText = selectedDevice?.let { "${it.name} (${it.platform})" }
+        ?: if (selectedDeviceId.isNotBlank()) selectedDeviceId else "Queue mode (any device)"
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -529,6 +597,13 @@ private fun TargetDeviceDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
+            DropdownMenuItem(
+                text = { Text("Queue mode (any device)") },
+                onClick = {
+                    onSelect("")
+                    expanded = false
+                }
+            )
             if (devices.isEmpty()) {
                 DropdownMenuItem(
                     text = { Text("No devices available") },
@@ -538,7 +613,15 @@ private fun TargetDeviceDropdown(
             } else {
                 devices.forEach { device ->
                     DropdownMenuItem(
-                        text = { Text("${device.name} (${device.platform})") },
+                        text = {
+                            Text(
+                                buildString {
+                                    append("${device.name} (${device.platform})")
+                                    append(" • ")
+                                    append(device.receiverStatusLabel())
+                                }
+                            )
+                        },
                         onClick = {
                             onSelect(device.deviceId)
                             expanded = false
@@ -547,6 +630,45 @@ private fun TargetDeviceDropdown(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DeliveryModeCard(
+    selectedDevice: com.copyeverywhere.app.data.Device?
+) {
+    val title = if (selectedDevice == null) "Queue mode" else "Targeted auto-delivery"
+    val detail = if (selectedDevice == null) {
+        "Sends stay in queue mode and remain available for manual receive on any device."
+    } else {
+        when (selectedDevice.receiverStatus) {
+            "online" -> "${selectedDevice.name} is online. Sends wait for that device to auto-receive first."
+            "degraded" -> "${selectedDevice.name} looks degraded. Sends may miss automatic delivery and fall back to queue."
+            else -> "${selectedDevice.name} is offline. Sends will likely miss automatic delivery and fall back to queue."
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun com.copyeverywhere.app.data.Device.receiverStatusLabel(): String {
+    return when (receiverStatus) {
+        "online" -> "online"
+        "degraded" -> "degraded"
+        else -> "offline"
     }
 }
 

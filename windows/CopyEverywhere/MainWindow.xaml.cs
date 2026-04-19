@@ -16,6 +16,13 @@ namespace CopyEverywhere;
 
 public partial class MainWindow : Window
 {
+    private enum SseConnectionState
+    {
+        Disconnected,
+        Reconnecting,
+        Connected
+    }
+
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
     private readonly MdnsDiscoveryService _mdnsService;
@@ -58,10 +65,43 @@ public partial class MainWindow : Window
     // SSE state
     private CancellationTokenSource? _sseCts;
     private System.Threading.Tasks.Task? _sseTask;
+    private SseConnectionState _sseConnectionState = SseConnectionState.Disconnected;
+    private string _sseStatusDetail = "Auto-receive is idle until this device registers with the server.";
 
     // Bluetooth scan state
     private bool _isScanning;
     private List<DeviceInformation> _discoveredBtDevices = new();
+    private bool _isUpdatingTargetDeviceList;
+
+    private static ReceiverStatus ParseReceiverStatus(string? status)
+    {
+        return status switch
+        {
+            "online" => ReceiverStatus.Online,
+            "degraded" => ReceiverStatus.Degraded,
+            _ => ReceiverStatus.Offline,
+        };
+    }
+
+    private static string ReceiverStatusLabel(ReceiverStatus status)
+    {
+        return status switch
+        {
+            ReceiverStatus.Online => "Online",
+            ReceiverStatus.Degraded => "Degraded",
+            _ => "Offline",
+        };
+    }
+
+    private static Brush ReceiverStatusBrush(ReceiverStatus status)
+    {
+        return status switch
+        {
+            ReceiverStatus.Online => new SolidColorBrush(Color.FromRgb(34, 197, 94)),
+            ReceiverStatus.Degraded => new SolidColorBrush(Color.FromRgb(234, 179, 8)),
+            _ => new SolidColorBrush(Color.FromRgb(239, 68, 68)),
+        };
+    }
 
     public MainWindow()
     {
@@ -90,6 +130,8 @@ public partial class MainWindow : Window
         UpdateMainPanelState();
         UpdateDeviceInfoDisplay();
         UpdateAccessTokenVisibility();
+        UpdateReceiverStatusUI();
+        UpdateTargetDeviceStatusUI();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         InitializeTransferModeUI();
@@ -154,6 +196,8 @@ public partial class MainWindow : Window
         {
             DeviceInfoPanel.Visibility = Visibility.Collapsed;
         }
+
+        UpdateReceiverStatusUI();
     }
 
     private void FloatingBallCheckBox_Changed(object sender, RoutedEventArgs e)
@@ -174,6 +218,8 @@ public partial class MainWindow : Window
 
         try
         {
+            MaybeShowTargetFallbackWarningToast();
+
             // Priority order: text → image → file URL
             if (Clipboard.ContainsText())
             {
@@ -292,6 +338,8 @@ public partial class MainWindow : Window
 
         if (!_configStore.IsSendReady || SendService == null) return;
 
+        MaybeShowTargetFallbackWarningToast();
+
         // Handle file drops
         if (e.Data.GetDataPresent(DataFormats.FileDrop))
         {
@@ -371,11 +419,25 @@ public partial class MainWindow : Window
 
         try
         {
-            var clip = await _apiClient.SendTextClipAsync(clipboardText);
+            var targetSendWarning = TargetSendWarningMessage();
+            if (targetSendWarning != null)
+            {
+                ShowSendStatus(targetSendWarning, isError: false);
+            }
+            else
+            {
+                ShowSendStatus("Uploading clipboard text...", isError: false);
+            }
+
+            var clip = await _apiClient.SendTextClipAsync(
+                clipboardText,
+                string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId,
+                string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId);
             if (clip != null)
             {
                 var expiresIn = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-                ShowSendStatus($"Sent! Clip ID: {clip.Id}\nExpires at: {expiresIn}", isError: false);
+                var deliveryMessage = BuildDeliveryFeedbackMessage();
+                ShowSendStatus($"Sent! Clip ID: {clip.Id}\nExpires at: {expiresIn}\n{deliveryMessage}", isError: false);
                 _ = RefreshQueueAsync();
             }
             else
@@ -544,6 +606,12 @@ public partial class MainWindow : Window
 
         try
         {
+            var targetSendWarning = TargetSendWarningMessage();
+            if (targetSendWarning != null)
+            {
+                ShowFileUploadStatus(targetSendWarning, isError: false);
+            }
+
             if (fileInfo.Length >= ChunkedThreshold)
             {
                 _isChunkedUpload = true;
@@ -569,11 +637,16 @@ public partial class MainWindow : Window
                     UploadProgressText.Text = $"{pct:F0}% — {FormatSpeed(speed)}";
                 });
 
-                var clip = await _apiClient.SendFileAsync(filePath, progress, _uploadCts.Token);
+                var clip = await _apiClient.SendFileAsync(
+                    filePath,
+                    progress,
+                    senderDeviceId: string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId,
+                    targetDeviceId: string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId,
+                    ct: _uploadCts.Token);
                 if (clip != null)
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}\n{BuildDeliveryFeedbackMessage()}", isError: false);
                     _ = RefreshQueueAsync();
                 }
             }
@@ -604,7 +677,13 @@ public partial class MainWindow : Window
 
         ShowFileUploadStatus($"Initializing chunked upload ({totalChunks} chunks)...", isError: false);
 
-        var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileSize, ChunkSize, ct);
+        var initResult = await _apiClient.InitChunkedUploadAsync(
+            filename,
+            fileSize,
+            ChunkSize,
+            senderDeviceId: string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId,
+            targetDeviceId: string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId,
+            ct: ct);
         if (initResult == null)
         {
             ShowFileUploadStatus("Failed to initialize chunked upload", isError: true);
@@ -650,7 +729,7 @@ public partial class MainWindow : Window
         if (clip != null)
         {
             var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-            ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+            ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}\n{BuildDeliveryFeedbackMessage()}", isError: false);
             _ = RefreshQueueAsync();
         }
 
@@ -705,7 +784,7 @@ public partial class MainWindow : Window
                 if (clip != null)
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
+                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}\n{BuildDeliveryFeedbackMessage()}", isError: false);
                     _ = RefreshQueueAsync();
                 }
                 UploadProgressPanel.Visibility = Visibility.Collapsed;
@@ -876,7 +955,7 @@ public partial class MainWindow : Window
         {
             QueueListPanel.Children.Add(new TextBlock
             {
-                Text = "Queue is empty \u2014 copy something and click the icon.",
+                Text = "Queue mode is empty \u2014 send something to make it available for manual receive.",
                 Foreground = new SolidColorBrush(Colors.Gray),
                 FontSize = 12,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -903,48 +982,52 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 6, 0),
         };
 
-        // Preview text (filename or text preview)
         var preview = item.Filename ?? item.Type;
         if (preview.Length > 60) preview = preview[..60] + "...";
+
         var previewText = new TextBlock
         {
             Text = preview,
             FontSize = 12,
-            VerticalAlignment = VerticalAlignment.Center,
+            FontWeight = FontWeights.Medium,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 150,
+            MaxWidth = 180,
         };
 
-        // Size
-        var sizeText = new TextBlock
+        var metadataText = new TextBlock
         {
-            Text = FormatBytes(item.SizeBytes),
+            Text = item.DeliveryState == "targeted_fallback"
+                ? "Automatic delivery missed; click Receive to recover"
+                : $"{FormatBytes(item.SizeBytes)} • {FormatAge(item.CreatedAt)}",
             FontSize = 11,
             Foreground = new SolidColorBrush(Colors.Gray),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0),
+            Margin = new Thickness(0, 2, 0, 0),
         };
 
-        // Age
-        var age = DateTime.UtcNow - item.CreatedAt;
-        var ageStr = age.TotalMinutes < 1 ? "just now"
-            : age.TotalHours < 1 ? $"{(int)age.TotalMinutes}m ago"
-            : age.TotalDays < 1 ? $"{(int)age.TotalHours}h ago"
-            : $"{(int)age.TotalDays}d ago";
-        var ageText = new TextBlock
+        var detailsPanel = new StackPanel();
+        detailsPanel.Children.Add(previewText);
+        if (item.DeliveryState == "targeted_fallback")
         {
-            Text = ageStr,
-            FontSize = 11,
-            Foreground = new SolidColorBrush(Colors.Gray),
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, 0, 0, 0),
-        };
+            detailsPanel.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(255, 237, 213)),
+                CornerRadius = new CornerRadius(999),
+                Padding = new Thickness(6, 2, 6, 2),
+                Margin = new Thickness(0, 4, 0, 0),
+                Child = new TextBlock
+                {
+                    Text = "Queue fallback",
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(Color.FromRgb(194, 65, 12)),
+                }
+            });
+        }
+        detailsPanel.Children.Add(metadataText);
 
-        var leftPanel = new StackPanel
-        {
-            Orientation = Orientation.Horizontal,
-            Children = { typeIcon, previewText, sizeText, ageText },
-        };
+        var leftPanel = new StackPanel { Orientation = Orientation.Horizontal };
+        leftPanel.Children.Add(typeIcon);
+        leftPanel.Children.Add(detailsPanel);
 
         // Receive button
         var receiveButton = new Button
@@ -987,7 +1070,7 @@ public partial class MainWindow : Window
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
                 var savePath = Path.Combine(downloadsPath, item.Filename ?? $"clip_{item.Id}");
 
-                var success = await _apiClient.ConsumeClipToFileAsync(item.Id, savePath);
+                var success = await _apiClient.ConsumeClipToFileAsync(item.Id, savePath, _configStore.DeviceId);
                 if (success)
                 {
                     ShowToastNotification("File saved", $"Saved {Path.GetFileName(savePath)} to Downloads");
@@ -1000,7 +1083,7 @@ public partial class MainWindow : Window
             else
             {
                 // Text or image — write to clipboard
-                var result = await _apiClient.ConsumeClipRawAsync(item.Id);
+                var result = await _apiClient.ConsumeClipRawAsync(item.Id, _configStore.DeviceId);
                 if (result != null)
                 {
                     var (data, contentType) = result.Value;
@@ -1039,17 +1122,27 @@ public partial class MainWindow : Window
 
     // --- Target Device & SSE ---
 
-    private async void TargetDeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void TargetDeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_isUpdatingTargetDeviceList)
+        {
+            return;
+        }
+
         if (TargetDeviceComboBox.SelectedIndex <= 0)
         {
             _configStore.TargetDeviceId = "";
+            _configStore.TargetDeviceReceiverStatus = ReceiverStatus.Offline;
         }
         else if (TargetDeviceComboBox.SelectedItem is ComboBoxItem item && item.Tag is string deviceId)
         {
             _configStore.TargetDeviceId = deviceId;
+            _configStore.TargetDeviceReceiverStatus = item.DataContext is DeviceInfo device
+                ? ParseReceiverStatus(device.ReceiverStatus)
+                : ReceiverStatus.Offline;
         }
         _configStore.PersistConfig();
+        UpdateTargetDeviceStatusUI();
     }
 
     private async System.Threading.Tasks.Task LoadDeviceListAsync()
@@ -1058,9 +1151,10 @@ public partial class MainWindow : Window
 
         try
         {
+            _isUpdatingTargetDeviceList = true;
             var devices = await _apiClient.GetDevicesAsync();
             TargetDeviceComboBox.Items.Clear();
-            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue \u2014 any device)", Tag = "" });
+            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue mode \u2014 any device)", Tag = "" });
 
             var selectedIndex = 0;
             var index = 1;
@@ -1073,10 +1167,45 @@ public partial class MainWindow : Window
                     "windows" => "\U0001FA9F",
                     _ => "\U0001F4BB",
                 };
+                var receiverStatus = ParseReceiverStatus(device.ReceiverStatus);
+                var statusBrush = ReceiverStatusBrush(receiverStatus);
+                var statusLabel = ReceiverStatusLabel(receiverStatus);
                 var item = new ComboBoxItem
                 {
-                    Content = $"{platformIcon} {device.Name} ({device.Id})",
+                    Content = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Text = platformIcon,
+                                Margin = new Thickness(0, 0, 6, 0),
+                                VerticalAlignment = VerticalAlignment.Center,
+                            },
+                            new TextBlock
+                            {
+                                Text = "\u25CF",
+                                Foreground = statusBrush,
+                                Margin = new Thickness(0, 0, 6, 0),
+                                VerticalAlignment = VerticalAlignment.Center,
+                            },
+                            new TextBlock
+                            {
+                                Text = $"{device.Name} ({device.Id})",
+                                VerticalAlignment = VerticalAlignment.Center,
+                            },
+                            new TextBlock
+                            {
+                                Text = $" {statusLabel}",
+                                Foreground = statusBrush,
+                                FontWeight = FontWeights.SemiBold,
+                                VerticalAlignment = VerticalAlignment.Center,
+                            }
+                        }
+                    },
                     Tag = device.Id,
+                    DataContext = device,
                 };
                 TargetDeviceComboBox.Items.Add(item);
                 if (device.Id == _configStore.TargetDeviceId)
@@ -1084,11 +1213,97 @@ public partial class MainWindow : Window
                 index++;
             }
             TargetDeviceComboBox.SelectedIndex = selectedIndex;
+            if (selectedIndex <= 0)
+            {
+                if (!string.IsNullOrEmpty(_configStore.TargetDeviceId))
+                {
+                    _configStore.TargetDeviceId = "";
+                    _configStore.PersistConfig();
+                }
+                _configStore.TargetDeviceReceiverStatus = ReceiverStatus.Offline;
+            }
+            else if (TargetDeviceComboBox.SelectedItem is ComboBoxItem selectedItem && selectedItem.DataContext is DeviceInfo selectedDevice)
+            {
+                _configStore.TargetDeviceReceiverStatus = ParseReceiverStatus(selectedDevice.ReceiverStatus);
+            }
+            UpdateTargetDeviceStatusUI();
         }
         catch
         {
             // Best effort
         }
+        finally
+        {
+            _isUpdatingTargetDeviceList = false;
+        }
+    }
+
+    private void UpdateTargetDeviceStatusUI()
+    {
+        if (string.IsNullOrEmpty(_configStore.TargetDeviceId))
+        {
+            TargetDeviceStatusBorder.Visibility = Visibility.Visible;
+            TargetDeviceStatusBorder.Background = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+            TargetDeviceStatusText.Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+            TargetDeviceStatusDetailText.Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+            TargetDeviceStatusText.Text = "Delivery mode: Queue mode";
+            TargetDeviceStatusDetailText.Text = "Clips stay available for manual receive on any device.";
+            return;
+        }
+
+        var status = _configStore.TargetDeviceReceiverStatus;
+        var brush = ReceiverStatusBrush(status);
+        var isOnline = status == ReceiverStatus.Online;
+        var background = isOnline
+            ? new SolidColorBrush(Color.FromRgb(220, 252, 231))
+            : status == ReceiverStatus.Degraded
+                ? new SolidColorBrush(Color.FromRgb(254, 249, 195))
+                : new SolidColorBrush(Color.FromRgb(254, 226, 226));
+
+        TargetDeviceStatusBorder.Visibility = Visibility.Visible;
+        TargetDeviceStatusBorder.Background = background;
+        TargetDeviceStatusText.Foreground = brush;
+        TargetDeviceStatusDetailText.Foreground = brush;
+        TargetDeviceStatusText.Text = "Delivery mode: Targeted auto-delivery";
+        TargetDeviceStatusDetailText.Text = isOnline
+            ? "The selected device looks ready. This clip will wait for that device to auto-receive first."
+            : "Automatic delivery may miss this device and then fall back into the queue.";
+    }
+
+    private string? TargetSendWarningMessage()
+    {
+        return _configStore.TargetDeviceReceiverStatus switch
+        {
+            ReceiverStatus.Degraded when !string.IsNullOrEmpty(_configStore.TargetDeviceId) =>
+                "Targeted auto-delivery is degraded. This send may fall back to queue recovery instead of auto-delivering.",
+            ReceiverStatus.Offline when !string.IsNullOrEmpty(_configStore.TargetDeviceId) =>
+                "Targeted auto-delivery is offline. This send will likely fall back to queue recovery instead of auto-delivering.",
+            _ => null,
+        };
+    }
+
+    private void MaybeShowTargetFallbackWarningToast()
+    {
+        var warning = TargetSendWarningMessage();
+        if (warning != null)
+        {
+            ShowInWindowToast(warning);
+        }
+    }
+
+    private string BuildDeliveryFeedbackMessage()
+    {
+        if (string.IsNullOrEmpty(_configStore.TargetDeviceId))
+        {
+            return "Queue mode: available for manual receive on any device.";
+        }
+
+        return _configStore.TargetDeviceReceiverStatus switch
+        {
+            ReceiverStatus.Online => "Targeted auto-delivery: waiting for the selected device to auto-receive.",
+            ReceiverStatus.Degraded => "Targeted auto-delivery: the selected device may miss and fall back to queue recovery.",
+            _ => "Targeted auto-delivery: the selected device is offline, so queue fallback is likely.",
+        };
     }
 
     public void StartSSE()
@@ -1096,7 +1311,11 @@ public partial class MainWindow : Window
         if (_sseTask != null) return; // Already running
         if (!_configStore.IsConfigured || string.IsNullOrEmpty(_configStore.DeviceId)) return;
 
+        LogSseDiagnostic("starting receiver channel");
         _sseCts = new CancellationTokenSource();
+        SetSseConnectionState(
+            SseConnectionState.Reconnecting,
+            "Connecting receiver channel for targeted auto-delivery...");
         _sseTask = SSELoopAsync(_sseCts.Token);
     }
 
@@ -1104,6 +1323,8 @@ public partial class MainWindow : Window
     {
         _sseCts?.Cancel();
         _sseTask = null;
+        LogSseDiagnostic("receiver channel stopped");
+        SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
     }
 
     private async System.Threading.Tasks.Task SSELoopAsync(CancellationToken ct)
@@ -1132,13 +1353,20 @@ public partial class MainWindow : Window
                 using var reader = new StreamReader(stream);
 
                 backoff = TimeSpan.FromSeconds(1); // Reset on successful connection
+                LogSseDiagnostic("receiver channel connected");
+                SetSseConnectionState(
+                    SseConnectionState.Connected,
+                    "Receiver channel connected. This device is ready for targeted auto-delivery.");
                 var eventType = "";
                 var eventData = "";
 
                 while (!ct.IsCancellationRequested)
                 {
                     var line = await reader.ReadLineAsync();
-                    if (line == null) break; // Connection closed
+                    if (line == null)
+                    {
+                        throw new IOException("Receiver channel closed unexpectedly.");
+                    }
 
                     if (line.StartsWith("event:"))
                     {
@@ -1163,15 +1391,29 @@ public partial class MainWindow : Window
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                // Reconnect with exponential backoff
+                if (ct.IsCancellationRequested) break;
+
+                var retryDelay = backoff;
+                var reason = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "connection dropped"
+                    : ex.Message;
+                LogSseDiagnostic($"receiver channel disconnected: {reason}. retrying in {FormatRetryDelay(retryDelay)}");
+                SetSseConnectionState(
+                    SseConnectionState.Reconnecting,
+                    $"Receiver channel offline: {reason} Retrying in {FormatRetryDelay(retryDelay)}.");
             }
 
             if (ct.IsCancellationRequested) break;
 
             await System.Threading.Tasks.Task.Delay(backoff, ct).ContinueWith(_ => { });
             backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, maxBackoff.TotalSeconds));
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
         }
     }
 
@@ -1188,20 +1430,22 @@ public partial class MainWindow : Window
 
             if (type == "file")
             {
-                var downloadsPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-                var savePath = Path.Combine(downloadsPath, filename ?? $"clip_{clipId}");
+                var savePath = BuildUniqueDownloadsPath(filename ?? $"clip_{clipId}");
 
-                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath);
+                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath, _configStore.DeviceId);
                 if (success)
                 {
                     Dispatcher.Invoke(() =>
                         ShowToastNotification("File received", $"Saved {Path.GetFileName(savePath)} to Downloads"));
                 }
+                else
+                {
+                    LogSseDiagnostic($"targeted clip {clipId} was already consumed before auto-receive completed");
+                }
             }
             else
             {
-                var result = await _apiClient.ConsumeClipRawAsync(clipId);
+                var result = await _apiClient.ConsumeClipRawAsync(clipId, _configStore.DeviceId);
                 if (result != null)
                 {
                     var (data, contentType) = result.Value;
@@ -1226,15 +1470,59 @@ public partial class MainWindow : Window
                         }
                     });
                 }
+                else
+                {
+                    LogSseDiagnostic($"targeted clip {clipId} was already consumed before auto-receive completed");
+                }
             }
 
             // Refresh queue after receiving
             Dispatcher.Invoke(() => _ = RefreshQueueAsync());
         }
-        catch
+        catch (Exception ex)
         {
-            // Best effort
+            LogSseDiagnostic($"targeted auto-receive failed: {ex.Message}");
+            ShowTargetedAutoReceiveFallbackWarning("targeted clip");
         }
+    }
+
+    private void ShowTargetedAutoReceiveFallbackWarning(string clipLabel)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            ShowToastNotification(
+                "Targeted auto-delivery fell back to queue",
+                $"Couldn't auto-receive {clipLabel}. It remains available in queue recovery for manual receive.");
+            _ = RefreshQueueAsync();
+        });
+    }
+
+    private static string BuildUniqueDownloadsPath(string filename)
+    {
+        var downloadsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+        var savePath = Path.Combine(downloadsPath, filename);
+
+        if (!File.Exists(savePath))
+        {
+            return savePath;
+        }
+
+        var ext = Path.GetExtension(savePath);
+        var nameWithoutExt = Path.GetFileNameWithoutExtension(savePath);
+        var counter = 1;
+        do
+        {
+            savePath = Path.Combine(downloadsPath, $"{nameWithoutExt} ({counter}){ext}");
+            counter++;
+        } while (File.Exists(savePath));
+
+        return savePath;
+    }
+
+    private static void LogSseDiagnostic(string message)
+    {
+        Debug.WriteLine($"[SSE] {message}");
     }
 
     // --- Bluetooth ---
@@ -1861,6 +2149,15 @@ public partial class MainWindow : Window
         return $"{len:F1} {sizes[order]}";
     }
 
+    private static string FormatAge(DateTime createdAt)
+    {
+        var age = DateTime.UtcNow - createdAt;
+        if (age.TotalMinutes < 1) return "just now";
+        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+
     private static string FormatSpeed(double bytesPerSecond)
     {
         if (bytesPerSecond >= 1024 * 1024)
@@ -2123,6 +2420,8 @@ public partial class MainWindow : Window
     {
         var isBtMode = _configStore.TransferMode == TransferMode.Bluetooth;
         var showPanel = isBtMode || _configStore.IsConfigured;
+        UpdateReceiverStatusUI();
+        UpdateTargetDeviceStatusUI();
 
         if (showPanel)
         {
@@ -2152,6 +2451,115 @@ public partial class MainWindow : Window
             StopQueuePolling();
             StopSSE();
         }
+    }
+
+    private void SetSseConnectionState(SseConnectionState state, string detail)
+    {
+        void Apply()
+        {
+            _sseConnectionState = state;
+            _sseStatusDetail = detail;
+            UpdateReceiverStatusUI();
+        }
+
+        if (Dispatcher.CheckAccess())
+        {
+            Apply();
+        }
+        else
+        {
+            Dispatcher.Invoke(Apply);
+        }
+    }
+
+    private void UpdateReceiverStatusUI()
+    {
+        var effectiveState = _sseConnectionState;
+        var detail = _sseStatusDetail;
+
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            effectiveState = SseConnectionState.Disconnected;
+            detail = "LAN receiver is inactive while Bluetooth Direct mode is selected.";
+        }
+        else if (!_configStore.IsConfigured)
+        {
+            effectiveState = SseConnectionState.Disconnected;
+            detail = "Save a server URL to bring the receiver channel online.";
+        }
+        else if (string.IsNullOrEmpty(_configStore.DeviceId))
+        {
+            effectiveState = SseConnectionState.Disconnected;
+            detail = "This device is not registered yet. Save settings to register and enable auto-receive.";
+        }
+
+        SolidColorBrush dotBrush;
+        SolidColorBrush textBrush;
+        SolidColorBrush backgroundBrush;
+        string title;
+
+        switch (effectiveState)
+        {
+            case SseConnectionState.Connected:
+                dotBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
+                textBrush = new SolidColorBrush(Color.FromRgb(21, 128, 61));
+                backgroundBrush = new SolidColorBrush(Color.FromRgb(220, 252, 231));
+                title = "Connected";
+                break;
+            case SseConnectionState.Reconnecting:
+                dotBrush = new SolidColorBrush(Color.FromRgb(234, 179, 8));
+                textBrush = new SolidColorBrush(Color.FromRgb(161, 98, 7));
+                backgroundBrush = new SolidColorBrush(Color.FromRgb(254, 249, 195));
+                title = "Reconnecting";
+                break;
+            default:
+                dotBrush = Brushes.Gray;
+                textBrush = new SolidColorBrush(Color.FromRgb(75, 85, 99));
+                backgroundBrush = new SolidColorBrush(Color.FromRgb(243, 244, 246));
+                title = "Disconnected";
+                break;
+        }
+
+        ReceiverStatusBorder.Background = backgroundBrush;
+        ReceiverStatusIcon.Foreground = dotBrush;
+        ReceiverStatusText.Text = $"Receiver Status: {title}";
+        ReceiverStatusText.Foreground = textBrush;
+        ReceiverStatusDetailText.Text = detail;
+        ReceiverStatusDetailText.Foreground = textBrush;
+
+        LanReceiverStatusBorder.Background = backgroundBrush;
+        LanReceiverStatusDot.Fill = dotBrush;
+        LanReceiverStatusLabel.Text = title;
+        LanReceiverStatusLabel.Foreground = textBrush;
+        LanReceiverStatusDetailText.Text = detail;
+        LanReceiverStatusDetailText.Foreground = textBrush;
+    }
+
+    private string CurrentDisconnectedSseDetail()
+    {
+        if (_configStore.TransferMode == TransferMode.Bluetooth)
+        {
+            return "LAN receiver is inactive while Bluetooth Direct mode is selected.";
+        }
+
+        if (!_configStore.IsConfigured)
+        {
+            return "Save a server URL to bring the receiver channel online.";
+        }
+
+        if (string.IsNullOrEmpty(_configStore.DeviceId))
+        {
+            return "This device is not registered yet. Save settings to register and enable auto-receive.";
+        }
+
+        return "Receiver channel disconnected.";
+    }
+
+    private static string FormatRetryDelay(TimeSpan delay)
+    {
+        return delay.TotalSeconds >= 60
+            ? $"{delay.TotalMinutes:F0}m"
+            : $"{delay.TotalSeconds:F0}s";
     }
 
     // Refresh clipboard preview and queue when window is activated
