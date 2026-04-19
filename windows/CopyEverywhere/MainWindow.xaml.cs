@@ -16,13 +16,6 @@ namespace CopyEverywhere;
 
 public partial class MainWindow : Window
 {
-    private enum SseConnectionState
-    {
-        Disconnected,
-        Reconnecting,
-        Connected
-    }
-
     private readonly ConfigStore _configStore;
     private readonly ApiClient _apiClient;
     private readonly MdnsDiscoveryService _mdnsService;
@@ -33,8 +26,6 @@ public partial class MainWindow : Window
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
     public BluetoothService BluetoothService => _bluetoothService;
-    public ServerConfig ServerConfig => _serverConfig;
-    public ServerProcess ServerProcess => _serverProcess;
     private SendService? _sendService;
     public SendService? SendService
     {
@@ -69,54 +60,27 @@ public partial class MainWindow : Window
     // SSE state
     private CancellationTokenSource? _sseCts;
     private System.Threading.Tasks.Task? _sseTask;
-    private SseConnectionState _sseConnectionState = SseConnectionState.Disconnected;
-    private string _sseStatusDetail = "Auto-receive is idle until this device registers with the server.";
 
     // Bluetooth scan state
     private bool _isScanning;
     private List<DeviceInformation> _discoveredBtDevices = new();
-    private bool _isUpdatingTargetDeviceList;
 
-    private static ReceiverStatus ParseReceiverStatus(string? status)
-    {
-        return status switch
-        {
-            "online" => ReceiverStatus.Online,
-            "degraded" => ReceiverStatus.Degraded,
-            _ => ReceiverStatus.Offline,
-        };
-    }
+    // Settings view toggle (gear button)
+    private bool _inSettingsView;
+    private const string GearGlyph = "\uE713";   // Settings
+    private const string BackGlyph = "\uE72B";   // ChevronLeft
 
-    private static string ReceiverStatusLabel(ReceiverStatus status)
+    public MainWindow(ServerConfig serverConfig, ServerProcess serverProcess)
     {
-        return status switch
-        {
-            ReceiverStatus.Online => "Online",
-            ReceiverStatus.Degraded => "Degraded",
-            _ => "Offline",
-        };
-    }
+        _serverConfig = serverConfig;
+        _serverProcess = serverProcess;
 
-    private static Brush ReceiverStatusBrush(ReceiverStatus status)
-    {
-        return status switch
-        {
-            ReceiverStatus.Online => new SolidColorBrush(Color.FromRgb(34, 197, 94)),
-            ReceiverStatus.Degraded => new SolidColorBrush(Color.FromRgb(234, 179, 8)),
-            _ => new SolidColorBrush(Color.FromRgb(239, 68, 68)),
-        };
-    }
-
-    public MainWindow()
-    {
         InitializeComponent();
 
         _configStore = new ConfigStore();
         _apiClient = new ApiClient(_configStore);
         _mdnsService = new MdnsDiscoveryService();
         _bluetoothService = new BluetoothService();
-        _serverConfig = new ServerConfig();
-        _serverProcess = new ServerProcess { Config = _serverConfig };
 
         // Wire up Bluetooth events
         _bluetoothService.SessionReady += OnBluetoothSessionReady;
@@ -133,25 +97,23 @@ public partial class MainWindow : Window
         // PasswordBox doesn't support binding, so set manually
         AccessTokenBox.Password = _configStore.AccessToken;
 
+        // First-launch users land on the settings view; configured users land on the main panel.
+        _inSettingsView = !_configStore.IsConfigured && _configStore.TransferMode == TransferMode.LanServer;
+
         UpdateMainPanelState();
+        UpdateViewMode();
         UpdateDeviceInfoDisplay();
         UpdateAccessTokenVisibility();
-        UpdateReceiverStatusUI();
-        UpdateTargetDeviceStatusUI();
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         InitializeTransferModeUI();
+
+        // Initialize embedded server UI
         InitializeServerConfigUI();
 
         // Start mDNS discovery
         _mdnsService.ServersChanged += OnDiscoveredServersChanged;
         _mdnsService.StartBrowsing();
-
-        // Auto-start embedded server if configured
-        if (_serverConfig.ServerEnabled && _serverConfig.AutoStartServer)
-        {
-            SetServerEnabled(true);
-        }
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -209,12 +171,11 @@ public partial class MainWindow : Window
         {
             DeviceInfoPanel.Visibility = Visibility.Collapsed;
         }
-
-        UpdateReceiverStatusUI();
     }
 
     private void FloatingBallCheckBox_Changed(object sender, RoutedEventArgs e)
     {
+        if (_configStore == null) return;
         var isChecked = FloatingBallCheckBox.IsChecked == true;
         _configStore.ShowFloatingBall = isChecked;
         _configStore.PersistConfig();
@@ -231,8 +192,6 @@ public partial class MainWindow : Window
 
         try
         {
-            MaybeShowTargetFallbackWarningToast();
-
             // Priority order: text → image → file URL
             if (Clipboard.ContainsText())
             {
@@ -351,8 +310,6 @@ public partial class MainWindow : Window
 
         if (!_configStore.IsSendReady || SendService == null) return;
 
-        MaybeShowTargetFallbackWarningToast();
-
         // Handle file drops
         if (e.Data.GetDataPresent(DataFormats.FileDrop))
         {
@@ -432,25 +389,11 @@ public partial class MainWindow : Window
 
         try
         {
-            var targetSendWarning = TargetSendWarningMessage();
-            if (targetSendWarning != null)
-            {
-                ShowSendStatus(targetSendWarning, isError: false);
-            }
-            else
-            {
-                ShowSendStatus("Uploading clipboard text...", isError: false);
-            }
-
-            var clip = await _apiClient.SendTextClipAsync(
-                clipboardText,
-                string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId,
-                string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId);
+            var clip = await _apiClient.SendTextClipAsync(clipboardText);
             if (clip != null)
             {
                 var expiresIn = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-                var deliveryMessage = BuildDeliveryFeedbackMessage();
-                ShowSendStatus($"Sent! Clip ID: {clip.Id}\nExpires at: {expiresIn}\n{deliveryMessage}", isError: false);
+                ShowSendStatus($"Sent! Clip ID: {clip.Id}\nExpires at: {expiresIn}", isError: false);
                 _ = RefreshQueueAsync();
             }
             else
@@ -619,12 +562,6 @@ public partial class MainWindow : Window
 
         try
         {
-            var targetSendWarning = TargetSendWarningMessage();
-            if (targetSendWarning != null)
-            {
-                ShowFileUploadStatus(targetSendWarning, isError: false);
-            }
-
             if (fileInfo.Length >= ChunkedThreshold)
             {
                 _isChunkedUpload = true;
@@ -650,16 +587,11 @@ public partial class MainWindow : Window
                     UploadProgressText.Text = $"{pct:F0}% — {FormatSpeed(speed)}";
                 });
 
-                var clip = await _apiClient.SendFileAsync(
-                    filePath,
-                    progress,
-                    senderDeviceId: string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId,
-                    targetDeviceId: string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId,
-                    ct: _uploadCts.Token);
+                var clip = await _apiClient.SendFileAsync(filePath, progress, ct: _uploadCts.Token);
                 if (clip != null)
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}\n{BuildDeliveryFeedbackMessage()}", isError: false);
+                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
                     _ = RefreshQueueAsync();
                 }
             }
@@ -690,13 +622,7 @@ public partial class MainWindow : Window
 
         ShowFileUploadStatus($"Initializing chunked upload ({totalChunks} chunks)...", isError: false);
 
-        var initResult = await _apiClient.InitChunkedUploadAsync(
-            filename,
-            fileSize,
-            ChunkSize,
-            senderDeviceId: string.IsNullOrEmpty(_configStore.DeviceId) ? null : _configStore.DeviceId,
-            targetDeviceId: string.IsNullOrEmpty(_configStore.TargetDeviceId) ? null : _configStore.TargetDeviceId,
-            ct: ct);
+        var initResult = await _apiClient.InitChunkedUploadAsync(filename, fileSize, ChunkSize, ct: ct);
         if (initResult == null)
         {
             ShowFileUploadStatus("Failed to initialize chunked upload", isError: true);
@@ -742,7 +668,7 @@ public partial class MainWindow : Window
         if (clip != null)
         {
             var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-            ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}\n{BuildDeliveryFeedbackMessage()}", isError: false);
+            ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
             _ = RefreshQueueAsync();
         }
 
@@ -797,7 +723,7 @@ public partial class MainWindow : Window
                 if (clip != null)
                 {
                     var expiresAt = clip.ExpiresAt.ToLocalTime().ToString("HH:mm:ss");
-                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}\n{BuildDeliveryFeedbackMessage()}", isError: false);
+                    ShowFileUploadStatus($"Uploaded! Clip ID: {clip.Id}\nFile: {clip.Filename} ({FormatBytes(clip.SizeBytes)})\nExpires at: {expiresAt}", isError: false);
                     _ = RefreshQueueAsync();
                 }
                 UploadProgressPanel.Visibility = Visibility.Collapsed;
@@ -968,7 +894,7 @@ public partial class MainWindow : Window
         {
             QueueListPanel.Children.Add(new TextBlock
             {
-                Text = "Queue mode is empty \u2014 send something to make it available for manual receive.",
+                Text = "Queue is empty \u2014 copy something and click the icon.",
                 Foreground = new SolidColorBrush(Colors.Gray),
                 FontSize = 12,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -995,52 +921,48 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 6, 0),
         };
 
+        // Preview text (filename or text preview)
         var preview = item.Filename ?? item.Type;
         if (preview.Length > 60) preview = preview[..60] + "...";
-
         var previewText = new TextBlock
         {
             Text = preview,
             FontSize = 12,
-            FontWeight = FontWeights.Medium,
+            VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = 180,
+            MaxWidth = 150,
         };
 
-        var metadataText = new TextBlock
+        // Size
+        var sizeText = new TextBlock
         {
-            Text = item.DeliveryState == "targeted_fallback"
-                ? "Automatic delivery missed; click Receive to recover"
-                : $"{FormatBytes(item.SizeBytes)} • {FormatAge(item.CreatedAt)}",
+            Text = FormatBytes(item.SizeBytes),
             FontSize = 11,
             Foreground = new SolidColorBrush(Colors.Gray),
-            Margin = new Thickness(0, 2, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
         };
 
-        var detailsPanel = new StackPanel();
-        detailsPanel.Children.Add(previewText);
-        if (item.DeliveryState == "targeted_fallback")
+        // Age
+        var age = DateTime.UtcNow - item.CreatedAt;
+        var ageStr = age.TotalMinutes < 1 ? "just now"
+            : age.TotalHours < 1 ? $"{(int)age.TotalMinutes}m ago"
+            : age.TotalDays < 1 ? $"{(int)age.TotalHours}h ago"
+            : $"{(int)age.TotalDays}d ago";
+        var ageText = new TextBlock
         {
-            detailsPanel.Children.Add(new Border
-            {
-                Background = new SolidColorBrush(Color.FromRgb(255, 237, 213)),
-                CornerRadius = new CornerRadius(999),
-                Padding = new Thickness(6, 2, 6, 2),
-                Margin = new Thickness(0, 4, 0, 0),
-                Child = new TextBlock
-                {
-                    Text = "Queue fallback",
-                    FontSize = 10,
-                    FontWeight = FontWeights.SemiBold,
-                    Foreground = new SolidColorBrush(Color.FromRgb(194, 65, 12)),
-                }
-            });
-        }
-        detailsPanel.Children.Add(metadataText);
+            Text = ageStr,
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Colors.Gray),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(8, 0, 0, 0),
+        };
 
-        var leftPanel = new StackPanel { Orientation = Orientation.Horizontal };
-        leftPanel.Children.Add(typeIcon);
-        leftPanel.Children.Add(detailsPanel);
+        var leftPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Children = { typeIcon, previewText, sizeText, ageText },
+        };
 
         // Receive button
         var receiveButton = new Button
@@ -1083,7 +1005,7 @@ public partial class MainWindow : Window
                     Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
                 var savePath = Path.Combine(downloadsPath, item.Filename ?? $"clip_{item.Id}");
 
-                var success = await _apiClient.ConsumeClipToFileAsync(item.Id, savePath, _configStore.DeviceId);
+                var success = await _apiClient.ConsumeClipToFileAsync(item.Id, savePath);
                 if (success)
                 {
                     ShowToastNotification("File saved", $"Saved {Path.GetFileName(savePath)} to Downloads");
@@ -1096,7 +1018,7 @@ public partial class MainWindow : Window
             else
             {
                 // Text or image — write to clipboard
-                var result = await _apiClient.ConsumeClipRawAsync(item.Id, _configStore.DeviceId);
+                var result = await _apiClient.ConsumeClipRawAsync(item.Id);
                 if (result != null)
                 {
                     var (data, contentType) = result.Value;
@@ -1135,27 +1057,17 @@ public partial class MainWindow : Window
 
     // --- Target Device & SSE ---
 
-    private void TargetDeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void TargetDeviceComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_isUpdatingTargetDeviceList)
-        {
-            return;
-        }
-
         if (TargetDeviceComboBox.SelectedIndex <= 0)
         {
             _configStore.TargetDeviceId = "";
-            _configStore.TargetDeviceReceiverStatus = ReceiverStatus.Offline;
         }
         else if (TargetDeviceComboBox.SelectedItem is ComboBoxItem item && item.Tag is string deviceId)
         {
             _configStore.TargetDeviceId = deviceId;
-            _configStore.TargetDeviceReceiverStatus = item.DataContext is DeviceInfo device
-                ? ParseReceiverStatus(device.ReceiverStatus)
-                : ReceiverStatus.Offline;
         }
         _configStore.PersistConfig();
-        UpdateTargetDeviceStatusUI();
     }
 
     private async System.Threading.Tasks.Task LoadDeviceListAsync()
@@ -1164,10 +1076,9 @@ public partial class MainWindow : Window
 
         try
         {
-            _isUpdatingTargetDeviceList = true;
             var devices = await _apiClient.GetDevicesAsync();
             TargetDeviceComboBox.Items.Clear();
-            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue mode \u2014 any device)", Tag = "" });
+            TargetDeviceComboBox.Items.Add(new ComboBoxItem { Content = "(Queue \u2014 any device)", Tag = "" });
 
             var selectedIndex = 0;
             var index = 1;
@@ -1180,45 +1091,10 @@ public partial class MainWindow : Window
                     "windows" => "\U0001FA9F",
                     _ => "\U0001F4BB",
                 };
-                var receiverStatus = ParseReceiverStatus(device.ReceiverStatus);
-                var statusBrush = ReceiverStatusBrush(receiverStatus);
-                var statusLabel = ReceiverStatusLabel(receiverStatus);
                 var item = new ComboBoxItem
                 {
-                    Content = new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Children =
-                        {
-                            new TextBlock
-                            {
-                                Text = platformIcon,
-                                Margin = new Thickness(0, 0, 6, 0),
-                                VerticalAlignment = VerticalAlignment.Center,
-                            },
-                            new TextBlock
-                            {
-                                Text = "\u25CF",
-                                Foreground = statusBrush,
-                                Margin = new Thickness(0, 0, 6, 0),
-                                VerticalAlignment = VerticalAlignment.Center,
-                            },
-                            new TextBlock
-                            {
-                                Text = $"{device.Name} ({device.Id})",
-                                VerticalAlignment = VerticalAlignment.Center,
-                            },
-                            new TextBlock
-                            {
-                                Text = $" {statusLabel}",
-                                Foreground = statusBrush,
-                                FontWeight = FontWeights.SemiBold,
-                                VerticalAlignment = VerticalAlignment.Center,
-                            }
-                        }
-                    },
+                    Content = $"{platformIcon} {device.Name} ({device.Id})",
                     Tag = device.Id,
-                    DataContext = device,
                 };
                 TargetDeviceComboBox.Items.Add(item);
                 if (device.Id == _configStore.TargetDeviceId)
@@ -1226,97 +1102,11 @@ public partial class MainWindow : Window
                 index++;
             }
             TargetDeviceComboBox.SelectedIndex = selectedIndex;
-            if (selectedIndex <= 0)
-            {
-                if (!string.IsNullOrEmpty(_configStore.TargetDeviceId))
-                {
-                    _configStore.TargetDeviceId = "";
-                    _configStore.PersistConfig();
-                }
-                _configStore.TargetDeviceReceiverStatus = ReceiverStatus.Offline;
-            }
-            else if (TargetDeviceComboBox.SelectedItem is ComboBoxItem selectedItem && selectedItem.DataContext is DeviceInfo selectedDevice)
-            {
-                _configStore.TargetDeviceReceiverStatus = ParseReceiverStatus(selectedDevice.ReceiverStatus);
-            }
-            UpdateTargetDeviceStatusUI();
         }
         catch
         {
             // Best effort
         }
-        finally
-        {
-            _isUpdatingTargetDeviceList = false;
-        }
-    }
-
-    private void UpdateTargetDeviceStatusUI()
-    {
-        if (string.IsNullOrEmpty(_configStore.TargetDeviceId))
-        {
-            TargetDeviceStatusBorder.Visibility = Visibility.Visible;
-            TargetDeviceStatusBorder.Background = new SolidColorBrush(Color.FromRgb(243, 244, 246));
-            TargetDeviceStatusText.Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
-            TargetDeviceStatusDetailText.Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99));
-            TargetDeviceStatusText.Text = "Delivery mode: Queue mode";
-            TargetDeviceStatusDetailText.Text = "Clips stay available for manual receive on any device.";
-            return;
-        }
-
-        var status = _configStore.TargetDeviceReceiverStatus;
-        var brush = ReceiverStatusBrush(status);
-        var isOnline = status == ReceiverStatus.Online;
-        var background = isOnline
-            ? new SolidColorBrush(Color.FromRgb(220, 252, 231))
-            : status == ReceiverStatus.Degraded
-                ? new SolidColorBrush(Color.FromRgb(254, 249, 195))
-                : new SolidColorBrush(Color.FromRgb(254, 226, 226));
-
-        TargetDeviceStatusBorder.Visibility = Visibility.Visible;
-        TargetDeviceStatusBorder.Background = background;
-        TargetDeviceStatusText.Foreground = brush;
-        TargetDeviceStatusDetailText.Foreground = brush;
-        TargetDeviceStatusText.Text = "Delivery mode: Targeted auto-delivery";
-        TargetDeviceStatusDetailText.Text = isOnline
-            ? "The selected device looks ready. This clip will wait for that device to auto-receive first."
-            : "Automatic delivery may miss this device and then fall back into the queue.";
-    }
-
-    private string? TargetSendWarningMessage()
-    {
-        return _configStore.TargetDeviceReceiverStatus switch
-        {
-            ReceiverStatus.Degraded when !string.IsNullOrEmpty(_configStore.TargetDeviceId) =>
-                "Targeted auto-delivery is degraded. This send may fall back to queue recovery instead of auto-delivering.",
-            ReceiverStatus.Offline when !string.IsNullOrEmpty(_configStore.TargetDeviceId) =>
-                "Targeted auto-delivery is offline. This send will likely fall back to queue recovery instead of auto-delivering.",
-            _ => null,
-        };
-    }
-
-    private void MaybeShowTargetFallbackWarningToast()
-    {
-        var warning = TargetSendWarningMessage();
-        if (warning != null)
-        {
-            ShowInWindowToast(warning);
-        }
-    }
-
-    private string BuildDeliveryFeedbackMessage()
-    {
-        if (string.IsNullOrEmpty(_configStore.TargetDeviceId))
-        {
-            return "Queue mode: available for manual receive on any device.";
-        }
-
-        return _configStore.TargetDeviceReceiverStatus switch
-        {
-            ReceiverStatus.Online => "Targeted auto-delivery: waiting for the selected device to auto-receive.",
-            ReceiverStatus.Degraded => "Targeted auto-delivery: the selected device may miss and fall back to queue recovery.",
-            _ => "Targeted auto-delivery: the selected device is offline, so queue fallback is likely.",
-        };
     }
 
     public void StartSSE()
@@ -1324,11 +1114,7 @@ public partial class MainWindow : Window
         if (_sseTask != null) return; // Already running
         if (!_configStore.IsConfigured || string.IsNullOrEmpty(_configStore.DeviceId)) return;
 
-        LogSseDiagnostic("starting receiver channel");
         _sseCts = new CancellationTokenSource();
-        SetSseConnectionState(
-            SseConnectionState.Reconnecting,
-            "Connecting receiver channel for targeted auto-delivery...");
         _sseTask = SSELoopAsync(_sseCts.Token);
     }
 
@@ -1336,8 +1122,6 @@ public partial class MainWindow : Window
     {
         _sseCts?.Cancel();
         _sseTask = null;
-        LogSseDiagnostic("receiver channel stopped");
-        SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
     }
 
     private async System.Threading.Tasks.Task SSELoopAsync(CancellationToken ct)
@@ -1366,20 +1150,13 @@ public partial class MainWindow : Window
                 using var reader = new StreamReader(stream);
 
                 backoff = TimeSpan.FromSeconds(1); // Reset on successful connection
-                LogSseDiagnostic("receiver channel connected");
-                SetSseConnectionState(
-                    SseConnectionState.Connected,
-                    "Receiver channel connected. This device is ready for targeted auto-delivery.");
                 var eventType = "";
                 var eventData = "";
 
                 while (!ct.IsCancellationRequested)
                 {
                     var line = await reader.ReadLineAsync();
-                    if (line == null)
-                    {
-                        throw new IOException("Receiver channel closed unexpectedly.");
-                    }
+                    if (line == null) break; // Connection closed
 
                     if (line.StartsWith("event:"))
                     {
@@ -1404,29 +1181,15 @@ public partial class MainWindow : Window
             {
                 break;
             }
-            catch (Exception ex)
+            catch
             {
-                if (ct.IsCancellationRequested) break;
-
-                var retryDelay = backoff;
-                var reason = string.IsNullOrWhiteSpace(ex.Message)
-                    ? "connection dropped"
-                    : ex.Message;
-                LogSseDiagnostic($"receiver channel disconnected: {reason}. retrying in {FormatRetryDelay(retryDelay)}");
-                SetSseConnectionState(
-                    SseConnectionState.Reconnecting,
-                    $"Receiver channel offline: {reason} Retrying in {FormatRetryDelay(retryDelay)}.");
+                // Reconnect with exponential backoff
             }
 
             if (ct.IsCancellationRequested) break;
 
             await System.Threading.Tasks.Task.Delay(backoff, ct).ContinueWith(_ => { });
             backoff = TimeSpan.FromSeconds(Math.Min(backoff.TotalSeconds * 2, maxBackoff.TotalSeconds));
-        }
-
-        if (ct.IsCancellationRequested)
-        {
-            SetSseConnectionState(SseConnectionState.Disconnected, CurrentDisconnectedSseDetail());
         }
     }
 
@@ -1443,22 +1206,20 @@ public partial class MainWindow : Window
 
             if (type == "file")
             {
-                var savePath = BuildUniqueDownloadsPath(filename ?? $"clip_{clipId}");
+                var downloadsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                var savePath = Path.Combine(downloadsPath, filename ?? $"clip_{clipId}");
 
-                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath, _configStore.DeviceId);
+                var success = await _apiClient.ConsumeClipToFileAsync(clipId, savePath);
                 if (success)
                 {
                     Dispatcher.Invoke(() =>
                         ShowToastNotification("File received", $"Saved {Path.GetFileName(savePath)} to Downloads"));
                 }
-                else
-                {
-                    LogSseDiagnostic($"targeted clip {clipId} was already consumed before auto-receive completed");
-                }
             }
             else
             {
-                var result = await _apiClient.ConsumeClipRawAsync(clipId, _configStore.DeviceId);
+                var result = await _apiClient.ConsumeClipRawAsync(clipId);
                 if (result != null)
                 {
                     var (data, contentType) = result.Value;
@@ -1483,59 +1244,15 @@ public partial class MainWindow : Window
                         }
                     });
                 }
-                else
-                {
-                    LogSseDiagnostic($"targeted clip {clipId} was already consumed before auto-receive completed");
-                }
             }
 
             // Refresh queue after receiving
             Dispatcher.Invoke(() => _ = RefreshQueueAsync());
         }
-        catch (Exception ex)
+        catch
         {
-            LogSseDiagnostic($"targeted auto-receive failed: {ex.Message}");
-            ShowTargetedAutoReceiveFallbackWarning("targeted clip");
+            // Best effort
         }
-    }
-
-    private void ShowTargetedAutoReceiveFallbackWarning(string clipLabel)
-    {
-        Dispatcher.Invoke(() =>
-        {
-            ShowToastNotification(
-                "Targeted auto-delivery fell back to queue",
-                $"Couldn't auto-receive {clipLabel}. It remains available in queue recovery for manual receive.");
-            _ = RefreshQueueAsync();
-        });
-    }
-
-    private static string BuildUniqueDownloadsPath(string filename)
-    {
-        var downloadsPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
-        var savePath = Path.Combine(downloadsPath, filename);
-
-        if (!File.Exists(savePath))
-        {
-            return savePath;
-        }
-
-        var ext = Path.GetExtension(savePath);
-        var nameWithoutExt = Path.GetFileNameWithoutExtension(savePath);
-        var counter = 1;
-        do
-        {
-            savePath = Path.Combine(downloadsPath, $"{nameWithoutExt} ({counter}){ext}");
-            counter++;
-        } while (File.Exists(savePath));
-
-        return savePath;
-    }
-
-    private static void LogSseDiagnostic(string message)
-    {
-        Debug.WriteLine($"[SSE] {message}");
     }
 
     // --- Bluetooth ---
@@ -2162,15 +1879,6 @@ public partial class MainWindow : Window
         return $"{len:F1} {sizes[order]}";
     }
 
-    private static string FormatAge(DateTime createdAt)
-    {
-        var age = DateTime.UtcNow - createdAt;
-        if (age.TotalMinutes < 1) return "just now";
-        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m ago";
-        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h ago";
-        return $"{(int)age.TotalDays}d ago";
-    }
-
     private static string FormatSpeed(double bytesPerSecond)
     {
         if (bytesPerSecond >= 1024 * 1024)
@@ -2429,238 +2137,27 @@ public partial class MainWindow : Window
         }
     }
 
-    // ── Embedded server toggle ─��──────────────────────────────────────
-
-    public void SetServerEnabled(bool enabled)
-    {
-        _serverConfig.ServerEnabled = enabled;
-        _serverConfig.Save();
-
-        if (enabled)
-        {
-            _serverProcess.Start();
-            AutoConnectToLocalServer();
-        }
-        else
-        {
-            _serverProcess.Stop();
-        }
-
-        UpdateServerManagementPanel();
-    }
-
-    private void AutoConnectToLocalServer()
-    {
-        _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
-        if (_serverConfig.AuthEnabled && !string.IsNullOrEmpty(_serverConfig.AccessToken))
-        {
-            _configStore.AccessToken = _serverConfig.AccessToken;
-            AccessTokenBox.Password = _serverConfig.AccessToken;
-        }
-        _configStore.Save();
-        UpdateMainPanelState();
-    }
-
-    // ── Embedded server config UI handlers ──────────────────────────────
-
-    private void InitializeServerConfigUI()
-    {
-        ServerEnabledCheckBox.IsChecked = _serverConfig.ServerEnabled;
-        ServerPortBox.Text = _serverConfig.Port.ToString();
-        ServerBindAddressBox.Text = _serverConfig.BindAddress;
-        ServerStoragePathBox.Text = _serverConfig.StoragePath;
-        ServerTtlBox.Text = _serverConfig.TtlHours.ToString();
-        ServerMaxClipSizeBox.Text = _serverConfig.MaxClipSizeMB.ToString();
-        ServerAuthCheckBox.IsChecked = _serverConfig.AuthEnabled;
-        ServerAccessTokenBox.Password = _serverConfig.AccessToken;
-        ServerAutoStartCheckBox.IsChecked = _serverConfig.AutoStartServer;
-
-        ServerConfigSection.Visibility = _serverConfig.ServerEnabled ? Visibility.Visible : Visibility.Collapsed;
-        ServerTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
-        UpdateServerManagementPanel();
-    }
-
-    private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-        var enabled = ServerEnabledCheckBox.IsChecked == true;
-        ServerConfigSection.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-        SetServerEnabled(enabled);
-    }
-
-    private void ServerAuthCheckBox_Changed(object sender, RoutedEventArgs e)
-    {
-        ServerTokenPanel.Visibility = ServerAuthCheckBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void ServerAccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        // No-op — value read on Apply
-    }
-
-    private void ServerStorageBrowseButton_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new System.Windows.Forms.FolderBrowserDialog
-        {
-            Description = "Select server storage directory",
-            UseDescriptionForTitle = true,
-        };
-        if (!string.IsNullOrEmpty(ServerStoragePathBox.Text))
-        {
-            dialog.InitialDirectory = ServerStoragePathBox.Text;
-        }
-        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-        {
-            ServerStoragePathBox.Text = dialog.SelectedPath;
-        }
-    }
-
-    private async void ServerApplyButton_Click(object sender, RoutedEventArgs e)
-    {
-        // Read values from UI into ServerConfig
-        if (int.TryParse(ServerPortBox.Text, out var port)) _serverConfig.Port = port;
-        _serverConfig.BindAddress = ServerBindAddressBox.Text;
-        _serverConfig.StoragePath = ServerStoragePathBox.Text;
-        if (int.TryParse(ServerTtlBox.Text, out var ttl)) _serverConfig.TtlHours = ttl;
-        if (int.TryParse(ServerMaxClipSizeBox.Text, out var maxSize)) _serverConfig.MaxClipSizeMB = maxSize;
-        _serverConfig.AuthEnabled = ServerAuthCheckBox.IsChecked == true;
-        _serverConfig.AccessToken = ServerAccessTokenBox.Password;
-        _serverConfig.AutoStartServer = ServerAutoStartCheckBox.IsChecked == true;
-        _serverConfig.Save();
-
-        // Restart if running
-        if (_serverProcess.IsRunning)
-        {
-            await _serverProcess.RestartAsync();
-            // Give the server a moment to start before auto-connecting
-            await System.Threading.Tasks.Task.Delay(1000);
-            AutoConnectToLocalServer();
-        }
-
-        ShowStatus("Server configuration saved", isError: false);
-    }
-
-    // ── Server management panel ─────────────────────────────────────────
-
-    private void ServerStartButton_Click(object sender, RoutedEventArgs e)
-    {
-        SetServerEnabled(true);
-        ServerEnabledCheckBox.IsChecked = true;
-        UpdateServerManagementPanel();
-    }
-
-    private void ServerStopButton_Click(object sender, RoutedEventArgs e)
-    {
-        _serverProcess.Stop();
-        UpdateServerManagementPanel();
-    }
-
-    private async void ServerRestartButton_Click(object sender, RoutedEventArgs e)
-    {
-        await _serverProcess.RestartAsync();
-        await System.Threading.Tasks.Task.Delay(1000);
-        AutoConnectToLocalServer();
-        UpdateServerManagementPanel();
-    }
-
-    private void UpdateServerManagementPanel()
-    {
-        if (!_serverConfig.ServerEnabled)
-        {
-            ServerManagementSection.Visibility = Visibility.Collapsed;
-            return;
-        }
-
-        ServerManagementSection.Visibility = Visibility.Visible;
-
-        if (_serverProcess.IsRunning)
-        {
-            ServerStatusDot.Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // green
-            ServerStatusText.Text = "Running";
-            ServerStartButton.Visibility = Visibility.Collapsed;
-            ServerStopButton.Visibility = Visibility.Visible;
-            ServerRestartButton.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            ServerStatusDot.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)); // red
-            ServerStatusText.Text = "Stopped";
-            ServerStartButton.Visibility = Visibility.Visible;
-            ServerStopButton.Visibility = Visibility.Collapsed;
-            ServerRestartButton.Visibility = Visibility.Collapsed;
-        }
-
-        // Storage stats
-        _serverConfig.RefreshUsedSpace();
-        var usedMB = _serverConfig.UsedSpaceBytes / (1024.0 * 1024.0);
-        ServerStorageUsedText.Text = $"Used: {usedMB:F1} MB";
-        ServerStoragePathText.Text = _serverConfig.StoragePath;
-
-        // Log viewer
-        ServerLogText.Text = string.Join("\n", _serverProcess.LogLines);
-        ServerLogScrollViewer.ScrollToEnd();
-
-        // Fetch connected devices
-        _ = LoadServerDevicesAsync();
-    }
-
-    private async System.Threading.Tasks.Task LoadServerDevicesAsync()
-    {
-        if (!_serverProcess.IsRunning) return;
-
-        try
-        {
-            var baseUrl = $"http://localhost:{_serverConfig.Port}";
-            using var client = new System.Net.Http.HttpClient();
-            if (_serverConfig.AuthEnabled && !string.IsNullOrEmpty(_serverConfig.AccessToken))
-            {
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _serverConfig.AccessToken);
-            }
-
-            var response = await client.GetAsync($"{baseUrl}/api/v1/devices");
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                var devices = System.Text.Json.JsonSerializer.Deserialize<List<ServerDevice>>(json);
-                ServerDevicesPanel.Children.Clear();
-                if (devices != null && devices.Count > 0)
-                {
-                    foreach (var device in devices)
-                    {
-                        var tb = new TextBlock
-                        {
-                            Text = $"{device.Name} ({device.Platform}) — {device.DeviceId}",
-                            FontSize = 11,
-                            Margin = new Thickness(6, 3, 6, 3),
-                        };
-                        ServerDevicesPanel.Children.Add(tb);
-                    }
-                }
-                else
-                {
-                    ServerDevicesPanel.Children.Add(new TextBlock
-                    {
-                        Text = "No devices connected",
-                        Foreground = Brushes.Gray,
-                        FontSize = 11,
-                        HorizontalAlignment = HorizontalAlignment.Center,
-                        Margin = new Thickness(0, 6, 0, 6),
-                    });
-                }
-            }
-        }
-        catch
-        {
-            // Server might not be ready yet
-        }
-    }
-
     private void UpdateMainPanelState()
     {
         var isBtMode = _configStore.TransferMode == TransferMode.Bluetooth;
         var showPanel = isBtMode || _configStore.IsConfigured;
-        UpdateReceiverStatusUI();
-        UpdateTargetDeviceStatusUI();
+
+        // Background services run independent of which view (settings vs main) is on screen,
+        // so SSE/queue updates keep flowing while the user is on the settings page.
+        if (showPanel && !isBtMode)
+        {
+            StartQueuePolling();
+            _ = LoadDeviceListAsync();
+            StartSSE();
+        }
+        else if (!showPanel)
+        {
+            StopQueuePolling();
+            StopSSE();
+        }
+
+        // Visibility for the main panel itself is driven by UpdateViewMode().
+        if (_inSettingsView) return;
 
         if (showPanel)
         {
@@ -2668,137 +2165,42 @@ public partial class MainWindow : Window
             ClipboardPanel.Visibility = Visibility.Visible;
             RefreshClipboardPreview();
 
-            // Toggle queue vs BT status sections
             LanQueueSection.Visibility = isBtMode ? Visibility.Collapsed : Visibility.Visible;
             BtStatusSection.Visibility = isBtMode ? Visibility.Visible : Visibility.Collapsed;
 
             if (isBtMode)
-            {
                 UpdateBtStatusPanel();
-            }
-            else
-            {
-                StartQueuePolling();
-                _ = LoadDeviceListAsync();
-                StartSSE();
-            }
         }
         else
         {
             MainPanelPlaceholder.Visibility = Visibility.Visible;
             ClipboardPanel.Visibility = Visibility.Collapsed;
-            StopQueuePolling();
-            StopSSE();
         }
     }
 
-    private void SetSseConnectionState(SseConnectionState state, string detail)
+    private void GearButton_Click(object sender, RoutedEventArgs e)
     {
-        void Apply()
-        {
-            _sseConnectionState = state;
-            _sseStatusDetail = detail;
-            UpdateReceiverStatusUI();
-        }
+        _inSettingsView = !_inSettingsView;
+        UpdateViewMode();
+    }
 
-        if (Dispatcher.CheckAccess())
+    private void UpdateViewMode()
+    {
+        if (_inSettingsView)
         {
-            Apply();
+            ConfigSectionsPanel.Visibility = Visibility.Visible;
+            ClipboardPanel.Visibility = Visibility.Collapsed;
+            MainPanelPlaceholder.Visibility = Visibility.Collapsed;
+            GearButtonIcon.Text = BackGlyph;
+            GearButton.ToolTip = "Back";
         }
         else
         {
-            Dispatcher.Invoke(Apply);
+            ConfigSectionsPanel.Visibility = Visibility.Collapsed;
+            GearButtonIcon.Text = GearGlyph;
+            GearButton.ToolTip = "Settings";
+            UpdateMainPanelState();
         }
-    }
-
-    private void UpdateReceiverStatusUI()
-    {
-        var effectiveState = _sseConnectionState;
-        var detail = _sseStatusDetail;
-
-        if (_configStore.TransferMode == TransferMode.Bluetooth)
-        {
-            effectiveState = SseConnectionState.Disconnected;
-            detail = "LAN receiver is inactive while Bluetooth Direct mode is selected.";
-        }
-        else if (!_configStore.IsConfigured)
-        {
-            effectiveState = SseConnectionState.Disconnected;
-            detail = "Save a server URL to bring the receiver channel online.";
-        }
-        else if (string.IsNullOrEmpty(_configStore.DeviceId))
-        {
-            effectiveState = SseConnectionState.Disconnected;
-            detail = "This device is not registered yet. Save settings to register and enable auto-receive.";
-        }
-
-        SolidColorBrush dotBrush;
-        SolidColorBrush textBrush;
-        SolidColorBrush backgroundBrush;
-        string title;
-
-        switch (effectiveState)
-        {
-            case SseConnectionState.Connected:
-                dotBrush = new SolidColorBrush(Color.FromRgb(34, 197, 94));
-                textBrush = new SolidColorBrush(Color.FromRgb(21, 128, 61));
-                backgroundBrush = new SolidColorBrush(Color.FromRgb(220, 252, 231));
-                title = "Connected";
-                break;
-            case SseConnectionState.Reconnecting:
-                dotBrush = new SolidColorBrush(Color.FromRgb(234, 179, 8));
-                textBrush = new SolidColorBrush(Color.FromRgb(161, 98, 7));
-                backgroundBrush = new SolidColorBrush(Color.FromRgb(254, 249, 195));
-                title = "Reconnecting";
-                break;
-            default:
-                dotBrush = Brushes.Gray;
-                textBrush = new SolidColorBrush(Color.FromRgb(75, 85, 99));
-                backgroundBrush = new SolidColorBrush(Color.FromRgb(243, 244, 246));
-                title = "Disconnected";
-                break;
-        }
-
-        ReceiverStatusBorder.Background = backgroundBrush;
-        ReceiverStatusIcon.Foreground = dotBrush;
-        ReceiverStatusText.Text = $"Receiver Status: {title}";
-        ReceiverStatusText.Foreground = textBrush;
-        ReceiverStatusDetailText.Text = detail;
-        ReceiverStatusDetailText.Foreground = textBrush;
-
-        LanReceiverStatusBorder.Background = backgroundBrush;
-        LanReceiverStatusDot.Fill = dotBrush;
-        LanReceiverStatusLabel.Text = title;
-        LanReceiverStatusLabel.Foreground = textBrush;
-        LanReceiverStatusDetailText.Text = detail;
-        LanReceiverStatusDetailText.Foreground = textBrush;
-    }
-
-    private string CurrentDisconnectedSseDetail()
-    {
-        if (_configStore.TransferMode == TransferMode.Bluetooth)
-        {
-            return "LAN receiver is inactive while Bluetooth Direct mode is selected.";
-        }
-
-        if (!_configStore.IsConfigured)
-        {
-            return "Save a server URL to bring the receiver channel online.";
-        }
-
-        if (string.IsNullOrEmpty(_configStore.DeviceId))
-        {
-            return "This device is not registered yet. Save settings to register and enable auto-receive.";
-        }
-
-        return "Receiver channel disconnected.";
-    }
-
-    private static string FormatRetryDelay(TimeSpan delay)
-    {
-        return delay.TotalSeconds >= 60
-            ? $"{delay.TotalMinutes:F0}m"
-            : $"{delay.TotalSeconds:F0}s";
     }
 
     // Refresh clipboard preview and queue when window is activated
@@ -2836,5 +2238,279 @@ public partial class MainWindow : Window
         Hide();
         ShowInTaskbar = false;
         StopQueuePolling();
+    }
+
+    // --- Embedded Server Toggle (US-085) ---
+
+    /// <summary>
+    /// Called when ServerEnabled is toggled ON. Starts the server and auto-connects the client.
+    /// Returns null on success, or an error message string if the binary is missing.
+    /// </summary>
+    public string? EnableServer()
+    {
+        if (!File.Exists(_serverProcess.BinaryPath))
+        {
+            _serverConfig.ServerEnabled = false;
+            _serverConfig.Save();
+            return $"Server binary not found: {_serverProcess.BinaryPath}";
+        }
+
+        _serverConfig.ServerEnabled = true;
+        _serverConfig.Save();
+        _serverProcess.Start();
+
+        // Auto-connect client to the embedded server
+        _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+        _configStore.Save();
+        UpdateMainPanelState();
+
+        return null;
+    }
+
+    /// <summary>
+    /// Called when ServerEnabled is toggled OFF. Stops the server but leaves HostUrl unchanged.
+    /// </summary>
+    public void DisableServer()
+    {
+        _serverConfig.ServerEnabled = false;
+        _serverConfig.Save();
+        _serverProcess.Stop();
+    }
+
+    // --- Embedded Server Configuration UI (US-086) ---
+
+    private System.Windows.Threading.DispatcherTimer? _storageUsageTimer;
+
+    private void InitializeServerConfigUI()
+    {
+        // Populate fields from ServerConfig
+        ServerEnabledCheckBox.IsChecked = _serverConfig.ServerEnabled;
+        ServerPortTextBox.Text = _serverConfig.Port;
+        ServerBindAddressTextBox.Text = _serverConfig.BindAddress;
+        ServerStoragePathTextBox.Text = _serverConfig.StoragePath;
+        ServerTtlTextBox.Text = _serverConfig.TtlHours.ToString();
+        ServerMaxClipSizeTextBox.Text = _serverConfig.MaxClipSizeMB.ToString();
+        ServerAuthCheckBox.IsChecked = _serverConfig.AuthEnabled;
+        ServerAccessTokenBox.Password = _serverConfig.AccessToken;
+        AutoStartServerCheckBox.IsChecked = _serverConfig.AutoStartServer;
+        RunAtStartupCheckBox.IsChecked = _serverConfig.RunAtWindowsStartup;
+
+        // Set initial enabled/visibility state
+        ServerConfigPanel.IsEnabled = _serverConfig.ServerEnabled;
+        ServerAccessTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
+
+        // Wire up management panel
+        _serverProcess.LogLines.CollectionChanged += (_, _) =>
+        {
+            ServerLogText.Text = string.Join("\n", _serverProcess.LogLines);
+            ServerLogScrollViewer.ScrollToEnd();
+        };
+
+        _serverProcess.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ServerProcess.IsRunning))
+                UpdateServerManagementPanel();
+        };
+
+        _serverConfig.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ServerConfig.UsedSpaceBytes))
+                UpdateStorageUsedText();
+        };
+
+        UpdateServerManagementPanel();
+    }
+
+    private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_serverConfig == null) return;
+
+        var isEnabled = ServerEnabledCheckBox.IsChecked == true;
+        ServerConfigPanel.IsEnabled = isEnabled;
+
+        if (isEnabled)
+        {
+            var error = EnableServer();
+            if (error != null)
+            {
+                ServerEnabledCheckBox.IsChecked = false;
+                ServerConfigPanel.IsEnabled = false;
+                ServerStatusBorder.Visibility = Visibility.Visible;
+                ServerStatusText.Text = error;
+            }
+            else
+            {
+                ServerStatusBorder.Visibility = Visibility.Collapsed;
+            }
+        }
+        else
+        {
+            ServerStatusBorder.Visibility = Visibility.Collapsed;
+            DisableServer();
+        }
+
+        UpdateServerManagementPanel();
+    }
+
+    private void ServerAuthCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_serverConfig == null) return;
+
+        var isChecked = ServerAuthCheckBox.IsChecked == true;
+        ServerAccessTokenPanel.Visibility = isChecked ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ServerAccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        // PasswordBox doesn't support binding — sync manually
+    }
+
+    private void RunAtStartupCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_serverConfig == null) return;
+
+        var enable = RunAtStartupCheckBox.IsChecked == true;
+        _serverConfig.SetRunAtStartup(enable);
+        _serverConfig.Save();
+    }
+
+    private void BrowseStoragePathButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select storage directory for server data",
+            UseDescriptionForTitle = true,
+            SelectedPath = ServerStoragePathTextBox.Text,
+        };
+
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            ServerStoragePathTextBox.Text = dialog.SelectedPath;
+        }
+    }
+
+    private async void ApplyRestartServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Read values from UI controls into ServerConfig
+        _serverConfig.Port = ServerPortTextBox.Text.Trim();
+        _serverConfig.BindAddress = ServerBindAddressTextBox.Text.Trim();
+        _serverConfig.StoragePath = ServerStoragePathTextBox.Text.Trim();
+        if (int.TryParse(ServerTtlTextBox.Text.Trim(), out var ttl))
+            _serverConfig.TtlHours = ttl;
+        if (int.TryParse(ServerMaxClipSizeTextBox.Text.Trim(), out var maxClip))
+            _serverConfig.MaxClipSizeMB = maxClip;
+        _serverConfig.AuthEnabled = ServerAuthCheckBox.IsChecked == true;
+        _serverConfig.AccessToken = ServerAccessTokenBox.Password;
+        _serverConfig.AutoStartServer = AutoStartServerCheckBox.IsChecked == true;
+        _serverConfig.Save();
+
+        // Update client HostUrl to match new port
+        if (_serverConfig.ServerEnabled)
+        {
+            _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+            _configStore.Save();
+
+            if (_serverProcess.IsRunning)
+                await _serverProcess.RestartAsync();
+            else
+                _serverProcess.Start();
+        }
+
+        UpdateServerManagementPanel();
+    }
+
+    // --- Server Management Panel (US-087) ---
+
+    private void UpdateServerManagementPanel()
+    {
+        var enabled = _serverConfig.ServerEnabled;
+        ServerManagementPanel.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!enabled)
+        {
+            StopStorageUsageTimer();
+            return;
+        }
+
+        var running = _serverProcess.IsRunning;
+
+        // Status dot and text
+        ServerRunningDot.Fill = running
+            ? new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E)) // green
+            : new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44)); // red
+        ServerRunningText.Text = running ? "Running" : "Stopped";
+
+        // Listen address
+        ServerListenAddressText.Text = $"Listening on {_serverConfig.BindAddress}:{_serverConfig.Port}";
+        ServerListenAddressText.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+
+        // Buttons
+        StartServerButton.Visibility = running ? Visibility.Collapsed : Visibility.Visible;
+        StopServerButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+        RestartServerButton.Visibility = running ? Visibility.Visible : Visibility.Collapsed;
+
+        // Storage usage + timer
+        if (running)
+        {
+            _ = _serverConfig.RefreshUsedSpaceAsync();
+            StartStorageUsageTimer();
+        }
+        else
+        {
+            StopStorageUsageTimer();
+        }
+
+        UpdateStorageUsedText();
+    }
+
+    private void UpdateStorageUsedText()
+    {
+        ServerStorageUsedText.Text = $"Storage used: {FormatBytes(_serverConfig.UsedSpaceBytes)}";
+    }
+
+    private void StartStorageUsageTimer()
+    {
+        if (_storageUsageTimer != null) return;
+
+        _storageUsageTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(30)
+        };
+        _storageUsageTimer.Tick += async (_, _) =>
+        {
+            await _serverConfig.RefreshUsedSpaceAsync();
+            UpdateStorageUsedText();
+        };
+        _storageUsageTimer.Start();
+    }
+
+    private void StopStorageUsageTimer()
+    {
+        _storageUsageTimer?.Stop();
+        _storageUsageTimer = null;
+    }
+
+    private void StartServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.Start();
+        UpdateServerManagementPanel();
+    }
+
+    private void StopServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.Stop();
+        UpdateServerManagementPanel();
+    }
+
+    private async void RestartServerButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _serverProcess.RestartAsync();
+        UpdateServerManagementPanel();
+    }
+
+    private void ClearLogsButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.LogLines.Clear();
+        ServerLogText.Text = "";
     }
 }

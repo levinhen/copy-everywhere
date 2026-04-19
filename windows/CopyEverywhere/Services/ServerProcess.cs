@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -16,151 +15,124 @@ public class ServerProcess : INotifyPropertyChanged
 
     private Process? _process;
     private bool _isRunning;
+    private readonly ServerConfig _serverConfig;
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    public ObservableCollection<string> LogLines { get; } = new();
+
+    public string BinaryPath { get; set; } =
+        Path.Combine(AppContext.BaseDirectory, "copyeverywhere-server.exe");
 
     public bool IsRunning
     {
         get => _isRunning;
-        private set
-        {
-            if (_isRunning == value) return;
-            _isRunning = value;
-            OnPropertyChanged();
-        }
+        private set { _isRunning = value; OnPropertyChanged(); }
     }
 
-    public ObservableCollection<string> LogLines { get; } = new();
-
-    /// <summary>
-    /// Path to the Go server binary. Defaults to copyeverywhere-server.exe
-    /// next to the client executable.
-    /// </summary>
-    public string BinaryPath { get; set; }
-
-    /// <summary>
-    /// Server configuration — environment variables are derived from this.
-    /// </summary>
-    public ServerConfig? Config { get; set; }
-
-    public ServerProcess()
+    public ServerProcess(ServerConfig serverConfig)
     {
-        var exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        BinaryPath = Path.Combine(exeDir, "copyeverywhere-server.exe");
-
-        // Register for app exit to kill the subprocess
+        _serverConfig = serverConfig;
         Application.Current.Exit += (_, _) => Stop();
     }
 
     public void Start()
     {
-        if (IsRunning) return;
+        if (_process != null && !_process.HasExited)
+            return;
 
-        var psi = new ProcessStartInfo
+        if (!File.Exists(BinaryPath))
+        {
+            AppendLog($"[error] Server binary not found: {BinaryPath}");
+            return;
+        }
+
+        var startInfo = new ProcessStartInfo
         {
             FileName = BinaryPath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
         };
 
-        // Merge current environment with server config overrides
-        if (Config != null)
+        var env = _serverConfig.GetEnvironment();
+        foreach (var kv in env)
+            startInfo.Environment[kv.Key] = kv.Value;
+
+        var proc = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+
+        proc.OutputDataReceived += (_, e) =>
         {
-            foreach (var kv in Config.GetEnvironment())
-            {
-                psi.Environment[kv.Key] = kv.Value;
-            }
-        }
+            if (e.Data != null)
+                AppendLog(e.Data);
+        };
+
+        proc.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                AppendLog(e.Data);
+        };
+
+        proc.Exited += (_, _) =>
+        {
+            var exitCode = 0;
+            try { exitCode = proc.ExitCode; } catch { /* process may be disposed */ }
+            AppendLog($"[server] Process exited with code {exitCode}");
+            Application.Current.Dispatcher.Invoke(() => IsRunning = false);
+        };
 
         try
         {
-            var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
-            proc.OutputDataReceived += OnOutputData;
-            proc.ErrorDataReceived += OnErrorData;
-            proc.Exited += OnProcessExited;
-
             proc.Start();
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
-
             _process = proc;
             IsRunning = true;
-            AppendLog($"[host] Server started (PID {proc.Id})");
+            AppendLog("[server] Started");
         }
         catch (Exception ex)
         {
-            AppendLog($"[host] Failed to start server: {ex.Message}");
+            AppendLog($"[error] Failed to start server: {ex.Message}");
         }
     }
 
     public void Stop()
     {
-        if (_process == null || _process.HasExited) return;
+        if (_process == null) return;
 
-        AppendLog("[host] Stopping server...");
         try
         {
-            // Send Ctrl+C (SIGINT equivalent on Windows) for graceful shutdown
-            // Fall back to Kill if the process doesn't have a console
-            _process.Kill();
+            if (!_process.HasExited)
+                _process.Kill(entireProcessTree: true);
         }
-        catch (Exception ex)
+        catch
         {
-            AppendLog($"[host] Error stopping server: {ex.Message}");
+            // Process may have already exited
         }
+
+        _process = null;
+        IsRunning = false;
+        AppendLog("[server] Stopped");
     }
 
     public async Task RestartAsync()
     {
         Stop();
-
-        // Wait for the process to actually exit (up to 5s)
-        for (int i = 0; i < 50; i++)
-        {
-            if (!IsRunning) break;
-            await Task.Delay(100);
-        }
-
+        await Task.Delay(500);
         Start();
-    }
-
-    public void Restart()
-    {
-        _ = RestartAsync();
-    }
-
-    private void OnOutputData(object sender, DataReceivedEventArgs e)
-    {
-        if (e.Data == null) return;
-        Application.Current?.Dispatcher.Invoke(() => AppendLog(e.Data));
-    }
-
-    private void OnErrorData(object sender, DataReceivedEventArgs e)
-    {
-        if (e.Data == null) return;
-        Application.Current?.Dispatcher.Invoke(() => AppendLog(e.Data));
-    }
-
-    private void OnProcessExited(object? sender, EventArgs e)
-    {
-        Application.Current?.Dispatcher.Invoke(() =>
-        {
-            var code = _process?.ExitCode ?? -1;
-            IsRunning = false;
-            _process = null;
-            AppendLog($"[host] Server exited (code {code})");
-        });
     }
 
     private void AppendLog(string line)
     {
-        LogLines.Add(line);
-        while (LogLines.Count > MaxLogLines)
+        if (Application.Current?.Dispatcher == null) return;
+
+        Application.Current.Dispatcher.Invoke(() =>
         {
-            LogLines.RemoveAt(0);
-        }
+            LogLines.Add(line);
+            while (LogLines.Count > MaxLogLines)
+                LogLines.RemoveAt(0);
+        });
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)

@@ -6,6 +6,8 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using System.Windows;
+using Microsoft.Win32;
 
 namespace CopyEverywhere.Services;
 
@@ -16,218 +18,259 @@ public class ServerConfig : INotifyPropertyChanged
         "CopyEverywhere");
     private static readonly string ConfigFilePath = Path.Combine(ConfigDir, "server-config.json");
 
-    public static readonly string DefaultStoragePath = Path.Combine(
+    private string _port = "8080";
+    private string _bindAddress = "0.0.0.0";
+    private string _storagePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "CopyEverywhere", "server-data");
-
-    private int _port = 8080;
-    private string _storagePath = DefaultStoragePath;
-    private string _bindAddress = "0.0.0.0";
     private int _ttlHours = 24;
     private bool _authEnabled;
     private string _accessToken = "";
     private int _maxClipSizeMB = 50;
     private bool _serverEnabled;
     private bool _autoStartServer;
+    private bool _runAtWindowsStartup;
     private long _usedSpaceBytes;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public int Port
+    public string Port
     {
         get => _port;
-        set { if (_port != value) { _port = value; OnPropertyChanged(); } }
-    }
-
-    public string StoragePath
-    {
-        get => _storagePath;
-        set { if (_storagePath != value) { _storagePath = value; OnPropertyChanged(); } }
+        set { _port = value; OnPropertyChanged(); }
     }
 
     public string BindAddress
     {
         get => _bindAddress;
-        set { if (_bindAddress != value) { _bindAddress = value; OnPropertyChanged(); } }
+        set { _bindAddress = value; OnPropertyChanged(); }
+    }
+
+    public string StoragePath
+    {
+        get => _storagePath;
+        set { _storagePath = value; OnPropertyChanged(); }
     }
 
     public int TtlHours
     {
         get => _ttlHours;
-        set { if (_ttlHours != value) { _ttlHours = value; OnPropertyChanged(); } }
+        set { _ttlHours = value; OnPropertyChanged(); }
     }
 
     public bool AuthEnabled
     {
         get => _authEnabled;
-        set { if (_authEnabled != value) { _authEnabled = value; OnPropertyChanged(); } }
+        set { _authEnabled = value; OnPropertyChanged(); }
     }
 
     public string AccessToken
     {
         get => _accessToken;
-        set { if (_accessToken != value) { _accessToken = value; OnPropertyChanged(); } }
+        set { _accessToken = value; OnPropertyChanged(); }
     }
 
     public int MaxClipSizeMB
     {
         get => _maxClipSizeMB;
-        set { if (_maxClipSizeMB != value) { _maxClipSizeMB = value; OnPropertyChanged(); } }
+        set { _maxClipSizeMB = value; OnPropertyChanged(); }
     }
 
     public bool ServerEnabled
     {
         get => _serverEnabled;
-        set { if (_serverEnabled != value) { _serverEnabled = value; OnPropertyChanged(); } }
+        set { _serverEnabled = value; OnPropertyChanged(); }
     }
 
     public bool AutoStartServer
     {
         get => _autoStartServer;
-        set { if (_autoStartServer != value) { _autoStartServer = value; OnPropertyChanged(); } }
+        set { _autoStartServer = value; OnPropertyChanged(); }
+    }
+
+    public bool RunAtWindowsStartup
+    {
+        get => _runAtWindowsStartup;
+        set { _runAtWindowsStartup = value; OnPropertyChanged(); }
     }
 
     public long UsedSpaceBytes
     {
         get => _usedSpaceBytes;
-        set { if (_usedSpaceBytes != value) { _usedSpaceBytes = value; OnPropertyChanged(); } }
+        set { _usedSpaceBytes = value; OnPropertyChanged(); }
     }
 
-    public ServerConfig()
-    {
-        Load();
-    }
-
-    /// <summary>
-    /// Returns environment variables to forward to the Go server subprocess.
-    /// </summary>
     public Dictionary<string, string> GetEnvironment()
     {
         var env = new Dictionary<string, string>
         {
-            ["PORT"] = Port.ToString(),
+            ["PORT"] = Port,
             ["BIND_ADDRESS"] = BindAddress,
             ["STORAGE_PATH"] = StoragePath,
             ["TTL_HOURS"] = TtlHours.ToString(),
+            ["AUTH_ENABLED"] = AuthEnabled.ToString().ToLower(),
             ["MAX_CLIP_SIZE_MB"] = MaxClipSizeMB.ToString(),
-            ["AUTH_ENABLED"] = AuthEnabled ? "true" : "false",
         };
+
         if (AuthEnabled && !string.IsNullOrEmpty(AccessToken))
-        {
             env["ACCESS_TOKEN"] = AccessToken;
-        }
+
         return env;
     }
 
     public void Save()
     {
-        try
+        Directory.CreateDirectory(ConfigDir);
+
+        var data = new ServerConfigData
         {
-            Directory.CreateDirectory(ConfigDir);
-            var data = new ServerConfigData
-            {
-                Port = Port,
-                StoragePath = StoragePath,
-                BindAddress = BindAddress,
-                TtlHours = TtlHours,
-                AuthEnabled = AuthEnabled,
-                AccessToken = AccessToken,
-                MaxClipSizeMB = MaxClipSizeMB,
-                ServerEnabled = ServerEnabled,
-                AutoStartServer = AutoStartServer,
-            };
-            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(ConfigFilePath, json);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[ServerConfig] Failed to save: {ex.Message}");
-        }
+            Port = Port,
+            BindAddress = BindAddress,
+            StoragePath = StoragePath,
+            TtlHours = TtlHours,
+            AuthEnabled = AuthEnabled,
+            AccessToken = AccessToken,
+            MaxClipSizeMB = MaxClipSizeMB,
+            ServerEnabled = ServerEnabled,
+            AutoStartServer = AutoStartServer,
+            RunAtWindowsStartup = RunAtWindowsStartup,
+        };
+
+        var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+        var tmpPath = ConfigFilePath + ".tmp";
+        File.WriteAllText(tmpPath, json);
+
+        if (File.Exists(ConfigFilePath))
+            File.Replace(tmpPath, ConfigFilePath, null);
+        else
+            File.Move(tmpPath, ConfigFilePath);
     }
 
     public void Load()
     {
+        if (!File.Exists(ConfigFilePath))
+            return;
+
         try
         {
-            if (!File.Exists(ConfigFilePath)) return;
-
             var json = File.ReadAllText(ConfigFilePath);
             var data = JsonSerializer.Deserialize<ServerConfigData>(json);
             if (data == null) return;
 
             Port = data.Port;
-            StoragePath = !string.IsNullOrEmpty(data.StoragePath) ? data.StoragePath : DefaultStoragePath;
-            BindAddress = !string.IsNullOrEmpty(data.BindAddress) ? data.BindAddress : "0.0.0.0";
+            BindAddress = data.BindAddress;
+            StoragePath = data.StoragePath;
             TtlHours = data.TtlHours;
             AuthEnabled = data.AuthEnabled;
-            AccessToken = data.AccessToken ?? "";
-            MaxClipSizeMB = data.MaxClipSizeMB > 0 ? data.MaxClipSizeMB : 50;
+            AccessToken = data.AccessToken;
+            MaxClipSizeMB = data.MaxClipSizeMB;
             ServerEnabled = data.ServerEnabled;
             AutoStartServer = data.AutoStartServer;
+            RunAtWindowsStartup = data.RunAtWindowsStartup;
         }
-        catch (Exception ex)
+        catch
         {
-            System.Diagnostics.Debug.WriteLine($"[ServerConfig] Failed to load: {ex.Message}");
+            // Missing or corrupt file — keep defaults
         }
     }
 
-    public void RefreshUsedSpace()
+    private const string StartupRegistryKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string StartupValueName = "CopyEverywhere";
+
+    public void SetRunAtStartup(bool enable)
+    {
+        RunAtWindowsStartup = enable;
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(StartupRegistryKey, writable: true);
+            if (key == null) return;
+
+            if (enable)
+            {
+                var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrEmpty(exePath))
+                    key.SetValue(StartupValueName, $"\"{exePath}\" --minimized");
+            }
+            else
+            {
+                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
+            }
+        }
+        catch
+        {
+            // Registry access may fail — silently ignore
+        }
+    }
+
+    public async Task RefreshUsedSpaceAsync()
     {
         var path = StoragePath;
-        Task.Run(() =>
+        var bytes = await Task.Run(() =>
         {
+            if (!Directory.Exists(path))
+                return 0L;
+
             long total = 0;
             try
             {
-                if (Directory.Exists(path))
+                foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
                 {
-                    foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                    try
                     {
-                        try { total += new FileInfo(file).Length; } catch { }
+                        total += new FileInfo(file).Length;
+                    }
+                    catch
+                    {
+                        // Skip inaccessible files
                     }
                 }
             }
-            catch { }
-
-            System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+            catch
             {
-                UsedSpaceBytes = total;
-            });
+                // Directory may have become inaccessible
+            }
+            return total;
         });
+
+        Application.Current?.Dispatcher?.Invoke(() => UsedSpaceBytes = bytes);
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null)
     {
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
-}
 
-internal class ServerConfigData
-{
-    [JsonPropertyName("port")]
-    public int Port { get; set; } = 8080;
+    private class ServerConfigData
+    {
+        [JsonPropertyName("port")]
+        public string Port { get; set; } = "8080";
 
-    [JsonPropertyName("storagePath")]
-    public string StoragePath { get; set; } = "";
+        [JsonPropertyName("bind_address")]
+        public string BindAddress { get; set; } = "0.0.0.0";
 
-    [JsonPropertyName("bindAddress")]
-    public string BindAddress { get; set; } = "0.0.0.0";
+        [JsonPropertyName("storage_path")]
+        public string StoragePath { get; set; } = "";
 
-    [JsonPropertyName("ttlHours")]
-    public int TtlHours { get; set; } = 24;
+        [JsonPropertyName("ttl_hours")]
+        public int TtlHours { get; set; } = 24;
 
-    [JsonPropertyName("authEnabled")]
-    public bool AuthEnabled { get; set; }
+        [JsonPropertyName("auth_enabled")]
+        public bool AuthEnabled { get; set; }
 
-    [JsonPropertyName("accessToken")]
-    public string? AccessToken { get; set; }
+        [JsonPropertyName("access_token")]
+        public string AccessToken { get; set; } = "";
 
-    [JsonPropertyName("maxClipSizeMB")]
-    public int MaxClipSizeMB { get; set; } = 50;
+        [JsonPropertyName("max_clip_size_mb")]
+        public int MaxClipSizeMB { get; set; } = 50;
 
-    [JsonPropertyName("serverEnabled")]
-    public bool ServerEnabled { get; set; }
+        [JsonPropertyName("server_enabled")]
+        public bool ServerEnabled { get; set; }
 
-    [JsonPropertyName("autoStartServer")]
-    public bool AutoStartServer { get; set; }
+        [JsonPropertyName("auto_start_server")]
+        public bool AutoStartServer { get; set; }
+
+        [JsonPropertyName("run_at_windows_startup")]
+        public bool RunAtWindowsStartup { get; set; }
+    }
 }

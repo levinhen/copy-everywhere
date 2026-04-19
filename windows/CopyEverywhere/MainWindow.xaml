@@ -66,10 +66,28 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
     <Grid Margin="16">
         <StackPanel>
-            <!-- Header -->
-            <TextBlock Text="CopyEverywhere" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
-            <TextBlock Text="Cross-device clipboard &amp; file transfer" Foreground="Gray" FontSize="11" Margin="0,0,0,16"/>
+            <!-- Header with settings toggle -->
+            <Grid Margin="0,0,0,16">
+                <StackPanel HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <TextBlock Text="CopyEverywhere" FontSize="18" FontWeight="Bold" Margin="0,0,0,4"/>
+                    <TextBlock Text="Cross-device clipboard &amp; file transfer" Foreground="Gray" FontSize="11"/>
+                </StackPanel>
+                <Button x:Name="GearButton"
+                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Width="32" Height="32"
+                        Background="Transparent" BorderThickness="0"
+                        Cursor="Hand"
+                        ToolTip="Settings"
+                        Click="GearButton_Click">
+                    <TextBlock x:Name="GearButtonIcon"
+                               Text="&#xE713;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="18"/>
+                </Button>
+            </Grid>
 
+            <!-- Settings (gated by gear button) -->
+            <StackPanel x:Name="ConfigSectionsPanel" Visibility="Collapsed">
             <!-- Server Configuration -->
             <TextBlock Text="Server Configuration" Style="{StaticResource SectionHeader}"/>
 
@@ -143,57 +161,12 @@
                 </Border>
             </StackPanel>
 
-            <Border x:Name="ReceiverStatusBorder"
-                    CornerRadius="4"
-                    Padding="10,8"
-                    Margin="0,0,0,12"
-                    Background="#F3F4F6">
-                <StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                        <TextBlock x:Name="ReceiverStatusIcon"
-                                   Text="&#x25CF;"
-                                   FontSize="12"
-                                   VerticalAlignment="Center"
-                                   Foreground="Gray"
-                                   Margin="0,0,6,0"/>
-                        <TextBlock x:Name="ReceiverStatusText"
-                                   Text="Receiver Status: Disconnected"
-                                   FontSize="12"
-                                   FontWeight="SemiBold"
-                                   VerticalAlignment="Center"
-                                   Foreground="#4B5563"/>
-                    </StackPanel>
-                    <TextBlock x:Name="ReceiverStatusDetailText"
-                               Text="Save a server URL to bring the receiver channel online."
-                               FontSize="11"
-                               TextWrapping="Wrap"
-                               Foreground="#4B5563"/>
-                </StackPanel>
-            </Border>
-
             <!-- Target Device Selector -->
-            <TextBlock Text="Delivery Target" Style="{StaticResource FieldLabel}"/>
+            <TextBlock Text="Target Device" Style="{StaticResource FieldLabel}"/>
             <ComboBox x:Name="TargetDeviceComboBox"
                       Margin="0,0,0,12"
                       Padding="6,4"
                       SelectionChanged="TargetDeviceComboBox_SelectionChanged"/>
-
-            <Border x:Name="TargetDeviceStatusBorder"
-                    Visibility="Collapsed"
-                    CornerRadius="4"
-                    Padding="10,8"
-                    Margin="0,0,0,12">
-                <StackPanel>
-                    <TextBlock x:Name="TargetDeviceStatusText"
-                               FontSize="12"
-                               FontWeight="SemiBold"
-                               TextWrapping="Wrap"/>
-                    <TextBlock x:Name="TargetDeviceStatusDetailText"
-                               FontSize="11"
-                               Margin="0,4,0,0"
-                               TextWrapping="Wrap"/>
-                </StackPanel>
-            </Border>
 
             <!-- Floating Ball Toggle -->
             <CheckBox x:Name="FloatingBallCheckBox"
@@ -215,6 +188,164 @@
                 <ComboBoxItem Content="LAN Server" Tag="LanServer"/>
                 <ComboBoxItem Content="Bluetooth Direct" Tag="Bluetooth"/>
             </ComboBox>
+
+            <!-- Embedded Server Section -->
+            <Separator Margin="0,4,0,16"/>
+            <TextBlock Text="Embedded Server" Style="{StaticResource SectionHeader}"/>
+
+            <CheckBox x:Name="ServerEnabledCheckBox"
+                      Content="Enable embedded server"
+                      Margin="0,0,0,12"
+                      Checked="ServerEnabledCheckBox_Changed"
+                      Unchecked="ServerEnabledCheckBox_Changed"/>
+
+            <!-- Server error/status -->
+            <Border x:Name="ServerStatusBorder"
+                    Visibility="Collapsed"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Margin="0,0,0,8"
+                    Background="#FEE2E2">
+                <TextBlock x:Name="ServerStatusText"
+                           TextWrapping="Wrap"
+                           FontSize="12"
+                           Foreground="#B91C1C"/>
+            </Border>
+
+            <StackPanel x:Name="ServerConfigPanel" IsEnabled="False">
+                <TextBlock Text="Port" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerPortTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"
+                         Width="100"
+                         HorizontalAlignment="Left"/>
+
+                <TextBlock Text="Bind Address" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerBindAddressTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"/>
+
+                <TextBlock Text="Storage Path" Style="{StaticResource FieldLabel}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBox x:Name="ServerStoragePathTextBox"
+                             Padding="6,4"
+                             Width="260"/>
+                    <Button x:Name="BrowseStoragePathButton"
+                            Content="Browse..."
+                            Width="80" Height="28"
+                            Margin="8,0,0,0"
+                            Click="BrowseStoragePathButton_Click"/>
+                </StackPanel>
+
+                <TextBlock Text="TTL (hours)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerTtlTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"
+                         Width="100"
+                         HorizontalAlignment="Left"/>
+
+                <TextBlock Text="Max Clip Size (MB)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerMaxClipSizeTextBox"
+                         Margin="0,0,0,8"
+                         Padding="6,4"
+                         Width="100"
+                         HorizontalAlignment="Left"/>
+
+                <CheckBox x:Name="ServerAuthCheckBox"
+                          Content="Require authentication"
+                          Margin="0,0,0,8"
+                          Checked="ServerAuthCheckBox_Changed"
+                          Unchecked="ServerAuthCheckBox_Changed"/>
+
+                <StackPanel x:Name="ServerAccessTokenPanel" Visibility="Collapsed">
+                    <TextBlock Text="Server Access Token" Style="{StaticResource FieldLabel}"/>
+                    <PasswordBox x:Name="ServerAccessTokenBox"
+                                 Margin="0,0,0,8"
+                                 Padding="6,4"
+                                 PasswordChanged="ServerAccessTokenBox_PasswordChanged"/>
+                </StackPanel>
+
+                <CheckBox x:Name="AutoStartServerCheckBox"
+                          Content="Auto-start server on app launch"
+                          Margin="0,0,0,8"/>
+
+                <CheckBox x:Name="RunAtStartupCheckBox"
+                          Content="Run at Windows startup"
+                          Margin="0,0,0,12"
+                          Checked="RunAtStartupCheckBox_Changed"
+                          Unchecked="RunAtStartupCheckBox_Changed"/>
+
+                <Button x:Name="ApplyRestartServerButton"
+                        Content="Apply &amp; Restart Server"
+                        Width="160" Height="30"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,8"
+                        Click="ApplyRestartServerButton_Click"/>
+            </StackPanel>
+
+            <!-- Server Management Panel (visible only when ServerEnabled) -->
+            <StackPanel x:Name="ServerManagementPanel" Visibility="Collapsed" Margin="0,8,0,0">
+                <!-- Status row -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Ellipse x:Name="ServerRunningDot" Width="10" Height="10" Fill="Red" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ServerRunningText" Text="Stopped" FontSize="12" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Listen address (visible when running) -->
+                <TextBlock x:Name="ServerListenAddressText"
+                           FontSize="12"
+                           Foreground="Gray"
+                           Margin="0,0,0,4"
+                           Visibility="Collapsed"/>
+
+                <!-- Storage used -->
+                <TextBlock x:Name="ServerStorageUsedText"
+                           FontSize="12"
+                           Foreground="Gray"
+                           Margin="0,0,0,8"/>
+
+                <!-- Start/Stop/Restart buttons -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="StartServerButton"
+                            Content="Start Server"
+                            Width="100" Height="28"
+                            Margin="0,0,8,0"
+                            Click="StartServerButton_Click"/>
+                    <Button x:Name="StopServerButton"
+                            Content="Stop Server"
+                            Width="100" Height="28"
+                            Margin="0,0,8,0"
+                            Visibility="Collapsed"
+                            Click="StopServerButton_Click"/>
+                    <Button x:Name="RestartServerButton"
+                            Content="Restart"
+                            Width="80" Height="28"
+                            Visibility="Collapsed"
+                            Click="RestartServerButton_Click"/>
+                </StackPanel>
+
+                <!-- Log viewer -->
+                <TextBlock Text="Server Logs" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,4,0,4"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,4"
+                        MaxHeight="200">
+                    <ScrollViewer x:Name="ServerLogScrollViewer" VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="ServerLogText"
+                                   FontFamily="Consolas"
+                                   FontSize="11"
+                                   TextWrapping="Wrap"
+                                   Padding="6,4"/>
+                    </ScrollViewer>
+                </Border>
+
+                <Button x:Name="ClearLogsButton"
+                        Content="Clear Logs"
+                        Width="80" Height="26"
+                        HorizontalAlignment="Left"
+                        Margin="0,0,0,8"
+                        Click="ClearLogsButton_Click"/>
+            </StackPanel>
+
+            <Separator Margin="0,4,0,16"/>
 
             <!-- Bluetooth Section (hidden by default) -->
             <StackPanel x:Name="BluetoothSection" Visibility="Collapsed">
@@ -277,118 +408,8 @@
                 </StackPanel>
             </StackPanel>
 
-            <!-- Embedded Server Section -->
-            <Separator Margin="0,4,0,16"/>
-            <TextBlock Text="Embedded Server" Style="{StaticResource SectionHeader}"/>
-
-            <CheckBox x:Name="ServerEnabledCheckBox"
-                      Content="Enable embedded server"
-                      Margin="0,0,0,8"
-                      Checked="ServerEnabledCheckBox_Changed"
-                      Unchecked="ServerEnabledCheckBox_Changed"/>
-
-            <StackPanel x:Name="ServerConfigSection" Visibility="Collapsed">
-                <TextBlock Text="Port" Style="{StaticResource FieldLabel}"/>
-                <TextBox x:Name="ServerPortBox" Margin="0,0,0,8" Padding="6,4"/>
-
-                <TextBlock Text="Bind Address" Style="{StaticResource FieldLabel}"/>
-                <TextBox x:Name="ServerBindAddressBox" Margin="0,0,0,8" Padding="6,4"/>
-
-                <TextBlock Text="Storage Path" Style="{StaticResource FieldLabel}"/>
-                <Grid Margin="0,0,0,8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="ServerStoragePathBox" Grid.Column="0" Padding="6,4"/>
-                    <Button x:Name="ServerStorageBrowseButton" Grid.Column="1" Content="Browse"
-                            Width="60" Margin="4,0,0,0" Click="ServerStorageBrowseButton_Click"/>
-                </Grid>
-
-                <TextBlock Text="TTL (hours)" Style="{StaticResource FieldLabel}"/>
-                <TextBox x:Name="ServerTtlBox" Margin="0,0,0,8" Padding="6,4"/>
-
-                <TextBlock Text="Max Clip Size (MB)" Style="{StaticResource FieldLabel}"/>
-                <TextBox x:Name="ServerMaxClipSizeBox" Margin="0,0,0,8" Padding="6,4"/>
-
-                <CheckBox x:Name="ServerAuthCheckBox"
-                          Content="Require authentication"
-                          Margin="0,0,0,8"
-                          Checked="ServerAuthCheckBox_Changed"
-                          Unchecked="ServerAuthCheckBox_Changed"/>
-
-                <StackPanel x:Name="ServerTokenPanel" Visibility="Collapsed" Margin="0,0,0,8">
-                    <TextBlock Text="Server Access Token" Style="{StaticResource FieldLabel}"/>
-                    <PasswordBox x:Name="ServerAccessTokenBox" Padding="6,4"
-                                 PasswordChanged="ServerAccessTokenBox_PasswordChanged"/>
-                </StackPanel>
-
-                <CheckBox x:Name="ServerAutoStartCheckBox"
-                          Content="Auto-start server on launch"
-                          Margin="0,0,0,12"/>
-
-                <Button x:Name="ServerApplyButton"
-                        Content="Apply &amp; Restart Server"
-                        Padding="8,4" Margin="0,0,0,8"
-                        Click="ServerApplyButton_Click"/>
             </StackPanel>
-
-            <!-- Server Management Panel (visible when server is enabled) -->
-            <StackPanel x:Name="ServerManagementSection" Visibility="Collapsed">
-                <Separator Margin="0,4,0,16"/>
-                <TextBlock Text="Server Management" Style="{StaticResource SectionHeader}"/>
-
-                <!-- Status indicator -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                    <TextBlock x:Name="ServerStatusDot" Text="&#x25CF;" FontSize="14" VerticalAlignment="Center"
-                               Foreground="Gray" Margin="0,0,6,0"/>
-                    <TextBlock x:Name="ServerStatusText" Text="Disabled" FontSize="12" VerticalAlignment="Center"/>
-                </StackPanel>
-
-                <!-- Control buttons -->
-                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                    <Button x:Name="ServerStartButton" Content="Start" Width="70" Height="26" FontSize="11"
-                            Margin="0,0,6,0" Click="ServerStartButton_Click"/>
-                    <Button x:Name="ServerStopButton" Content="Stop" Width="70" Height="26" FontSize="11"
-                            Margin="0,0,6,0" Click="ServerStopButton_Click" Visibility="Collapsed"/>
-                    <Button x:Name="ServerRestartButton" Content="Restart" Width="70" Height="26" FontSize="11"
-                            Click="ServerRestartButton_Click" Visibility="Collapsed"/>
-                </StackPanel>
-
-                <!-- Storage stats -->
-                <StackPanel Margin="0,0,0,8">
-                    <TextBlock Text="Storage" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="ServerStorageUsedText" FontSize="11" Foreground="Gray" Margin="0,2,0,0"/>
-                    <TextBlock x:Name="ServerStoragePathText" FontSize="11" Foreground="Gray" Margin="0,2,0,0"/>
-                </StackPanel>
-
-                <!-- Connected devices -->
-                <TextBlock Text="Connected Devices" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
-                        MinHeight="30" MaxHeight="120">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="ServerDevicesPanel">
-                            <TextBlock x:Name="NoServerDevicesText"
-                                       Text="No devices connected"
-                                       Foreground="Gray" FontSize="11"
-                                       HorizontalAlignment="Center" Margin="0,6,0,6"/>
-                        </StackPanel>
-                    </ScrollViewer>
-                </Border>
-
-                <!-- Log viewer -->
-                <TextBlock Text="Server Logs" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
-                        MaxHeight="150">
-                    <ScrollViewer x:Name="ServerLogScrollViewer" VerticalScrollBarVisibility="Auto">
-                        <TextBlock x:Name="ServerLogText" FontSize="10" FontFamily="Consolas"
-                                   Padding="6,4" TextWrapping="Wrap"/>
-                    </ScrollViewer>
-                </Border>
-            </StackPanel>
-
-            <!-- Separator before main content -->
-            <Separator Margin="0,4,0,16"/>
+            <!-- /ConfigSectionsPanel -->
 
             <!-- Send Clipboard Section -->
             <StackPanel x:Name="ClipboardPanel" Visibility="Collapsed">
@@ -559,36 +580,7 @@
 
                 <!-- Server Queue Section (LAN mode) -->
                 <StackPanel x:Name="LanQueueSection">
-                    <TextBlock Text="Queue Mode &amp; Recovery" Style="{StaticResource SectionHeader}"/>
-
-                    <Border x:Name="LanReceiverStatusBorder"
-                            Background="#F3F4F6"
-                            CornerRadius="4"
-                            Padding="8"
-                            Margin="0,0,0,8">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse x:Name="LanReceiverStatusDot"
-                                         Width="8"
-                                         Height="8"
-                                         Fill="Gray"
-                                         Margin="0,0,6,0"
-                                         VerticalAlignment="Center"/>
-                                <TextBlock x:Name="LanReceiverStatusLabel"
-                                           Text="Disconnected"
-                                           FontSize="12"
-                                           FontWeight="SemiBold"
-                                           VerticalAlignment="Center"
-                                           Foreground="#4B5563"/>
-                            </StackPanel>
-                            <TextBlock x:Name="LanReceiverStatusDetailText"
-                                       Text="Save a server URL to bring the receiver channel online."
-                                       FontSize="11"
-                                       Foreground="#4B5563"
-                                       Margin="14,4,0,0"
-                                       TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Border>
+                    <TextBlock Text="Server Queue" Style="{StaticResource SectionHeader}"/>
 
                     <ScrollViewer x:Name="QueueScrollViewer" MaxHeight="300" VerticalScrollBarVisibility="Auto" Margin="0,0,0,8">
                         <StackPanel x:Name="QueueListPanel">
@@ -635,9 +627,10 @@
 
             <!-- Not configured placeholder -->
             <TextBlock x:Name="MainPanelPlaceholder"
-                       Text="Configure server connection above to get started."
+                       Text="Click the gear icon at the top right to configure your connection."
                        Foreground="Gray"
                        FontSize="12"
+                       TextWrapping="Wrap"
                        HorizontalAlignment="Center"/>
         </StackPanel>
     </Grid>

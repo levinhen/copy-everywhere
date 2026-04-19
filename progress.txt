@@ -1,230 +1,122 @@
-# Embedded Server — Progress
-
 ## Codebase Patterns
-- ServerProcess from CopyEverywhereServer is already `@MainActor` + `ObservableObject` — copies directly into the client app without adaptation.
-- ServerProcess depends on ServerConfig for its `environment` property — need at least a stub for compilation.
-- AppDelegate owns top-level singletons (configStore, serverConfig, serverProcess) and injects them via `@EnvironmentObject`.
-- New ConfigData fields must be `Optional` with defaults in `load()` for backward compat with older config files.
-- When restarting the Go subprocess, poll `isRunning` instead of fixed delay — mDNS needs the old process fully exited before the new one starts.
-- Windows `ServerProcess`/`ServerConfig` mirror macOS patterns but use `INotifyPropertyChanged` instead of `@Published`.
-- Windows uses `Process.Kill()` (hard kill) since there's no reliable SIGTERM equivalent for console-less processes.
-- Go server's `/api/v1/devices` returns `device_id` (not `id`) — model classes on all platforms need CodingKeys/JsonPropertyName mapping.
-- `FolderBrowserDialog` (Windows) requires `<UseWindowsForms>true</UseWindowsForms>` in the csproj.
-- CLAUDE.md may have unresolved merge conflict markers from branch merges — always resolve these when editing.
+- Windows: WPF PasswordBox doesn't support two-way binding — sync via PasswordChanged event
+- Windows: Use Application.Current.Dispatcher.Invoke() to update ObservableCollection from background threads (OutputDataReceived fires on a thread-pool thread)
+- Windows: Process.Kill(entireProcessTree: true) available on .NET 5+ — use it to ensure child processes are also killed
+- Windows: AppContext.BaseDirectory gives the directory containing the EXE (equivalent to Swift's Bundle.main.bundlePath)
+- Windows: Registry reads/writes via Microsoft.Win32.Registry.CurrentUser.OpenSubKey / CreateSubKey / DeleteValue — no extra NuGet needed
+- Windows: FolderBrowserDialog is in System.Windows.Forms — add <UseWindowsForms>true</UseWindowsForms> to csproj or use a WPF-native CommonOpenFileDialog from Microsoft.WindowsAPICodePack if available
+- Windows: Process.StartInfo.Environment is a Dictionary<string,string> pre-populated with the current process environment; override specific keys before starting
+- Windows: Atomic file write pattern: write to <path>.tmp then File.Replace(<path>.tmp, <path>, null)
+- Windows: GetFolderPath(Environment.SpecialFolder.ApplicationData) returns %APPDATA% (roaming); LocalApplicationData returns %LOCALAPPDATA%
+- Server binary path convention: copyeverywhere-server.exe placed as a sibling next to CopyEverywhere.exe (same directory); compiled separately with go build -o copyeverywhere-server.exe . from server/
 
 ---
 
-## 2026-04-13 - US-069
-- Copied ServerProcess.swift from macos/CopyEverywhereServer into macos/CopyEverywhere/Sources/CopyEverywhere/
-- Added minimal ServerConfig stub (empty environment dict) for compilation — full implementation in US-070
-- Added `serverProcess` property to AppDelegate
-- Added `applicationWillTerminate` with `serverProcess.stop()` for graceful SIGTERM shutdown
-- Files changed:
-  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerProcess.swift (new — copied from server host app)
-  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerConfig.swift (new — minimal stub)
-  - macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift (added serverProcess + shutdown)
+## 2026-04-13 - US-083
+- Implemented `Services/ServerProcess.cs` — subprocess lifecycle management for the Go relay server
+- Implemented minimal `Services/ServerConfig.cs` stub with `GetEnvironment()` (full persistence in US-084)
+- Files changed: `windows/CopyEverywhere/Services/ServerProcess.cs` (new), `windows/CopyEverywhere/Services/ServerConfig.cs` (new)
 - **Learnings for future iterations:**
-  - ServerProcess references ServerConfig type — must exist even as a stub for the build to succeed
-  - The existing CopyEverywhereServer code was clean enough to copy verbatim; no @MainActor adaptation needed
-  - swift build produces only pre-existing warnings (expiryDate never read in ConfigStore)
+  - `Process.EnableRaisingEvents = true` must be set before calling `Start()` for the `Exited` event to fire
+  - `OutputDataReceived`/`ErrorDataReceived` fire on thread-pool threads — must use `Dispatcher.Invoke` to update `ObservableCollection`
+  - `Process.Kill(entireProcessTree: true)` is the .NET 5+ way to kill a process tree — no need for P/Invoke
+  - `Application.Current.Dispatcher` can be null during shutdown — guard before invoking
+  - `BeginOutputReadLine()`/`BeginErrorReadLine()` must be called after `Start()` to begin async reading
+  - Created ServerConfig as a minimal stub since ServerProcess depends on it; US-084 will flesh it out with persistence
 ---
 
-## 2026-04-13 - US-070
-- Replaced ServerConfig stub with full implementation migrated from CopyEverywhereServer
-- Adapted for client app context: config path → `~/Library/Application Support/CopyEverywhere/server-config.json`, storage path → `.../CopyEverywhere/server-data`
-- Added `maxClipSizeMB` property (default 50) with `MAX_CLIP_SIZE_MB` in environment dict
-- Removed `launchAtLogin` / `SMAppService` (standalone server app concern, not relevant for embedded server)
-- Default `ttlHours` set to 24 (was 1 in the standalone app)
-- Files changed:
-  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerConfig.swift (replaced stub with full implementation)
+## 2026-04-13 - US-084
+- Fleshed out `Services/ServerConfig.cs` from stub to full implementation with JSON persistence
+- Added properties: `ServerEnabled`, `AutoStartServer`, `UsedSpaceBytes` (with backing fields + INotifyPropertyChanged)
+- Converted all existing properties to use backing fields with `OnPropertyChanged()` notifications
+- `Save()` writes atomically via `.tmp` file + `File.Replace`/`File.Move`
+- `Load()` deserializes from `%APPDATA%/CopyEverywhere/server-config.json`; missing/corrupt file keeps defaults
+- `RefreshUsedSpaceAsync()` enumerates `StoragePath` on a background thread, updates `UsedSpaceBytes` on UI thread
+- Private `ServerConfigData` class with `[JsonPropertyName]` attributes for clean JSON serialization
+- Files changed: `windows/CopyEverywhere/Services/ServerConfig.cs` (rewritten)
 - **Learnings for future iterations:**
-  - The standalone CopyEverywhereServer config used `launchAtLogin` via SMAppService — not needed when the server is embedded (the client app handles its own launch-at-login)
-  - ConfigData uses optional fields (`bindAddress`, `maxClipSizeMB`) for backward compatibility with older config files
+  - `File.Replace(src, dst, null)` throws if `dst` doesn't exist — need conditional: `File.Replace` when target exists, `File.Move` when it doesn't
+  - `Directory.EnumerateFiles` with `SearchOption.AllDirectories` can throw on inaccessible subdirectories — wrap in try/catch
+  - `Application.Current?.Dispatcher?.Invoke` double null-check needed for background tasks that may outlive the app lifecycle
 ---
 
-## 2026-04-13 - US-071
-- Added `serverEnabled` and `autoStartServer` booleans to ServerConfig with persistence (optional fields in ConfigData for backward compat)
-- Added `setServerEnabled(_:)` on AppDelegate: toggles subprocess + auto-connects client to `http://localhost:<port>`
-- Added `autoConnectToLocalServer()` helper that sets `configStore.hostURL` and optionally copies the server's access token
-- Auto-start on launch: `applicationDidFinishLaunching` checks `serverEnabled && autoStartServer`
-- Injected `serverConfig` and `serverProcess` as `@EnvironmentObject` into the view hierarchy for use by US-072
-- Files changed:
-  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerConfig.swift (added serverEnabled, autoStartServer + persistence)
-  - macos/CopyEverywhere/Sources/CopyEverywhere/CopyEverywhereApp.swift (added serverConfig, toggle logic, auto-start, env objects)
+## 2026-04-13 - US-085
+- Implemented server toggle and auto-connect in `App.xaml.cs` and `MainWindow.xaml.cs`
+- `App.xaml.cs`: creates `ServerConfig` + `ServerProcess`, calls `Load()`, auto-starts server if `AutoStartServer`, auto-sets `HostUrl` if `ServerEnabled`
+- `MainWindow` constructor now takes `ServerConfig` and `ServerProcess` parameters
+- Added `EnableServer()` / `DisableServer()` methods to `MainWindow` for UI toggle logic (US-086 will wire the CheckBox)
+- `EnableServer()` checks `File.Exists(BinaryPath)` and returns error message if missing, leaving `ServerEnabled=false`
+- `DisableServer()` stops the server but leaves `HostUrl` unchanged
+- `App.xaml.cs` handles `--minimized` arg to start hidden to tray
+- Updated CLAUDE.md source of truth and PRD files for new iteration
+- Files changed: `App.xaml.cs`, `MainWindow.xaml.cs`, `CLAUDE.md`, `prd.json`, `tasks/prd-windows-embedded-server.md` (new), `tasks/prd-embedded-server.md` (deleted)
 - **Learnings for future iterations:**
-  - AppDelegate owns all three singletons (configStore, serverConfig, serverProcess) — toggle logic lives there because it needs all three
-  - `autoConnectToLocalServer()` calls `configStore.save()` which triggers device registration + SSE restart — no extra wiring needed
-  - New ConfigData fields must be optional (`Bool?`) with defaults in `load()` for backward compatibility with existing config files
+  - `MainWindow` parameterless constructor was the only constructor — when adding DI parameters, must replace it (WPF designer may complain but runtime is fine since `App.xaml.cs` creates the window programmatically)
+  - `e.Args.Contains("--minimized")` requires `System.Linq` using
+  - Server enable/disable logic split: `App.xaml.cs` handles launch-time auto-start; `MainWindow` exposes `EnableServer()`/`DisableServer()` for runtime toggle (US-086 will wire the CheckBox)
 ---
 
-## 2026-04-13 - US-072
-- Added embedded server configuration section to ConfigView, below the transfer mode sections (separated by Divider)
-- Toggle: Enable embedded server — wired through AppDelegate.setServerEnabled() for start/stop + auto-connect
-- When enabled: Port, Bind Address, Storage Path, TTL (hours), Max Clip Size (MB) fields
-- Toggle: Require authentication with conditional SecureField for access token
-- Toggle: Auto-start server on launch
-- Apply & Restart Server button — saves config, restarts subprocess if running, re-auto-connects after 1s delay
-- Fields hidden (not just disabled) when server is not enabled — matches the pattern used elsewhere in ConfigView
-- ConfigView now requires `serverConfig` and `serverProcess` as `@EnvironmentObject` (already injected in US-071)
-- Files changed:
-  - macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift (added embeddedServerSection)
+## 2026-04-13 - US-086
+- Added "Embedded Server" configuration UI section to MainWindow XAML
+- CheckBox "Enable embedded server" toggles `ServerEnabled` and calls `EnableServer()`/`DisableServer()` from US-085
+- When ServerEnabled=false, all child controls inside `ServerConfigPanel` are greyed out (IsEnabled=false)
+- Port, Bind Address, TTL, Max Clip Size TextBoxes bound to ServerConfig properties
+- Storage Path TextBox + "Browse..." Button opens `FolderBrowserDialog` (added `<UseWindowsForms>true</UseWindowsForms>` to csproj)
+- "Require authentication" CheckBox shows/hides a PasswordBox for the server access token (synced via PasswordChanged)
+- "Auto-start server on app launch" CheckBox
+- "Apply & Restart Server" Button: saves ServerConfig, restarts server if running or starts if stopped (and ServerEnabled)
+- Error display when binary is missing (red border with message)
+- Files changed: `MainWindow.xaml`, `MainWindow.xaml.cs`, `CopyEverywhere.csproj`, `prd.json`
 - **Learnings for future iterations:**
-  - ConfigView accesses AppDelegate via `NSApp.delegate as? AppDelegate` for actions that need all three singletons (toggle server, auto-connect) — matches the pattern established in US-071
-  - Server config fields are shown/hidden (not disabled) when server is toggled — consistent with how LAN/Bluetooth sections work
-  - Apply & Restart needs a delay before auto-connect because the Go binary needs time to start listening
+  - `FolderBrowserDialog` requires `<UseWindowsForms>true</UseWindowsForms>` in csproj and lives in `System.Windows.Forms` namespace
+  - `FolderBrowserDialog.UseDescriptionForTitle = true` gives a modern dialog appearance with the description as the title
+  - ServerConfig fields are read from UI controls manually in the Apply handler (not via data binding) since ServerConfig isn't the DataContext — DataContext is ConfigStore
+  - Guard `_serverConfig == null` in CheckBox Changed handlers to prevent XAML designer/load-time null reference issues
 ---
 
-## 2026-04-13 - US-073
-- Added server management section to MainPanelView, visible only when `serverConfig.serverEnabled` is true
-- Server status indicator (green/red/gray dot) in the header next to "CopyEverywhere" title
-- Contextual Start/Stop/Restart buttons based on `serverProcess.isRunning`
-- Storage stats: used space (via `refreshUsedSpace()`) and storage path displayed
-- Connected devices list fetched via `GET /api/v1/devices` from local server (with auth header when enabled)
-- Expandable log viewer via `DisclosureGroup` with auto-scrolling `ScrollViewReader`, capped at 150px height
-- Added `ConnectedDevice` Decodable model struct at top of MainPanelView.swift (maps `device_id` JSON key to `id`)
-- Files changed:
-  - macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift (added server management section, ConnectedDevice model, status indicators)
+## 2026-04-13 - US-087
+- Added server management panel visible only when `ServerEnabled=true`
+- Status row: green/red Ellipse + "Running"/"Stopped" text driven by `ServerProcess.IsRunning`
+- Listen address TextBlock shows `BindAddress:Port`, visible only when running
+- Storage used TextBlock with `FormatBytes` helper (reused existing method); refreshed on start and via 30-second timer
+- Start/Stop/Restart buttons with correct visibility toggling based on `IsRunning`
+- Log viewer: ScrollViewer + Consolas TextBlock bound to `LogLines` joined by newline; auto-scrolls via `CollectionChanged` handler
+- "Clear Logs" button clears `LogLines` and resets the TextBlock
+- `ServerProcess.PropertyChanged` wired to `UpdateServerManagementPanel()` for reactive status updates
+- `ServerConfig.PropertyChanged` wired for `UsedSpaceBytes` to update storage text
+- Files changed: `MainWindow.xaml`, `MainWindow.xaml.cs`, `prd.json`
 - **Learnings for future iterations:**
-  - Go server's `/api/v1/devices` returns `device_id` (not `id`) — need CodingKeys mapping in the Swift model
-  - `DisclosureGroup` works well for collapsible log viewers in the popover — keeps the panel compact by default
-  - `ScrollViewReader` + `onChange(of: logLines.count)` is the pattern for auto-scrolling log views
-  - MainPanelView now requires `serverConfig` and `serverProcess` as `@EnvironmentObject` — already injected in US-071
+  - `FormatBytes` helper already existed in MainWindow — check for existing utility methods before adding duplicates
+  - `ObservableCollection.CollectionChanged` fires on the UI thread (since `AppendLog` uses `Dispatcher.Invoke`), so ScrollToEnd can be called directly
+  - Storage usage timer must be stopped when server is disabled to avoid unnecessary background work
+  - `_storageUsageTimer` field needs to be declared outside the method scope (class field) — DispatcherTimers must be retained to avoid GC
 ---
 
-## 2026-04-13 - US-074
-- Verified that mDNS broadcast works automatically via the Go binary's built-in `discovery.Start()` (server/main.go:108-122)
-- Verified that SIGTERM from `ServerProcess.stop()` triggers mDNS deregistration via the Go signal handler
-- Improved `ServerProcess.restart()` to poll for actual process exit (up to 5s) instead of a fixed 0.5s delay, preventing duplicate mDNS registrations
-- Cross-device mDNS discovery relies on the existing `_copyeverywhere._tcp` service type — no client changes needed
-- Files changed:
-  - macos/CopyEverywhere/Sources/CopyEverywhere/ServerProcess.swift (improved restart() to wait for process exit)
+## 2026-04-13 - US-088
+- Added `RunAtWindowsStartup` property to `ServerConfig` with JSON persistence
+- Added `SetRunAtStartup(bool)` method that writes/deletes `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` registry key
+- Registry value format: `"<full exe path>" --minimized` for startup in tray-only mode
+- Added "Run at Windows startup" CheckBox to the server configuration UI section
+- `--minimized` arg handling already existed in `App.xaml.cs` from US-085
+- Files changed: `ServerConfig.cs`, `MainWindow.xaml`, `MainWindow.xaml.cs`, `prd.json`
 - **Learnings for future iterations:**
-  - The Go server's SIGTERM handler calls `mdnsSrv.Shutdown()` then `os.Exit(0)` — exits very quickly, but a fixed delay in restart() is still fragile
-  - `restart()` should poll `isRunning` rather than use a fixed sleep — the terminationHandler sets `isRunning = false` when the process actually exits
-  - Cross-device mDNS verification requires manual testing — can't be done programmatically in the build
+  - `Registry.CurrentUser.OpenSubKey(path, writable: true)` — the `writable` parameter is required for `SetValue`/`DeleteValue`
+  - `key.DeleteValue(name, throwOnMissingValue: false)` avoids exceptions when deleting a non-existent value
+  - `Process.GetCurrentProcess().MainModule?.FileName` gives the full EXE path for the registry value
+  - `Microsoft.Win32.Registry` is the namespace for registry access — no extra NuGet needed (already in `using` scope via OpenFileDialog)
 ---
 
-## 2026-04-13 - US-075
-- Deleted `macos/CopyEverywhereServer/` directory (Package.swift, Sources, .gitignore)
-- Updated CLAUDE.md architecture section: removed CopyEverywhereServer bullet, updated macOS bullet to mention embedded server
-- Replaced "macOS Server Host App" conventions section with "Embedded Server (macOS)" section documenting the new architecture
-- Resolved all merge conflict markers in CLAUDE.md (4 conflict blocks from ralph/android-client merge), keeping Android content
-- swift build succeeds
-- Files changed:
-  - macos/CopyEverywhereServer/ (deleted — all files)
-  - CLAUDE.md (architecture rewrite, conventions rewrite, merge conflict resolution)
+## 2026-04-13 - US-089
+- Updated CLAUDE.md with Windows embedded server conventions:
+  - ServerProcess: subprocess lifecycle, Dispatcher.Invoke for log lines, Kill(entireProcessTree:true), BinaryPath convention
+  - ServerConfig: properties, GetEnvironment() mapping, JSON persistence path, atomic save
+  - Registry startup key pattern and --minimized arg handling
+  - Server config UI layout and FolderBrowserDialog pattern
+  - Server management panel: status dot, live logs, storage usage timer
+- Updated Architecture section: Windows client entry now mentions ServerProcess and ServerConfig
+- Resolved all merge conflict markers (4 sets of <<<<<<< / ======= / >>>>>>>) from ralph/android-client branch, keeping both HEAD and android content
+- Files changed: `CLAUDE.md`, `prd.json`
 - **Learnings for future iterations:**
-  - CLAUDE.md had unresolved merge conflict markers from the android-client branch merge — always check for and resolve these
-  - The standalone server host app was never counted as a separate "codebase" in the architecture section (it was a sub-bullet under macOS), so the "Four independent codebases" count remains correct
+  - CLAUDE.md had accumulated merge conflict markers from a prior branch merge — always check for and resolve these before committing
+  - When resolving conflicts, keep both sides' content (HEAD + incoming) unless one is truly obsolete
 ---
-
-## 2026-04-13 - US-076
-- Created `Services/ServerProcess.cs` — manages Go server binary as a child `System.Diagnostics.Process`
-- `IsRunning` property with `INotifyPropertyChanged`, `LogLines` as `ObservableCollection<string>` capped at 500
-- `Start()`, `Stop()`, `Restart()` (async polling for exit up to 5s, matching macOS pattern)
-- Stdout/stderr captured via `OutputDataReceived`/`ErrorDataReceived` events, dispatched to UI thread
-- `BinaryPath` defaults to `copyeverywhere-server.exe` next to the client executable
-- Environment variables forwarded from `ServerConfig.GetEnvironment()` (US-077)
-- Process killed on app exit via `Application.Current.Exit` handler in constructor
-- Files changed:
-  - windows/CopyEverywhere/Services/ServerProcess.cs (new)
-- **Learnings for future iterations:**
-  - dotnet build cannot be verified on this macOS dev machine — requires Windows host
-  - Windows `Process.Kill()` is the shutdown mechanism (no SIGTERM equivalent); Go server should handle abrupt termination gracefully
-  - `ObservableCollection<string>` auto-notifies WPF UI bindings — no manual PropertyChanged needed for collection changes
-  - `ServerProcess` depends on `ServerConfig.GetEnvironment()` — needs at least a stub for compilation (same pattern as macOS US-069/070)
----
-
-## 2026-04-13 - US-077
-- Created `Services/ServerConfig.cs` with `INotifyPropertyChanged`
-- Properties: Port (8080), StoragePath (%APPDATA%/CopyEverywhere/server-data), BindAddress (0.0.0.0), TtlHours (24), AuthEnabled (false), AccessToken, MaxClipSizeMB (50), ServerEnabled (false), AutoStartServer (false), UsedSpaceBytes
-- Config persisted to `%APPDATA%/CopyEverywhere/server-config.json` via `System.Text.Json`
-- `GetEnvironment()` returns `Dictionary<string, string>` for subprocess env vars
-- `Save()`, `Load()`, `RefreshUsedSpace()` methods — RefreshUsedSpace uses `Task.Run` + `Dispatcher.Invoke` for async directory traversal
-- Internal `ServerConfigData` class for JSON serialization with `[JsonPropertyName]` attributes
-- Files changed:
-  - windows/CopyEverywhere/Services/ServerConfig.cs (new)
-- **Learnings for future iterations:**
-  - Windows uses `%APPDATA%` (SpecialFolder.ApplicationData) while macOS uses `~/Library/Application Support` — same logical location, different API
-  - `ServerConfigData` is internal (not private nested) because C# `System.Text.Json` requires accessible classes for deserialization
----
-
-## 2026-04-13 - US-078
-- Added `ServerConfig` and `ServerProcess` fields to MainWindow, initialized in constructor
-- `ServerProcess.Config` linked to `ServerConfig` for environment forwarding
-- Added `SetServerEnabled(bool)` public method: starts/stops subprocess, auto-connects client to `http://localhost:<port>`
-- `AutoConnectToLocalServer()` copies server auth credentials to client config and calls `Save()` + `UpdateMainPanelState()`
-- Auto-start on launch: if `ServerEnabled && AutoStartServer`, calls `SetServerEnabled(true)` in constructor
-- User can manually override HostUrl after auto-connect (HostUrl remains editable in config UI)
-- Public properties `ServerConfig` and `ServerProcess` exposed for use by US-079/080
-- Files changed:
-  - windows/CopyEverywhere/MainWindow.xaml.cs (added ServerConfig, ServerProcess, SetServerEnabled, AutoConnectToLocalServer, auto-start)
-- **Learnings for future iterations:**
-  - Same pattern as macOS: toggle logic lives in the window that owns all singletons (ConfigStore, ServerConfig, ServerProcess)
-  - `AutoConnectToLocalServer()` mirrors macOS `autoConnectToLocalServer()` — sets hostURL and copies auth token
----
-
-## 2026-04-13 - US-079
-- Added Embedded Server section to MainWindow.xaml between Bluetooth section and main content
-- CheckBox: Enable embedded server — toggles visibility of config fields and calls SetServerEnabled
-- Config fields: Port, Bind Address, Storage Path (with Browse button), TTL (hours), Max Clip Size (MB)
-- CheckBox: Require authentication — conditionally shows PasswordBox for server access token
-- CheckBox: Auto-start server on launch
-- Apply & Restart Server button — reads UI values into ServerConfig, saves, restarts if running, auto-connects after 1s delay
-- `InitializeServerConfigUI()` loads ServerConfig values into UI controls on startup
-- `FolderBrowserDialog` requires `System.Windows.Forms` — added `<UseWindowsForms>true</UseWindowsForms>` to csproj
-- Fields hidden (not disabled) when server not enabled — matches macOS pattern
-- Files changed:
-  - windows/CopyEverywhere/MainWindow.xaml (added Embedded Server section)
-  - windows/CopyEverywhere/MainWindow.xaml.cs (added InitializeServerConfigUI, event handlers for server config)
-  - windows/CopyEverywhere/CopyEverywhere.csproj (added UseWindowsForms for FolderBrowserDialog)
-- **Learnings for future iterations:**
-  - `FolderBrowserDialog` is in `System.Windows.Forms`, requires `<UseWindowsForms>true</UseWindowsForms>` in csproj
-  - Server config fields are shown/hidden via `Visibility.Visible`/`Collapsed`, matching the pattern used for Bluetooth section
----
-
-## 2026-04-13 - US-080
-- Added Server Management section to MainWindow.xaml, visible only when `ServerEnabled` is true
-- Status indicator: green dot = running, red dot = stopped, section hidden = disabled
-- Contextual Start/Stop/Restart buttons based on `ServerProcess.IsRunning`
-- Storage stats: used space (MB) from `RefreshUsedSpace()` + storage path text
-- Connected devices list fetched via `GET /api/v1/devices` from local server (with auth)
-- Log viewer: `ScrollViewer` + `TextBlock` showing `ServerProcess.LogLines`, auto-scrolls to bottom
-- Added `ServerDevice` model class in ApiClient.cs with `device_id` JSON mapping (Go server returns `device_id`, not `id`)
-- `UpdateServerManagementPanel()` refreshes all panel state — called from `SetServerEnabled`, `InitializeServerConfigUI`, and button handlers
-- Files changed:
-  - windows/CopyEverywhere/MainWindow.xaml (added Server Management section)
-  - windows/CopyEverywhere/MainWindow.xaml.cs (added management panel handlers and UpdateServerManagementPanel)
-  - windows/CopyEverywhere/Services/ApiClient.cs (added ServerDevice model)
-- **Learnings for future iterations:**
-  - Go server `/api/v1/devices` returns `device_id` field — same gotcha as macOS (documented in progress for US-073)
-  - `ScrollViewer.ScrollToEnd()` is the WPF equivalent of SwiftUI's `ScrollViewReader` for auto-scrolling logs
----
-
-## 2026-04-13 - US-081
-- Verified mDNS broadcast works via the Go binary's built-in `discovery.Start()` (server/main.go)
-- Go server registers `_copyeverywhere._tcp` mDNS service on startup with TXT records (version, auth)
-- On Windows, `ServerProcess.Stop()` uses `Process.Kill()` (hard kill) — Go process doesn't get SIGTERM for graceful mDNS deregistration, but mDNS records expire via TTL and the multicast socket closure
-- `RestartAsync()` polls `IsRunning` for up to 5s before starting new instance — prevents duplicate mDNS registrations
-- Cross-device discovery relies on existing client mDNS browsers (macOS, Windows Zeroconf, Android NsdManager)
-- No code changes needed — mDNS is fully handled by the Go binary
-- Files changed: (none — verification only)
-- **Learnings for future iterations:**
-  - Windows `Process.Kill()` is SIGKILL equivalent — no graceful shutdown. mDNS TTL handles stale records
-  - Cross-device mDNS verification requires manual testing with multiple devices on the same network
----
-
-## 2026-04-13 - US-082
-- Added "Embedded Server (Windows)" conventions section to CLAUDE.md documenting ServerProcess, ServerConfig, toggle/auto-connect, UI, shutdown, and restart patterns
-- Added "Binary bundling strategy" paragraph documenting how to compile and place the Go binary for both platforms
-- Android exclusion already documented in US-075 ("Android does not embed the server")
-- Architecture section already updated in US-075 (macOS bullet mentions embedded server, CopyEverywhereServer removed)
-- All acceptance criteria satisfied across US-075 + US-082
-- swift build verified
-- Files changed:
-  - CLAUDE.md (added Windows embedded server conventions, binary bundling strategy)
-- **Learnings for future iterations:**
-  - Documentation stories can overlap with earlier stories — check what was already done before duplicating effort
-  - Binary bundling is a deployment concern that should be documented centrally since it affects both platforms
----
-
