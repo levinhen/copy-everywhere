@@ -53,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         // Graceful shutdown: send SIGTERM to the embedded server if running
         serverProcess.stop()
+        configStore.shutdown()
     }
 
     // MARK: - Popover

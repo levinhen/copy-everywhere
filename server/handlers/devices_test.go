@@ -120,7 +120,7 @@ func TestRegisterDeviceInvalidPlatform(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{
 		"name":     "Phone",
-		"platform": "android",
+		"platform": "ios",
 	})
 	req := httptest.NewRequest("POST", "/api/v1/devices/register", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

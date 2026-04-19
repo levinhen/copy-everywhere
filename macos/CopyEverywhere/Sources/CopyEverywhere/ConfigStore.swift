@@ -82,6 +82,7 @@ struct QueueItem: Identifiable, Equatable {
     let createdAt: Date
     let expiresAt: Date
     let deliveryState: DeliveryState
+    let targetDeviceID: String?
 
     var typeIcon: String {
         switch type {
@@ -140,6 +141,9 @@ final class ConfigStore: ObservableObject {
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
     @Published var sseConnectionState: SSEConnectionState = .disconnected
     @Published var sseStatusDetail: String = "Configure a LAN server to enable targeted auto-delivery."
+    @Published var localServerEnabled: Bool = false
+    @Published var localServerStatus: LocalServerStatus = .stopped
+    @Published var localServerLogs: [String] = []
 
     // Bluetooth state
     @Published var transferMode: TransferMode = .lanServer
@@ -236,12 +240,22 @@ final class ConfigStore: ObservableObject {
     private var sseTask: Task<Void, Never>?
     private var sseRetryDelay: TimeInterval = 1.0
     private let sseMaxRetryDelay: TimeInterval = 30.0
+    @Published var sseStatusDescription: String = "Disconnected"
+    private var queueAutoReceiveTask: Task<Void, Never>?
+    private var queueAutoReceiveInFlight = Set<String>()
 
     private let service = "com.copyeverywhere.relay"
     private let maxSmallFileSize: Int64 = 50 * 1024 * 1024 // 50MB
     private let chunkSize: Int64 = 10 * 1024 * 1024 // 10MB chunks
-    private let hostKey = "hostURL"
-    private let tokenKey = "accessToken"
+    private let hostKey = "com.copyeverywhere.hostURL"
+    private let tokenKey = "com.copyeverywhere.accessToken"
+    private let localServerEnabledKey = "com.copyeverywhere.localServerEnabled"
+    private static let localServerConfigURL: URL = {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport
+            .appendingPathComponent("CopyEverywhereServer")
+            .appendingPathComponent("config.json")
+    }()
 
     // Chunked upload state
     private var chunkedUploadID: String?
@@ -299,8 +313,19 @@ final class ConfigStore: ObservableObject {
         case error(String)
     }
 
+    enum LocalServerStatus: Equatable {
+        case stopped
+        case starting
+        case running(pid: Int32)
+        case error(String)
+    }
+
     private let pairedDevicesKey = "com.copyeverywhere.pairedBluetoothDevices"
     private let transferModeKey = "com.copyeverywhere.transferMode"
+    private let maxLocalServerLogLines = 200
+    private var localServerProcess: Process?
+    private var localServerStopRequested = false
+    private var localServerRestartRequested = false
 
     init() {
         loadPersistedConfig()
@@ -310,6 +335,42 @@ final class ConfigStore: ObservableObject {
         loadTransferMode()
         bonjourBrowser.startBrowsing()
         bluetoothService.delegate = self
+        startQueueAutoReceivePollingIfNeeded()
+    }
+
+    func loadLocalServerPreset() -> (hostURL: String, authEnabled: Bool, accessToken: String)? {
+        guard localServerEnabled else { return nil }
+        let config = loadEffectiveLocalServerConfig()
+        let port = config.port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedPort = port.isEmpty ? "8080" : port
+        return (
+            hostURL: "http://localhost:\(resolvedPort)",
+            authEnabled: config.authEnabled,
+            accessToken: config.authEnabled ? config.accessToken : ""
+        )
+    }
+
+    func applyLocalServerPreset() {
+        guard localServerEnabled else { return }
+        guard let preset = loadLocalServerPreset() else { return }
+        hostURL = preset.hostURL
+        serverAuthRequired = preset.authEnabled
+        accessToken = preset.accessToken
+        isConfigured = true
+        restartSSEConnection(reason: "local server preset applied")
+    }
+
+    var localServerStatusDescription: String {
+        switch localServerStatus {
+        case .stopped:
+            return "Stopped"
+        case .starting:
+            return "Starting..."
+        case .running(let pid):
+            return "Running (pid \(pid))"
+        case .error(let message):
+            return "Error: \(message)"
+        }
     }
 
     func selectDiscoveredServer(_ server: DiscoveredServer) {
@@ -417,11 +478,13 @@ final class ConfigStore: ObservableObject {
         if mode == .bluetooth {
             // Stop LAN services, start Bluetooth
             stopSSE()
+            stopQueueAutoReceivePolling()
             startBluetoothServerIfNeeded()
         } else {
             // Stop Bluetooth, restart LAN services
             bluetoothService.stopServer()
             startSSE()
+            startQueueAutoReceivePollingIfNeeded()
             // Resume queue polling if panel is open
             Task { await fetchQueue() }
         }
@@ -456,7 +519,10 @@ final class ConfigStore: ObservableObject {
                 // Restart SSE with new credentials
                 stopSSE()
                 startSSE()
+                startQueueAutoReceivePollingIfNeeded()
             }
+        } else {
+            stopQueueAutoReceivePolling()
         }
     }
 
@@ -501,6 +567,10 @@ final class ConfigStore: ObservableObject {
         connectionStatus = .idle
         sseConnectionState = .disconnected
         sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
+        stopQueueAutoReceivePolling()
+        stopSSE()
+        stopQueueAutoReceivePolling()
+        sseStatusDescription = "Disconnected"
     }
 
     private func loadPersistedConfig() {
@@ -510,6 +580,270 @@ final class ConfigStore: ObservableObject {
         if isConfigured {
             sseStatusDetail = "Waiting to connect targeted auto-delivery."
         }
+    }
+
+    private func applyLocalServerConfigIfNeeded() {
+        let trimmedHost = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard localServerEnabled, trimmedHost.isEmpty else { return }
+        applyLocalServerPreset()
+    }
+
+    func setLocalServerEnabled(_ enabled: Bool) {
+        localServerEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: localServerEnabledKey)
+
+        if enabled {
+            ensureLocalServerConfigExists()
+            applyLocalServerConfigIfNeeded()
+            startLocalServerIfNeeded()
+        } else {
+            stopLocalServer()
+        }
+    }
+
+    func shutdown() {
+        stopQueueAutoReceivePolling()
+        stopSSE()
+        stopLocalServer()
+        bluetoothService.stopServer()
+        bluetoothService.disconnectSession()
+    }
+
+    private func startQueueAutoReceivePollingIfNeeded() {
+        guard transferMode == .lanServer, isConfigured, !deviceID.isEmpty else { return }
+        guard queueAutoReceiveTask == nil else { return }
+        queueAutoReceiveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.fetchQueue()
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+
+    private func stopQueueAutoReceivePolling() {
+        queueAutoReceiveTask?.cancel()
+        queueAutoReceiveTask = nil
+        queueAutoReceiveInFlight.removeAll()
+    }
+
+    private func ensureLocalServerConfigExists() {
+        let configURL = Self.localServerConfigURL
+        let directoryURL = configURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        guard !FileManager.default.fileExists(atPath: configURL.path) else { return }
+        let config = LocalServerConfigData.defaultConfig(baseDirectory: directoryURL)
+        persistLocalServerConfig(config)
+    }
+
+    private func persistLocalServerConfig(_ config: LocalServerConfigData) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(config) {
+            try? data.write(to: Self.localServerConfigURL, options: .atomic)
+        }
+    }
+
+    private func loadEffectiveLocalServerConfig() -> LocalServerConfigData {
+        let directoryURL = Self.localServerConfigURL.deletingLastPathComponent()
+        let fallback = LocalServerConfigData.defaultConfig(baseDirectory: directoryURL)
+        guard
+            let data = try? Data(contentsOf: Self.localServerConfigURL),
+            let config = try? JSONDecoder().decode(LocalServerConfigData.self, from: data)
+        else {
+            return fallback
+        }
+        return config.merged(with: fallback)
+    }
+
+    func startLocalServerIfNeeded() {
+        guard localServerEnabled else { return }
+        switch localServerStatus {
+        case .starting, .running:
+            return
+        case .stopped, .error:
+            break
+        }
+        startLocalServer()
+    }
+
+    func restartLocalServer() {
+        guard localServerEnabled else { return }
+        if localServerProcess == nil {
+            startLocalServer()
+            return
+        }
+        localServerRestartRequested = true
+        stopLocalServer()
+    }
+
+    func stopLocalServer() {
+        localServerRestartRequested = false
+        guard let process = localServerProcess else {
+            localServerStatus = .stopped
+            return
+        }
+
+        localServerStopRequested = true
+        process.terminationHandler = nil
+        if process.isRunning {
+            process.terminate()
+        }
+        process.standardOutput = nil
+        process.standardError = nil
+        localServerProcess = nil
+        localServerStatus = .stopped
+        appendLocalServerLog("Local server stopped")
+    }
+
+    private func startLocalServer() {
+        let config = loadEffectiveLocalServerConfig()
+        guard let launch = resolveLocalServerLaunch() else {
+            localServerStatus = .error("Could not find copyeverywhere-server binary")
+            appendLocalServerLog("Failed to start local server: binary not found")
+            return
+        }
+
+        let pipe = Pipe()
+        let process = Process()
+        process.executableURL = launch.executableURL
+        process.arguments = launch.arguments
+        process.currentDirectoryURL = launch.workingDirectoryURL
+
+        var environment = ProcessInfo.processInfo.environment
+        environment["PORT"] = config.port
+        environment["BIND_ADDRESS"] = config.bindAddress
+        environment["STORAGE_PATH"] = config.storagePath
+        environment["TTL_HOURS"] = String(config.ttlHours)
+        environment["MAX_CLIP_SIZE_MB"] = String(config.maxClipSizeMB)
+        environment["AUTH_ENABLED"] = config.authEnabled ? "true" : "false"
+        if config.authEnabled {
+            environment["ACCESS_TOKEN"] = config.accessToken
+        } else {
+            environment.removeValue(forKey: "ACCESS_TOKEN")
+        }
+        process.environment = environment
+        process.standardOutput = pipe
+        process.standardError = pipe
+
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let output = String(data: data, encoding: .utf8) else { return }
+            Task { @MainActor in
+                self?.appendLocalServerLog(output)
+            }
+        }
+
+        process.terminationHandler = { [weak self] terminatedProcess in
+            Task { @MainActor in
+                self?.handleLocalServerTermination(process: terminatedProcess)
+            }
+        }
+
+        localServerStopRequested = false
+        localServerStatus = .starting
+
+        do {
+            try process.run()
+            localServerProcess = process
+            localServerStatus = .running(pid: process.processIdentifier)
+            appendLocalServerLog("Local server started on \(config.bindAddress):\(config.port)")
+            if hostURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                applyLocalServerConfigIfNeeded()
+            }
+            if transferMode == .lanServer {
+                Task { @MainActor in
+                    await registerDevice()
+                    restartSSEConnection(reason: "local server started")
+                }
+            }
+        } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            localServerProcess = nil
+            localServerStatus = .error(error.localizedDescription)
+            appendLocalServerLog("Failed to start local server: \(error.localizedDescription)")
+        }
+    }
+
+    private func handleLocalServerTermination(process: Process) {
+        (process.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        (process.standardError as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        localServerProcess = nil
+
+        let restartRequested = localServerRestartRequested
+        localServerRestartRequested = false
+
+        if localServerStopRequested {
+            localServerStopRequested = false
+            localServerStatus = .stopped
+            if restartRequested {
+                startLocalServer()
+            }
+            return
+        }
+
+        if process.terminationStatus == 0 {
+            localServerStatus = .stopped
+            appendLocalServerLog("Local server exited normally")
+        } else {
+            let message = "Exited with status \(process.terminationStatus)"
+            localServerStatus = .error(message)
+            appendLocalServerLog("Local server crashed: \(message)")
+        }
+    }
+
+    private func appendLocalServerLog(_ text: String) {
+        let lines = text
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return }
+        localServerLogs.append(contentsOf: lines)
+        if localServerLogs.count > maxLocalServerLogLines {
+            localServerLogs.removeFirst(localServerLogs.count - maxLocalServerLogLines)
+        }
+    }
+
+    private func resolveLocalServerLaunch() -> (executableURL: URL, arguments: [String], workingDirectoryURL: URL)? {
+        let executablePath = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        let executableDirectory = executablePath.deletingLastPathComponent()
+        let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+
+        let binaryCandidates = [
+            executableDirectory.appendingPathComponent("copyeverywhere-server"),
+            currentDirectory.appendingPathComponent("../../server/copyeverywhere-server").standardizedFileURL,
+            currentDirectory.appendingPathComponent("../server/copyeverywhere-server").standardizedFileURL,
+        ]
+
+        for candidate in binaryCandidates where FileManager.default.isExecutableFile(atPath: candidate.path) {
+            return (candidate, [], candidate.deletingLastPathComponent())
+        }
+
+        if let repoServerDirectory = findRepoServerDirectory(startingFrom: [currentDirectory, executableDirectory]) {
+            let goExecutable = URL(fileURLWithPath: "/usr/bin/env")
+            return (goExecutable, ["go", "run", "."], repoServerDirectory)
+        }
+
+        return nil
+    }
+
+    private func findRepoServerDirectory(startingFrom roots: [URL]) -> URL? {
+        for root in roots {
+            var current = root.standardizedFileURL
+            for _ in 0..<6 {
+                let candidate = current.appendingPathComponent("server")
+                let mainGo = candidate.appendingPathComponent("main.go")
+                if FileManager.default.fileExists(atPath: mainGo.path) {
+                    return candidate
+                }
+                let parent = current.deletingLastPathComponent()
+                if parent == current {
+                    break
+                }
+                current = parent
+            }
+        }
+        return nil
     }
 
     private func setAuthHeader(_ request: inout URLRequest) {
@@ -1568,6 +1902,7 @@ final class ConfigStore: ObservableObject {
                           let expiresAtStr = json["expires_at"] as? String else { continue }
 
                     let filename = json["filename"] as? String
+                    let targetDeviceID = json["target_device_id"] as? String
                     let createdAt = isoFormatter.date(from: createdAtStr) ?? Date()
                     let expiresAt = isoFormatter.date(from: expiresAtStr) ?? Date()
                     let deliveryState = QueueItem.DeliveryState(serverValue: json["delivery_state"] as? String)
@@ -1575,11 +1910,13 @@ final class ConfigStore: ObservableObject {
                     items.append(QueueItem(
                         id: id, type: type, filename: filename,
                         sizeBytes: sizeBytes, createdAt: createdAt, expiresAt: expiresAt,
-                        deliveryState: deliveryState
+                        deliveryState: deliveryState,
+                        targetDeviceID: targetDeviceID
                     ))
                 }
                 queueItems = items
                 queueError = nil
+                await autoReceiveTargetedQueueItems(items)
             } else if httpResponse.statusCode == 401 {
                 queueError = "Authentication failed (401)"
             } else {
@@ -1587,6 +1924,18 @@ final class ConfigStore: ObservableObject {
             }
         } catch {
             queueError = "Network error: \(error.localizedDescription)"
+        }
+    }
+
+    private func autoReceiveTargetedQueueItems(_ items: [QueueItem]) async {
+        let targeted = items.filter { $0.targetDeviceID == deviceID && !queueAutoReceiveInFlight.contains($0.id) }
+        guard !targeted.isEmpty else { return }
+
+        for item in targeted {
+            queueAutoReceiveInFlight.insert(item.id)
+            appendLocalServerLog("Queue fallback: auto-receiving targeted clip \(item.id)")
+            await receiveQueueItem(item)
+            queueAutoReceiveInFlight.remove(item.id)
         }
     }
 
@@ -1771,6 +2120,8 @@ final class ConfigStore: ObservableObject {
         sseRetryDelay = 1.0
         sseConnectionState = .reconnecting
         sseStatusDetail = "Connecting targeted auto-delivery…"
+        sseStatusDescription = "Connecting..."
+        appendLocalServerLog("SSE: starting for device \(deviceID)")
         sseTask = Task { await sseLoop() }
     }
 
@@ -1785,6 +2136,14 @@ final class ConfigStore: ObservableObject {
         } else {
             sseStatusDetail = "Configure a LAN server to enable targeted auto-delivery."
         }
+        sseStatusDescription = "Disconnected"
+        appendLocalServerLog("SSE: stopped")
+    }
+
+    private func restartSSEConnection(reason: String) {
+        appendLocalServerLog("SSE: restarting (\(reason))")
+        stopSSE()
+        startSSE()
     }
 
     private func sseLoop() async {
@@ -1795,6 +2154,7 @@ final class ConfigStore: ObservableObject {
                 sseConnectionState = .reconnecting
                 sseStatusDetail = "Connection lost. Reconnecting targeted auto-delivery…"
             } catch is CancellationError {
+                sseStatusDescription = "Disconnected"
                 return
             } catch {
                 // Reconnect with exponential backoff
@@ -1802,6 +2162,8 @@ final class ConfigStore: ObservableObject {
                 sseConnectionState = .reconnecting
                 let retrySeconds = Int(max(1, sseRetryDelay.rounded()))
                 sseStatusDetail = "Reconnect in \(retrySeconds)s after \(error.localizedDescription)."
+                sseStatusDescription = "Retrying in \(Int(sseRetryDelay))s"
+                appendLocalServerLog("SSE: connection failed (\(error.localizedDescription)); retrying in \(Int(sseRetryDelay))s")
                 try? await Task.sleep(nanoseconds: UInt64(sseRetryDelay * 1_000_000_000))
                 if Task.isCancelled { return }
                 sseRetryDelay = min(sseRetryDelay * 2, sseMaxRetryDelay)
@@ -1814,6 +2176,7 @@ final class ConfigStore: ObservableObject {
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 
         guard let url = URL(string: "\(urlString)/api/v1/devices/\(deviceID)/stream") else { return }
+        appendLocalServerLog("SSE: connecting to \(url.absoluteString)")
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -1831,6 +2194,8 @@ final class ConfigStore: ObservableObject {
         sseRetryDelay = 1.0
         sseConnectionState = .connected
         sseStatusDetail = "Connected for targeted auto-delivery."
+        sseStatusDescription = "Connected"
+        appendLocalServerLog("SSE: connected")
 
         var eventType = ""
         var dataBuffer = ""
@@ -1841,6 +2206,7 @@ final class ConfigStore: ObservableObject {
             if line.isEmpty {
                 // Empty line = end of event
                 if eventType == "clip" && !dataBuffer.isEmpty {
+                    appendLocalServerLog("SSE: received clip event")
                     await handleSSEClipEvent(dataBuffer)
                 }
                 eventType = ""
@@ -1863,6 +2229,7 @@ final class ConfigStore: ObservableObject {
               let clipType = json["type"] as? String else { return }
 
         let filename = json["filename"] as? String
+        appendLocalServerLog("SSE: auto-receiving clip \(clipID) (\(clipType))")
 
         // Auto-receive the targeted clip
         let urlString = hostURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1949,6 +2316,7 @@ final class ConfigStore: ObservableObject {
         } catch {
             showAutoReceiveWarning("Targeted auto-delivery failed. The clip remains available in Queue for manual receive.")
             await fetchQueue()
+            appendLocalServerLog("SSE: auto-receive failed for \(clipID): \(error.localizedDescription)")
         }
     }
 
@@ -2047,6 +2415,80 @@ final class ConfigStore: ObservableObject {
         } catch {
             receiveStatus = .error("Error: \(error.localizedDescription)")
         }
+    }
+}
+
+private struct LocalServerConfigData: Codable {
+    let port: String
+    let bindAddress: String
+    let authEnabled: Bool
+    let accessToken: String
+    let storagePath: String
+    let ttlHours: Int
+    let maxClipSizeMB: Int
+
+    enum CodingKeys: String, CodingKey {
+        case port
+        case bindAddress
+        case authEnabled
+        case accessToken
+        case storagePath
+        case ttlHours
+        case maxClipSizeMB
+    }
+
+    init(
+        port: String,
+        bindAddress: String,
+        authEnabled: Bool,
+        accessToken: String,
+        storagePath: String,
+        ttlHours: Int,
+        maxClipSizeMB: Int
+    ) {
+        self.port = port
+        self.bindAddress = bindAddress
+        self.authEnabled = authEnabled
+        self.accessToken = accessToken
+        self.storagePath = storagePath
+        self.ttlHours = ttlHours
+        self.maxClipSizeMB = maxClipSizeMB
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.port = try container.decodeIfPresent(String.self, forKey: .port) ?? "8080"
+        self.bindAddress = try container.decodeIfPresent(String.self, forKey: .bindAddress) ?? "0.0.0.0"
+        self.authEnabled = try container.decodeIfPresent(Bool.self, forKey: .authEnabled) ?? false
+        self.accessToken = try container.decodeIfPresent(String.self, forKey: .accessToken) ?? ""
+        self.storagePath = try container.decodeIfPresent(String.self, forKey: .storagePath) ?? ""
+        self.ttlHours = try container.decodeIfPresent(Int.self, forKey: .ttlHours) ?? 1
+        self.maxClipSizeMB = try container.decodeIfPresent(Int.self, forKey: .maxClipSizeMB) ?? 500
+    }
+
+    static func defaultConfig(baseDirectory: URL) -> LocalServerConfigData {
+        let storagePath = baseDirectory.appendingPathComponent("data").path
+        return LocalServerConfigData(
+            port: "8080",
+            bindAddress: "0.0.0.0",
+            authEnabled: false,
+            accessToken: "",
+            storagePath: storagePath,
+            ttlHours: 1,
+            maxClipSizeMB: 500
+        )
+    }
+
+    func merged(with fallback: LocalServerConfigData) -> LocalServerConfigData {
+        LocalServerConfigData(
+            port: port.isEmpty ? fallback.port : port,
+            bindAddress: bindAddress.isEmpty ? fallback.bindAddress : bindAddress,
+            authEnabled: authEnabled,
+            accessToken: accessToken,
+            storagePath: storagePath.isEmpty ? fallback.storagePath : storagePath,
+            ttlHours: ttlHours <= 0 ? fallback.ttlHours : ttlHours,
+            maxClipSizeMB: maxClipSizeMB <= 0 ? fallback.maxClipSizeMB : maxClipSizeMB
+        )
     }
 }
 

@@ -3,6 +3,7 @@ package com.copyeverywhere.app.data
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Log
 import android.webkit.MimeTypeMap
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
@@ -217,7 +218,9 @@ class ApiClient {
         val request = buildRequest(url, accessToken).post(multipart).build()
         val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
-            throw IOException("Send text clip failed: ${response.code}")
+            val errorBody = response.body?.string().orEmpty()
+            Log.e(TAG, "sendTextClip failed: code=${response.code} url=$url body=$errorBody")
+            throw IOException("Send text clip failed: ${response.code}${if (errorBody.isNotBlank()) " - $errorBody" else ""}")
         }
         val body = response.body?.string() ?: throw IOException("Empty response")
         gson.fromJson(body, ClipResponse::class.java)
@@ -267,7 +270,9 @@ class ApiClient {
         val request = buildRequest(url, accessToken).post(multipart).build()
         val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
-            throw IOException("Send file clip failed: ${response.code}")
+            val errorBody = response.body?.string().orEmpty()
+            Log.e(TAG, "sendFileClip failed: code=${response.code} url=$url body=$errorBody")
+            throw IOException("Send file clip failed: ${response.code}${if (errorBody.isNotBlank()) " - $errorBody" else ""}")
         }
         val body = response.body?.string() ?: throw IOException("Empty response")
         gson.fromJson(body, ClipResponse::class.java)
@@ -302,7 +307,9 @@ class ApiClient {
         val request = buildRequest(url, accessToken).post(body).build()
         val response = client.newCall(request).execute()
         if (!response.isSuccessful) {
-            throw IOException("Upload init failed: ${response.code}")
+            val errorBody = response.body?.string().orEmpty()
+            Log.e(TAG, "initChunkedUpload failed: code=${response.code} url=$url body=$errorBody")
+            throw IOException("Upload init failed: ${response.code}${if (errorBody.isNotBlank()) " - $errorBody" else ""}")
         }
         val respBody = response.body?.string() ?: throw IOException("Empty response")
         val initResp = gson.fromJson(respBody, UploadInitResponse::class.java)
@@ -543,6 +550,7 @@ class ApiClient {
     }
 
     companion object {
+        private const val TAG = "ApiClient"
         const val DEFAULT_CHUNK_SIZE = 5L * 1024 * 1024 // 5 MB chunks
         private const val READ_BUFFER_SIZE = 16 * 1024 // 16 KB read buffer
         fun getFileName(contentResolver: ContentResolver, uri: Uri): String {

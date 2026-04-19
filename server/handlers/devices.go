@@ -52,8 +52,8 @@ func (h *DeviceHandler) Register(c *gin.Context) {
 		return
 	}
 
-	if req.Platform != "macos" && req.Platform != "windows" && req.Platform != "linux" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "platform must be macos, windows, or linux"})
+	if req.Platform != "macos" && req.Platform != "windows" && req.Platform != "linux" && req.Platform != "android" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "platform must be macos, windows, linux, or android"})
 		return
 	}
 

@@ -199,22 +199,20 @@ fun ConfigScreen(
                     onSelect = { viewModel.selectDiscoveredServer(it) }
                 )
 
-                // Access Token — hidden when server reports auth: false
-                if (serverAuthRequired != false) {
-                    OutlinedTextField(
-                        value = accessToken,
-                        onValueChange = { viewModel.updateAccessToken(it) },
-                        label = {
-                            Text(
-                                if (serverAuthRequired == true) "Access Token (required)"
-                                else "Access Token"
-                            )
-                        },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                // Keep the token field visible so users can still inspect or edit it after testing.
+                OutlinedTextField(
+                    value = accessToken,
+                    onValueChange = { viewModel.updateAccessToken(it) },
+                    label = {
+                        Text(
+                            if (serverAuthRequired == true) "Access Token (required)"
+                            else "Access Token"
+                        )
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 // Target Device dropdown
                 TargetDeviceDropdown(
