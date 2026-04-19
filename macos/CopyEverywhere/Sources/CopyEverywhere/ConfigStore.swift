@@ -142,6 +142,7 @@ final class ConfigStore: ObservableObject {
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
     @Published var lanEndpointSource: LanEndpointSource = .manualFallback
     @Published var selectedLanServer: StoredLanServerSelection? = nil
+    @Published var manualFallbackHostURL: String = ""
     @Published var sseConnectionState: SSEConnectionState = .disconnected
     @Published var sseStatusDetail: String = "Configure a LAN server to enable targeted auto-delivery."
     @Published var localServerEnabled: Bool = false
@@ -254,6 +255,7 @@ final class ConfigStore: ObservableObject {
     private let tokenKey = "com.copyeverywhere.accessToken"
     private let selectedLanServerKey = "com.copyeverywhere.selectedLanServer"
     private let lanEndpointSourceKey = "com.copyeverywhere.lanEndpointSource"
+    private let manualFallbackHostURLKey = "com.copyeverywhere.manualFallbackHostURL"
     private let localServerEnabledKey = "com.copyeverywhere.localServerEnabled"
     private static let localServerConfigURL: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -383,6 +385,10 @@ final class ConfigStore: ObservableObject {
     }
 
     func selectDiscoveredServer(_ server: DiscoveredServer) {
+        if manualFallbackHostURL.isEmpty,
+           lanEndpointSource == .manualFallback {
+            manualFallbackHostURL = normalizedHostURL(hostURL)
+        }
         hostURL = server.endpointURLString
         serverAuthRequired = server.authRequired
         if let serverID = server.serverID {
@@ -403,17 +409,19 @@ final class ConfigStore: ObservableObject {
     func useManualLanFallback() {
         selectedLanServer = nil
         lanEndpointSource = .manualFallback
+        hostURL = manualFallbackHostURL
     }
 
     func updateManualHostURL(_ value: String) {
-        hostURL = value
+        let trimmedValue = normalizedHostURL(value)
+        hostURL = trimmedValue
+        manualFallbackHostURL = trimmedValue
 
         guard let selectedLanServer else {
             lanEndpointSource = .manualFallback
             return
         }
 
-        let trimmedValue = normalizedHostURL(value)
         let selectedURL = normalizedHostURL("http://\(selectedLanServer.host):\(selectedLanServer.port)")
         if trimmedValue != selectedURL {
             self.selectedLanServer = nil
@@ -455,6 +463,9 @@ final class ConfigStore: ObservableObject {
         case .manualFallback:
             let trimmedHost = normalizedHostURL(hostURL)
             if trimmedHost.isEmpty {
+                if case .failed = bonjourBrowser.discoveryState {
+                    return "LAN discovery is unavailable right now. Enter a Host URL below or try discovery again later."
+                }
                 return "No server is selected yet. Enter a Host URL below or choose a discovered server."
             }
             return "The current LAN endpoint comes from the manual Host URL field, so discovery failures stay non-fatal."
@@ -469,8 +480,21 @@ final class ConfigStore: ObservableObject {
             return "Multiple LAN servers were found. Choose one below or keep using a manual URL fallback."
         }
 
-        if discoveredServers.isEmpty, !bonjourBrowser.isSearching {
-            return "No LAN servers are currently visible. A saved manual URL can still be used below."
+        if case .failed(let message) = bonjourBrowser.discoveryState {
+            return "LAN discovery is unavailable: \(message). A saved manual URL can still be used below."
+        }
+
+        if discoveredServers.isEmpty {
+            switch bonjourBrowser.discoveryState {
+            case .searching:
+                return "Scanning for LAN servers. You can also enter a manual URL below."
+            case .ready:
+                return normalizedHostURL(hostURL).isEmpty
+                    ? "No LAN servers are currently visible. Enter a manual URL below or keep waiting."
+                    : "No LAN servers are currently visible. The saved manual URL stays usable as fallback."
+            default:
+                break
+            }
         }
 
         return nil
@@ -607,6 +631,7 @@ final class ConfigStore: ObservableObject {
         UserDefaults.standard.set(hostURL, forKey: hostKey)
         UserDefaults.standard.set(accessToken, forKey: tokenKey)
         UserDefaults.standard.set(lanEndpointSource.rawValue, forKey: lanEndpointSourceKey)
+        UserDefaults.standard.set(manualFallbackHostURL, forKey: manualFallbackHostURLKey)
         if let selectedLanServer,
            let data = try? JSONEncoder().encode(selectedLanServer) {
             UserDefaults.standard.set(data, forKey: selectedLanServerKey)
@@ -668,10 +693,12 @@ final class ConfigStore: ObservableObject {
         UserDefaults.standard.removeObject(forKey: tokenKey)
         UserDefaults.standard.removeObject(forKey: selectedLanServerKey)
         UserDefaults.standard.removeObject(forKey: lanEndpointSourceKey)
+        UserDefaults.standard.removeObject(forKey: manualFallbackHostURLKey)
         hostURL = ""
         accessToken = ""
         selectedLanServer = nil
         lanEndpointSource = .manualFallback
+        manualFallbackHostURL = ""
         isConfigured = false
         connectionStatus = .idle
         sseConnectionState = .disconnected
@@ -685,6 +712,7 @@ final class ConfigStore: ObservableObject {
     private func loadPersistedConfig() {
         hostURL = UserDefaults.standard.string(forKey: hostKey) ?? ""
         accessToken = UserDefaults.standard.string(forKey: tokenKey) ?? ""
+        manualFallbackHostURL = normalizedHostURL(UserDefaults.standard.string(forKey: manualFallbackHostURLKey) ?? "")
         if let data = UserDefaults.standard.data(forKey: selectedLanServerKey),
            let selection = try? JSONDecoder().decode(StoredLanServerSelection.self, from: data) {
             selectedLanServer = selection
@@ -694,6 +722,11 @@ final class ConfigStore: ObservableObject {
             lanEndpointSource = source
         } else if let selection = selectedLanServer {
             lanEndpointSource = selection.source
+        }
+        if manualFallbackHostURL.isEmpty,
+           lanEndpointSource == .manualFallback,
+           !normalizedHostURL(hostURL).isEmpty {
+            manualFallbackHostURL = normalizedHostURL(hostURL)
         }
         isConfigured = !hostURL.isEmpty
         if isConfigured {
@@ -722,6 +755,9 @@ final class ConfigStore: ObservableObject {
 
         if selectedLanServer != nil {
             if lanEndpointSource != .manualFallback {
+                if !manualFallbackHostURL.isEmpty {
+                    hostURL = manualFallbackHostURL
+                }
                 lanEndpointSource = .manualFallback
                 persistLanSelectionState()
                 appendLocalServerLog("LAN discovery: selected server not found; keeping manual fallback URL")
@@ -792,6 +828,7 @@ final class ConfigStore: ObservableObject {
     private func persistLanSelectionState() {
         UserDefaults.standard.set(hostURL, forKey: hostKey)
         UserDefaults.standard.set(lanEndpointSource.rawValue, forKey: lanEndpointSourceKey)
+        UserDefaults.standard.set(manualFallbackHostURL, forKey: manualFallbackHostURLKey)
         if let selectedLanServer,
            let data = try? JSONEncoder().encode(selectedLanServer) {
             UserDefaults.standard.set(data, forKey: selectedLanServerKey)
@@ -805,10 +842,12 @@ final class ConfigStore: ObservableObject {
         if trimmedHostURL.isEmpty {
             selectedLanServer = nil
             lanEndpointSource = .manualFallback
+            manualFallbackHostURL = ""
             return
         }
 
         guard let selectedLanServer else {
+            manualFallbackHostURL = trimmedHostURL
             lanEndpointSource = .manualFallback
             return
         }
@@ -816,6 +855,7 @@ final class ConfigStore: ObservableObject {
         let selectedURL = normalizedHostURL("http://\(selectedLanServer.host):\(selectedLanServer.port)")
         guard trimmedHostURL == selectedURL else {
             self.selectedLanServer = nil
+            manualFallbackHostURL = trimmedHostURL
             lanEndpointSource = .manualFallback
             return
         }

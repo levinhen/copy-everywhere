@@ -59,6 +59,7 @@ class ConfigStore(private val context: Context) {
 
     private object Keys {
         val HOST_URL = stringPreferencesKey("host_url")
+        val MANUAL_FALLBACK_HOST_URL = stringPreferencesKey("manual_fallback_host_url")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val DEVICE_ID = stringPreferencesKey("device_id")
         val TARGET_DEVICE_ID = stringPreferencesKey("target_device_id")
@@ -85,6 +86,16 @@ class ConfigStore(private val context: Context) {
     }
 
     val hostUrl: Flow<String> = context.dataStore.data.map { it[Keys.HOST_URL] ?: "" }
+    val manualFallbackHostUrl: Flow<String> = context.dataStore.data.map {
+        val persisted = normalizeHostUrl(it[Keys.MANUAL_FALLBACK_HOST_URL] ?: "")
+        if (persisted.isNotBlank()) {
+            persisted
+        } else {
+            val source = LanEndpointSource.fromWireValue(it[Keys.LAN_ENDPOINT_SOURCE])
+            val currentHost = normalizeHostUrl(it[Keys.HOST_URL] ?: "")
+            if (source == LanEndpointSource.ManualFallback) currentHost else ""
+        }
+    }
     val deviceName: Flow<String> = context.dataStore.data.map { it[Keys.DEVICE_NAME] ?: android.os.Build.MODEL }
     val deviceId: Flow<String> = context.dataStore.data.map { it[Keys.DEVICE_ID] ?: "" }
     val targetDeviceId: Flow<String> = context.dataStore.data.map { it[Keys.TARGET_DEVICE_ID] ?: "" }
@@ -145,6 +156,15 @@ class ConfigStore(private val context: Context) {
         source: LanEndpointSource = LanEndpointSource.RestoredSelection
     ) {
         context.dataStore.edit { prefs ->
+            val currentSource = LanEndpointSource.fromWireValue(prefs[Keys.LAN_ENDPOINT_SOURCE])
+            val currentHostUrl = normalizeHostUrl(prefs[Keys.HOST_URL] ?: "")
+            val savedManualFallback = normalizeHostUrl(prefs[Keys.MANUAL_FALLBACK_HOST_URL] ?: "")
+            if (savedManualFallback.isBlank() &&
+                currentSource == LanEndpointSource.ManualFallback &&
+                currentHostUrl.isNotBlank()
+            ) {
+                prefs[Keys.MANUAL_FALLBACK_HOST_URL] = currentHostUrl
+            }
             prefs[Keys.HOST_URL] = buildServerUrl(server.host, server.port)
             prefs[Keys.LAN_ENDPOINT_SOURCE] = source.wireValue
             if (!server.serverId.isNullOrBlank()) {
@@ -167,6 +187,7 @@ class ConfigStore(private val context: Context) {
         val trimmedUrl = normalizeHostUrl(url)
         context.dataStore.edit { prefs ->
             prefs[Keys.HOST_URL] = trimmedUrl
+            prefs[Keys.MANUAL_FALLBACK_HOST_URL] = trimmedUrl
 
             val selectedServer = prefs[Keys.SELECTED_LAN_SERVER]?.let { json ->
                 runCatching { gson.fromJson(json, StoredLanServerSelection::class.java) }.getOrNull()
@@ -195,7 +216,22 @@ class ConfigStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs.remove(Keys.SELECTED_LAN_SERVER)
             prefs[Keys.LAN_ENDPOINT_SOURCE] = LanEndpointSource.ManualFallback.wireValue
+            prefs[Keys.HOST_URL] = normalizeHostUrl(prefs[Keys.MANUAL_FALLBACK_HOST_URL] ?: "")
         }
+    }
+
+    suspend fun restoreManualFallbackAfterDiscoveryMiss(): Boolean {
+        var restored = false
+        context.dataStore.edit { prefs ->
+            val manualFallback = normalizeHostUrl(prefs[Keys.MANUAL_FALLBACK_HOST_URL] ?: "")
+            prefs.remove(Keys.SELECTED_LAN_SERVER)
+            prefs[Keys.LAN_ENDPOINT_SOURCE] = LanEndpointSource.ManualFallback.wireValue
+            if (manualFallback.isNotBlank()) {
+                prefs[Keys.HOST_URL] = manualFallback
+                restored = true
+            }
+        }
+        return restored
     }
 
     fun isSelectedDiscoveredServer(

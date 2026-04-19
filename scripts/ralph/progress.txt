@@ -13,6 +13,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - On Android LAN config, persist discovered selection and manual Host URL edits through `ConfigStore` helpers so `StoredLanServerSelection.serverId` remains the durable match key, snake_case source values stay compatible on disk, and manual text edits clear stale discovered selection state before later restore/UI stories build on it.
 - On Android LAN startup restore, keep `MdnsDiscoveryService` under `CopyEverywhereService` instead of the Config screen, expose discovered servers through a shared `StateFlow`, restore by `StoredLanServerSelection.serverId`, and only auto-select a lone discovered server when there is no saved selection and no manual Host URL fallback.
 - On Android LAN config UI, drive source cards, manual-fallback actions, passive multi-server guidance, and discovered-server selection badges from `lanEndpointSource`, `selectedLanServer`, and the shared discovery list instead of inferring meaning from the Host URL text field.
+- For DHCP-tolerant LAN fallback, persist the last manual Host URL separately from the active discovered endpoint on every client; when discovery misses a saved `server_id`, restore that manual URL and downgrade the source to `manual_fallback` instead of leaving the stale discovered address active.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -157,4 +158,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - The Host URL text field can still match a discovered endpoint after the user switches back to manual fallback, so the UI must not infer the active source from URL equality alone.
   - Useful context
   - `useManualLanFallback()` now gives later fallback and diagnostics stories a single UI-safe action for clearing the saved `server_id` binding without forcing the user to rewrite the URL field.
+---
+## 2026-04-19 12:17 CST - US-095
+- Preserved manual LAN fallback URLs across macOS, Windows, and Android by storing them separately from the active discovered endpoint, restoring them automatically when a saved `server_id` is not rediscovered, and surfacing distinct manual-fallback / no-servers / discovery-unavailable states in the LAN settings UI.
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/BonjourBrowser.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `windows/CopyEverywhere/Services/MdnsDiscoveryService.cs`, `windows/CopyEverywhere/Services/ConfigStore.cs`, `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `android/app/src/main/java/com/copyeverywhere/app/data/MdnsDiscoveryService.kt`, `android/app/src/main/java/com/copyeverywhere/app/data/ConfigStore.kt`, `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed; `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/liyunhan/Library/Android/sdk ./gradlew assembleDebug` passed; `git diff --check` passed; `dotnet build` could not run on this machine because the .NET SDK / Windows host is unavailable here.
+- Learnings for future iterations:
+  - Patterns discovered
+  - Discovery-driven LAN clients need a persisted manual fallback URL distinct from `HostUrl`, because the active endpoint will be overwritten whenever a discovered server is auto-selected or restored.
+  - Gotchas encountered
+  - A "manual fallback" source flag alone is not enough; if the manual URL is not stored separately, a discovery miss can silently keep using the stale discovered address and make the fallback look correct while still pointing at the wrong host.
+  - Useful context
+  - macOS now derives discovery-unavailable state from `NWBrowser` status, Windows from `MdnsDiscoveryService.LastErrorMessage`, and Android from `MdnsDiscoveryService.lastError`, so later diagnostics work can log and test those states without reworking selection persistence again.
 ---

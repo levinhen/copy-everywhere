@@ -9,6 +9,13 @@ enum LanEndpointSource: String, Codable, CaseIterable {
     case manualFallback = "manual_fallback"
 }
 
+enum LanDiscoveryState: Equatable {
+    case idle
+    case searching
+    case ready
+    case failed(String)
+}
+
 struct StoredLanServerSelection: Codable, Equatable {
     let serverID: String
     let name: String
@@ -43,6 +50,7 @@ struct DiscoveredServer: Identifiable, Equatable, Hashable {
 final class BonjourBrowser: ObservableObject {
     @Published var discoveredServers: [DiscoveredServer] = []
     @Published var isSearching: Bool = false
+    @Published var discoveryState: LanDiscoveryState = .idle
 
     private var browser: NWBrowser?
     private var connections: [NWConnection] = []
@@ -62,8 +70,16 @@ final class BonjourBrowser: ObservableObject {
                 switch state {
                 case .ready:
                     self.isSearching = true
-                case .failed, .cancelled:
+                    self.discoveryState = .ready
+                case .waiting(let error):
+                    self.isSearching = true
+                    self.discoveryState = .failed(error.localizedDescription)
+                case .failed(let error):
                     self.isSearching = false
+                    self.discoveryState = .failed(error.localizedDescription)
+                case .cancelled:
+                    self.isSearching = false
+                    self.discoveryState = .idle
                 default:
                     break
                 }
@@ -80,12 +96,14 @@ final class BonjourBrowser: ObservableObject {
         browser.start(queue: .main)
         self.browser = browser
         isSearching = true
+        discoveryState = .searching
     }
 
     func stopBrowsing() {
         browser?.cancel()
         browser = nil
         isSearching = false
+        discoveryState = .idle
         for conn in connections {
             conn.cancel()
         }

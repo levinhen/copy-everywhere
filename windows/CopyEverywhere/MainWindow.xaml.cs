@@ -132,6 +132,7 @@ public partial class MainWindow : Window
     private void UseManualFallbackButton_Click(object sender, RoutedEventArgs e)
     {
         _configStore.UseManualLanFallback();
+        HostUrlTextBox.Text = _configStore.HostUrl;
         UpdateLanDiscoveryState(_mdnsService.DiscoveredServers);
         OnDiscoveredServersChanged();
     }
@@ -2053,9 +2054,16 @@ public partial class MainWindow : Window
         UpdateLanDiscoveryState(servers);
         if (servers.Count == 0)
         {
+            var emptyStateText = !string.IsNullOrWhiteSpace(_mdnsService.LastErrorMessage)
+                ? $"LAN discovery unavailable: {_mdnsService.LastErrorMessage}"
+                : _mdnsService.IsSearching
+                    ? "Scanning for servers on LAN..."
+                    : string.IsNullOrWhiteSpace(_configStore.HostUrl)
+                        ? "No LAN servers are visible yet."
+                        : "No discovered server is available right now. Manual fallback stays usable.";
             DiscoveredServersPanel.Children.Add(new TextBlock
             {
-                Text = "Scanning for servers on LAN...",
+                Text = emptyStateText,
                 Foreground = Brushes.Gray,
                 FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -2137,7 +2145,7 @@ public partial class MainWindow : Window
 
     private void TryApplyLanDiscoverySelection(IReadOnlyList<DiscoveredServer> servers)
     {
-        if (_configStore.TransferMode != TransferMode.LanServer || servers.Count == 0)
+        if (_configStore.TransferMode != TransferMode.LanServer)
         {
             return;
         }
@@ -2146,6 +2154,19 @@ public partial class MainWindow : Window
         if (restoredServer != null)
         {
             ApplyDiscoveredLanServer(restoredServer, LanEndpointSource.RestoredSelection, "Restored LAN server selection");
+            return;
+        }
+
+        if (_configStore.SelectedLanServer != null &&
+            _configStore.LanEndpointSource != LanEndpointSource.ManualFallback)
+        {
+            _configStore.UseManualLanFallback();
+            _configStore.Save();
+            if (!string.Equals(HostUrlTextBox.Text, _configStore.HostUrl, StringComparison.Ordinal))
+            {
+                HostUrlTextBox.Text = _configStore.HostUrl;
+            }
+            Debug.WriteLine("[LAN Discovery] Selected server not found; preserving manual fallback URL");
             return;
         }
 
@@ -2240,10 +2261,16 @@ public partial class MainWindow : Window
             default:
                 LanSourceValueText.Text = "Manual URL fallback";
                 LanSourceDetailText.Text = string.IsNullOrWhiteSpace(_configStore.HostUrl)
-                    ? "No LAN server is selected yet. Enter a manual URL or choose a discovered server."
+                    ? _mdnsService.LastErrorMessage == null
+                        ? "No LAN server is selected yet. Enter a manual URL or choose a discovered server."
+                        : "LAN discovery is unavailable right now. Enter a manual URL or try discovery again later."
                     : $"Using manual URL {_configStore.HostUrl} until discovery restores a selected server.";
                 break;
         }
+        LanManualFallbackDetailText.Text = string.IsNullOrWhiteSpace(_configStore.ManualFallbackHostUrl) ||
+            string.Equals(_configStore.ManualFallbackHostUrl, _configStore.HostUrl, StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : $"Saved manual fallback: {_configStore.ManualFallbackHostUrl}";
 
         if (_configStore.TransferMode != TransferMode.LanServer)
         {
@@ -2253,8 +2280,14 @@ public partial class MainWindow : Window
 
         if (servers.Count == 0)
         {
+            if (!string.IsNullOrWhiteSpace(_mdnsService.LastErrorMessage))
+            {
+                LanDiscoveryGuidanceText.Text = $"LAN discovery is unavailable: {_mdnsService.LastErrorMessage}. A saved manual URL can still be used below.";
+                return;
+            }
+
             LanDiscoveryGuidanceText.Text = string.IsNullOrWhiteSpace(_configStore.HostUrl)
-                ? "Scanning for servers on LAN. You can also enter a manual URL now."
+                ? "No LAN servers are visible yet. You can also enter a manual URL now."
                 : "No discovered server is available yet. The saved manual URL stays usable as fallback.";
             return;
         }

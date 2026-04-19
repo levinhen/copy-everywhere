@@ -117,6 +117,12 @@
                                Foreground="#475569"
                                TextWrapping="Wrap"
                                Margin="0,4,0,0"/>
+                    <TextBlock x:Name="LanManualFallbackDetailText"
+                               Text=""
+                               FontSize="11"
+                               Foreground="#64748B"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,0"/>
                 </StackPanel>
             </Border>
 

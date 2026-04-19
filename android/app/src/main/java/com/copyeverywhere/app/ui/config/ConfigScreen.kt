@@ -82,10 +82,13 @@ fun ConfigScreen(
     val connectionStatus by viewModel.connectionStatus.collectAsState()
     val devices by viewModel.devices.collectAsState()
     val discoveredServers by viewModel.discoveredServers.collectAsState()
+    val lanDiscoveryError by viewModel.lanDiscoveryError.collectAsState()
+    val lanDiscoverySearching by viewModel.lanDiscoverySearching.collectAsState()
     val transferMode by viewModel.transferMode.collectAsState()
     val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
     val lanEndpointSource by viewModel.lanEndpointSource.collectAsState()
     val selectedLanServer by viewModel.selectedLanServer.collectAsState()
+    val manualFallbackHostUrl by viewModel.manualFallbackHostUrl.collectAsState()
 
     Scaffold(
         topBar = {
@@ -184,6 +187,8 @@ fun ConfigScreen(
                     selectedServer = selectedLanServer,
                     discoveredServerCount = discoveredServers.size,
                     manualHostUrl = hostUrl,
+                    savedManualFallbackUrl = manualFallbackHostUrl,
+                    discoveryError = lanDiscoveryError,
                     onUseManualFallback = { viewModel.useManualLanFallback() }
                 )
 
@@ -202,6 +207,8 @@ fun ConfigScreen(
                     servers = discoveredServers,
                     selectedServer = selectedLanServer,
                     currentHostUrl = hostUrl,
+                    isSearching = lanDiscoverySearching,
+                    discoveryError = lanDiscoveryError,
                     isSelected = { server ->
                         viewModel.isSelectedDiscoveredServer(
                             currentHostUrl = hostUrl,
@@ -514,18 +521,38 @@ private fun DiscoveredServersList(
     servers: List<DiscoveredServer>,
     selectedServer: StoredLanServerSelection?,
     currentHostUrl: String,
+    isSearching: Boolean,
+    discoveryError: String?,
     isSelected: (DiscoveredServer) -> Boolean,
     onSelect: (DiscoveredServer) -> Unit
 ) {
     if (servers.isEmpty()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(vertical = 4.dp)
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-            Spacer(modifier = Modifier.width(8.dp))
+        if (discoveryError != null) {
             Text(
-                text = "Scanning for servers...",
+                text = "Discovery unavailable: $discoveryError. A manual URL can still be used.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (isSearching) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 4.dp)
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Scanning for servers...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            Text(
+                text = if (currentHostUrl.isBlank()) {
+                    "No LAN servers are visible yet. Enter a manual URL or keep waiting."
+                } else {
+                    "No discovered server is available right now. The saved manual URL stays usable as fallback."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -624,6 +651,8 @@ private fun LanEndpointSourceCard(
     selectedServer: StoredLanServerSelection?,
     discoveredServerCount: Int,
     manualHostUrl: String,
+    savedManualFallbackUrl: String,
+    discoveryError: String?,
     onUseManualFallback: () -> Unit
 ) {
     val title = when (source) {
@@ -648,6 +677,8 @@ private fun LanEndpointSourceCard(
         }
         LanEndpointSource.ManualFallback -> {
             when {
+                manualHostUrl.isBlank() && discoveryError != null ->
+                    "LAN discovery is unavailable right now. Enter a manual URL below or try discovery again later."
                 manualHostUrl.isBlank() && discoveredServerCount == 0 ->
                     "No LAN server selected yet. Discovery will keep scanning in the background."
                 manualHostUrl.isBlank() ->
@@ -679,6 +710,14 @@ private fun LanEndpointSourceCard(
                 Spacer(modifier = Modifier.height(10.dp))
                 Text(
                     text = "${server.name} \u00B7 ${server.host}:${server.port} \u00B7 id ${server.serverId}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (savedManualFallbackUrl.isNotBlank() && savedManualFallbackUrl != manualHostUrl) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Saved manual fallback: $savedManualFallbackUrl",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

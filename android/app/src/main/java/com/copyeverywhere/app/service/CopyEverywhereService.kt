@@ -125,6 +125,8 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         bluetoothService?.destroy()
         targetedFallbackNotice.value = null
         discoveredLanServers.value = emptyList()
+        lanDiscoveryError.value = null
+        lanDiscoverySearching.value = false
         receiverHealth.value = LanReceiverHealth(
             status = LanReceiverStatus.Unavailable,
             detail = "Foreground service is not running"
@@ -291,9 +293,21 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     private fun startLanDiscovery() {
         if (lanDiscoveryJob == null) {
             lanDiscoveryJob = scope.launch {
-                mdnsDiscovery.servers.collect { servers ->
-                    discoveredLanServers.value = servers
-                    handleDiscoveredServers(servers)
+                launch {
+                    mdnsDiscovery.servers.collect { servers ->
+                        discoveredLanServers.value = servers
+                        handleDiscoveredServers(servers)
+                    }
+                }
+                launch {
+                    mdnsDiscovery.lastError.collect { error ->
+                        lanDiscoveryError.value = error
+                    }
+                }
+                launch {
+                    mdnsDiscovery.isDiscovering.collect { searching ->
+                        lanDiscoverySearching.value = searching
+                    }
                 }
             }
         }
@@ -305,6 +319,8 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         lanDiscoveryJob?.cancel()
         lanDiscoveryJob = null
         discoveredLanServers.value = emptyList()
+        lanDiscoveryError.value = null
+        lanDiscoverySearching.value = false
     }
 
     private suspend fun handleDiscoveredServers(servers: List<DiscoveredServer>) {
@@ -314,7 +330,16 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         if (selectedServer != null) {
             val restoredServer = servers.firstOrNull { discovered ->
                 !discovered.serverId.isNullOrBlank() && discovered.serverId == selectedServer.serverId
-            } ?: return
+            }
+            if (restoredServer == null) {
+                val restoredManualFallback = configStore.restoreManualFallbackAfterDiscoveryMiss()
+                Log.d(
+                    TAG,
+                    "LAN discovery miss for selected serverId=${selectedServer.serverId}; " +
+                        "manualFallbackRestored=$restoredManualFallback"
+                )
+                return
+            }
             applyDiscoveredLanServer(restoredServer, LanEndpointSource.RestoredSelection)
             return
         }
@@ -584,6 +609,8 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
             )
         )
         val discoveredLanServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
+        val lanDiscoveryError = MutableStateFlow<String?>(null)
+        val lanDiscoverySearching = MutableStateFlow(false)
         val targetedFallbackNotice = MutableStateFlow<String?>(null)
 
         fun start(context: Context) {

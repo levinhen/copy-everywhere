@@ -27,6 +27,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
 
     private List<DiscoveredServer> _discoveredServers = new();
     private bool _isSearching;
+    private string? _lastErrorMessage;
     private CancellationTokenSource? _cts;
     private Task? _scanTask;
 
@@ -50,6 +51,12 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
         private set { _isSearching = value; OnPropertyChanged(); }
     }
 
+    public string? LastErrorMessage
+    {
+        get => _lastErrorMessage;
+        private set { _lastErrorMessage = value; OnPropertyChanged(); }
+    }
+
     public void StartBrowsing()
     {
         StopBrowsing();
@@ -57,6 +64,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
         var ct = _cts.Token;
         _scanTask = Task.Run(async () => await ScanLoop(ct), ct);
         IsSearching = true;
+        LastErrorMessage = null;
     }
 
     public void StopBrowsing()
@@ -66,6 +74,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
         _cts = null;
         _scanTask = null;
         IsSearching = false;
+        LastErrorMessage = null;
     }
 
     private async Task ScanLoop(CancellationToken ct)
@@ -80,9 +89,13 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
                 // Scan errors are non-fatal — retry on next interval
+                System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+                {
+                    LastErrorMessage = ex.Message;
+                });
             }
 
             try
@@ -146,6 +159,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
         // Update on UI thread
         System.Windows.Application.Current?.Dispatcher.Invoke(() =>
         {
+            LastErrorMessage = null;
             DiscoveredServers = servers;
         });
     }

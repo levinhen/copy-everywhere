@@ -221,6 +221,12 @@ struct ConfigView: View {
                             .font(.caption2)
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        if !configStore.manualFallbackHostURL.isEmpty {
+                            Text("Saved manual fallback: \(configStore.manualFallbackHostURL)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     } else if !configStore.hostURL.isEmpty {
                         Text("Manual endpoint: \(configStore.hostURL)")
                             .font(.caption2)

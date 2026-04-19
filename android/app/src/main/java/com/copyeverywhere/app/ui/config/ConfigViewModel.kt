@@ -85,10 +85,16 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     val discoveredServers: StateFlow<List<DiscoveredServer>> = CopyEverywhereService.discoveredLanServers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val lanDiscoveryError: StateFlow<String?> = CopyEverywhereService.lanDiscoveryError
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val lanDiscoverySearching: StateFlow<Boolean> = CopyEverywhereService.lanDiscoverySearching
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     val lanEndpointSource: StateFlow<LanEndpointSource> = configStore.lanEndpointSource
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LanEndpointSource.ManualFallback)
     val selectedLanServer: StateFlow<StoredLanServerSelection?> = configStore.selectedLanServer
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val manualFallbackHostUrl: StateFlow<String> = configStore.manualFallbackHostUrl
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
 
     // Bluetooth state
     val pairedDevices: StateFlow<List<PairedBluetoothDevice>> = configStore.pairedBluetoothDevices

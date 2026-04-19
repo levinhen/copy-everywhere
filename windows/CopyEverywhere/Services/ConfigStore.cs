@@ -91,6 +91,7 @@ public class ConfigStore : INotifyPropertyChanged
     private string _deviceId = "";
     private string _deviceName = "";
     private string _targetDeviceId = "";
+    private string _manualFallbackHostUrl = "";
     private bool _showFloatingBall = true;
     private double _floatingBallX = double.NaN;
     private double _floatingBallY = double.NaN;
@@ -130,6 +131,12 @@ public class ConfigStore : INotifyPropertyChanged
     {
         get => _deviceName;
         set { _deviceName = value; OnPropertyChanged(); }
+    }
+
+    public string ManualFallbackHostUrl
+    {
+        get => _manualFallbackHostUrl;
+        set { _manualFallbackHostUrl = value; OnPropertyChanged(); }
     }
 
     public string TargetDeviceId
@@ -252,6 +259,7 @@ public class ConfigStore : INotifyPropertyChanged
             DeviceId = DeviceId,
             DeviceName = DeviceName,
             TargetDeviceId = TargetDeviceId,
+            ManualFallbackHostUrl = ManualFallbackHostUrl,
             ShowFloatingBall = ShowFloatingBall,
             FloatingBallX = FloatingBallX,
             FloatingBallY = FloatingBallY,
@@ -277,6 +285,7 @@ public class ConfigStore : INotifyPropertyChanged
                 DeviceId = config.DeviceId;
                 DeviceName = config.DeviceName;
                 TargetDeviceId = config.TargetDeviceId;
+                ManualFallbackHostUrl = NormalizeHostUrl(config.ManualFallbackHostUrl ?? "");
                 ShowFloatingBall = config.ShowFloatingBall;
                 if (!double.IsNaN(config.FloatingBallX)) FloatingBallX = config.FloatingBallX;
                 if (!double.IsNaN(config.FloatingBallY)) FloatingBallY = config.FloatingBallY;
@@ -287,6 +296,12 @@ public class ConfigStore : INotifyPropertyChanged
                 if (TryParseLanEndpointSource(config.LanEndpointSource, out var source))
                     LanEndpointSource = source;
                 SelectedLanServer = config.SelectedLanServer;
+                if (string.IsNullOrWhiteSpace(ManualFallbackHostUrl) &&
+                    LanEndpointSource == LanEndpointSource.ManualFallback &&
+                    !string.IsNullOrWhiteSpace(HostUrl))
+                {
+                    ManualFallbackHostUrl = NormalizeHostUrl(HostUrl);
+                }
             }
         }
         catch
@@ -310,6 +325,11 @@ public class ConfigStore : INotifyPropertyChanged
 
     public void SelectDiscoveredServer(DiscoveredServer server, LanEndpointSource source = LanEndpointSource.RestoredSelection)
     {
+        if (string.IsNullOrWhiteSpace(ManualFallbackHostUrl) &&
+            LanEndpointSource == LanEndpointSource.ManualFallback)
+        {
+            ManualFallbackHostUrl = NormalizeHostUrl(HostUrl);
+        }
         HostUrl = BuildServerUrl(server.Host, server.Port);
         ServerAuthRequired = server.AuthRequired;
         if (!string.IsNullOrWhiteSpace(server.ServerId))
@@ -338,7 +358,8 @@ public class ConfigStore : INotifyPropertyChanged
 
     public void UpdateManualHostUrl(string value)
     {
-        HostUrl = value;
+        HostUrl = NormalizeHostUrl(value);
+        ManualFallbackHostUrl = HostUrl;
 
         if (SelectedLanServer == null)
         {
@@ -359,6 +380,7 @@ public class ConfigStore : INotifyPropertyChanged
     {
         SelectedLanServer = null;
         LanEndpointSource = LanEndpointSource.ManualFallback;
+        HostUrl = ManualFallbackHostUrl;
     }
 
     public bool IsSelectedDiscoveredServer(DiscoveredServer server)
@@ -384,11 +406,13 @@ public class ConfigStore : INotifyPropertyChanged
         {
             SelectedLanServer = null;
             LanEndpointSource = LanEndpointSource.ManualFallback;
+            ManualFallbackHostUrl = "";
             return;
         }
 
         if (SelectedLanServer == null)
         {
+            ManualFallbackHostUrl = trimmedHostUrl;
             LanEndpointSource = LanEndpointSource.ManualFallback;
             return;
         }
@@ -397,6 +421,7 @@ public class ConfigStore : INotifyPropertyChanged
         if (!string.Equals(trimmedHostUrl, selectedUrl, StringComparison.OrdinalIgnoreCase))
         {
             SelectedLanServer = null;
+            ManualFallbackHostUrl = trimmedHostUrl;
             LanEndpointSource = LanEndpointSource.ManualFallback;
             return;
         }
@@ -490,6 +515,9 @@ internal class DeviceConfig
 
     [JsonPropertyName("target_device_id")]
     public string TargetDeviceId { get; set; } = "";
+
+    [JsonPropertyName("manual_fallback_host_url")]
+    public string ManualFallbackHostUrl { get; set; } = "";
 
     [JsonPropertyName("show_floating_ball")]
     public bool ShowFloatingBall { get; set; } = true;
