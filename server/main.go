@@ -28,6 +28,10 @@ func init() {
 
 func main() {
 	cfg := config.Load()
+	serverID, err := config.LoadOrCreateServerID(cfg.StoragePath)
+	if err != nil {
+		log.Fatalf("Failed to load server_id: %v", err)
+	}
 
 	database, err := db.Open(cfg.StoragePath)
 	if err != nil {
@@ -83,21 +87,7 @@ func main() {
 	r.Use(gin.Recovery())
 
 	// Health endpoint (no auth required)
-	r.GET("/health", func(c *gin.Context) {
-		resp := gin.H{
-			"version": "0.1.0",
-			"uptime":  time.Since(startTime).String(),
-			"auth":    cfg.AuthEnabled,
-		}
-		stats, err := database.GetStorageStats()
-		if err != nil {
-			log.Printf("ERROR: get storage stats: %v", err)
-		} else {
-			resp["storage_used_bytes"] = stats.StorageUsedBytes
-			resp["clip_count"] = stats.ClipCount
-		}
-		c.JSON(200, resp)
-	})
+	r.GET("/health", healthHandler(cfg, database, serverID))
 
 	// API routes — auth is opt-in via AUTH_ENABLED
 	api := r.Group("/api/v1")
@@ -122,8 +112,8 @@ func main() {
 	}
 
 	addr := fmt.Sprintf("%s:%s", cfg.BindAddress, cfg.Port)
-	log.Printf("CopyEverywhere server starting on %s (storage: %s, max_clip: %dMB, ttl: %dh)",
-		addr, cfg.StoragePath, cfg.MaxClipSizeMB, cfg.TTLHours)
+	log.Printf("CopyEverywhere server starting on %s (storage: %s, max_clip: %dMB, ttl: %dh, server_id: %s)",
+		addr, cfg.StoragePath, cfg.MaxClipSizeMB, cfg.TTLHours, serverID)
 
 	// Start mDNS service advertisement
 	port, _ := strconv.Atoi(cfg.Port)
@@ -143,5 +133,24 @@ func main() {
 
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+func healthHandler(cfg *config.Config, database *db.DB, serverID string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		resp := gin.H{
+			"version":   "0.1.0",
+			"uptime":    time.Since(startTime).String(),
+			"auth":      cfg.AuthEnabled,
+			"server_id": serverID,
+		}
+		stats, err := database.GetStorageStats()
+		if err != nil {
+			log.Printf("ERROR: get storage stats: %v", err)
+		} else {
+			resp["storage_used_bytes"] = stats.StorageUsedBytes
+			resp["clip_count"] = stats.ClipCount
+		}
+		c.JSON(http.StatusOK, resp)
 	}
 }

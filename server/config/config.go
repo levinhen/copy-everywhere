@@ -1,7 +1,11 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -53,4 +57,43 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func LoadOrCreateServerID(storagePath string) (string, error) {
+	if err := os.MkdirAll(storagePath, 0755); err != nil {
+		return "", fmt.Errorf("create storage dir: %w", err)
+	}
+
+	serverIDPath := filepath.Join(storagePath, "server_id")
+	if data, err := os.ReadFile(serverIDPath); err == nil {
+		serverID := strings.TrimSpace(string(data))
+		if serverID != "" {
+			return serverID, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read server_id: %w", err)
+	}
+
+	serverID, err := generateServerID()
+	if err != nil {
+		return "", err
+	}
+
+	tempPath := serverIDPath + ".tmp"
+	if err := os.WriteFile(tempPath, []byte(serverID+"\n"), 0644); err != nil {
+		return "", fmt.Errorf("write temp server_id: %w", err)
+	}
+	if err := os.Rename(tempPath, serverIDPath); err != nil {
+		return "", fmt.Errorf("persist server_id: %w", err)
+	}
+
+	return serverID, nil
+}
+
+func generateServerID() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate server_id: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }

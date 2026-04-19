@@ -1,29 +1,18 @@
 # Ralph Progress Log
-Started: 2026-04-19
-
-## Current Iteration
-LAN Server Auto-Discovery Reliability
-
-US-090A: Server: persist a stable server_id and expose it on health      [ ]
-US-090B: Server: advertise server_id in mDNS metadata                    [ ]
-US-091:  Shared contract: define discovery selection rules               [ ]
-US-092A: macOS: persist selected server by server_id                     [ ]
-US-092B: macOS: start discovery on launch and restore selection          [ ]
-US-092C: macOS: show discovery state and manual fallback in Config UI    [ ]
-US-093A: Windows: persist selected server by server_id                   [ ]
-US-093B: Windows: start discovery on launch and restore selection        [ ]
-US-093C: Windows: show discovery state and manual fallback in UI         [ ]
-US-094A: Android: persist selected server by server_id                   [ ]
-US-094B: Android: auto-start discovery and restore selection             [ ]
-US-094C: Android: show discovery state and manual fallback in Config     [ ]
-US-095:  Shared fallback: preserve manual URLs when discovery fails      [ ]
-US-096:  Diagnostics and regression coverage for discovery restore       [ ]
-
+Started: Sun Apr 19 11:27:57 CST 2026
+---
 ## Codebase Patterns
-- Active Ralph run files live under `scripts/ralph/`; `ralph.sh` reads `scripts/ralph/prd.json` and `scripts/ralph/progress.txt`
-- The repo root `prd.json` can mirror the active iteration for humans, but the autonomous loop follows `scripts/ralph/prd.json`
-- Existing LAN discovery already exists on all three clients: macOS `BonjourBrowser`, Windows `MdnsDiscoveryService`, Android `MdnsDiscoveryService`
-- Current discovered-server models use host and port for display identity, but DHCP-safe persistence should use a stable server-side `server_id`
-- Manual Host URL entry remains the fallback path; new discovery work should not delete or block a valid manual configuration
-- Multi-server discovery should remain passive: do not add modal choosers or startup popups; guide the user to Config for explicit selection
-- This iteration only guarantees discovery restore on app restart or LAN mode re-entry, not live hot switching while already connected
+- Persist the LAN server identity in `STORAGE_PATH/server_id` via `config.LoadOrCreateServerID()`; expose the exact same value from `/health` so clients can treat host/IP changes as the same server.
+
+## 2026-04-19 11:45 CST - US-090A
+- Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
+- Files changed: `server/config/config.go`, `server/config/config_test.go`, `server/main.go`, `server/main_test.go`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `go test ./...` passed; `go build ./...` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - Keep server identity outside SQLite schema churn by persisting it as a small file under `STORAGE_PATH`, which survives normal process restarts and keeps health/discovery code decoupled from clip tables.
+  - Gotchas encountered
+  - The active Ralph artifacts in this repo were pared back to a minimal `progress.txt`; add the `## Codebase Patterns` section explicitly when it is absent rather than assuming a prior template is still present.
+  - Useful context
+  - `US-090B` can reuse the same in-memory `serverID` value already loaded in `main.go` when extending mDNS TXT metadata and logs.
+---
