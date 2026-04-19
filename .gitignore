@@ -20,3 +20,7 @@ archive/targeted-auto-delivery-reliability/*
 
 # Server runtime data (SQLite DB + uploaded files)
 server/data/
+
+# Build and packaging outputs
+dist/
+server/copyeverywhere-server
