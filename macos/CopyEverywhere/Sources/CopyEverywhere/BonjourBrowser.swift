@@ -1,8 +1,25 @@
 import Foundation
 import Network
 
+// LAN discovery contract for this iteration lives in `tasks/lan-discovery-selection-contract.md`
+// and is tracked by Ralph in `scripts/ralph/prd.json` / `scripts/ralph/progress.txt`.
+enum LanEndpointSource: String, Codable, CaseIterable {
+    case autoDiscovered = "auto_discovered"
+    case restoredSelection = "restored_selection"
+    case manualFallback = "manual_fallback"
+}
+
+struct StoredLanServerSelection: Codable, Equatable {
+    let serverID: String
+    let name: String
+    let host: String
+    let port: UInt16
+    let source: LanEndpointSource
+}
+
 struct DiscoveredServer: Identifiable, Equatable, Hashable {
-    let id: String // "host:port"
+    let id: String // Display identity only. Persistent selection must use `serverID`.
+    let serverID: String?
     let name: String
     let host: String
     let port: UInt16
@@ -94,6 +111,7 @@ final class BonjourBrowser: ObservableObject {
         // Extract TXT record metadata
         var authRequired = false
         var version = ""
+        var serverID: String?
 
         if case .bonjour(let txtRecord) = result.metadata {
             if let authValue = txtRecord.stringValue(for: "auth") {
@@ -102,6 +120,7 @@ final class BonjourBrowser: ObservableObject {
             if let versionValue = txtRecord.stringValue(for: "version") {
                 version = versionValue
             }
+            serverID = txtRecord.stringValue(for: "server_id")
         }
 
         guard case .service(let name, _, _, _) = result.endpoint else { return }
@@ -121,6 +140,7 @@ final class BonjourBrowser: ObservableObject {
                         let portNum = port.rawValue
                         let server = DiscoveredServer(
                             id: "\(hostStr):\(portNum)",
+                            serverID: serverID,
                             name: name,
                             host: hostStr,
                             port: portNum,

@@ -4,6 +4,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 ## Codebase Patterns
 - Persist the LAN server identity in `STORAGE_PATH/server_id` via `config.LoadOrCreateServerID()`; expose the exact same value from `/health` so clients can treat host/IP changes as the same server.
 - Keep mDNS TXT metadata in lockstep with `/health` identity fields: when discovery clients need durable server identity, advertise the same `server_id` value in both places and cover it with a real `mdns.Query` test.
+- For cross-platform LAN discovery iterations, write the behavior contract once in `tasks/lan-discovery-selection-contract.md` and mirror it in typed client models (`server_id` + `auto_discovered` / `restored_selection` / `manual_fallback`) before implementing per-platform restore logic.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -28,4 +29,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - `server_id` now lives in three coupled places for LAN discovery work: persisted storage, `/health`, and mDNS TXT metadata; changing one without the others will break DHCP-stable matching.
   - Useful context
   - `main.go` already loads `serverID` before route wiring, so later LAN-selection stories can keep threading the same value outward instead of reloading identity in discovery-specific code.
+---
+## 2026-04-19 11:36 CST - US-091
+- Wrote the shared LAN discovery selection contract in `tasks/lan-discovery-selection-contract.md` and encoded matching selection-source / persisted-selection types in macOS, Windows, and Android discovery config models.
+- Files changed: `tasks/lan-discovery-selection-contract.md`, `macos/CopyEverywhere/Sources/CopyEverywhere/BonjourBrowser.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `windows/CopyEverywhere/Services/MdnsDiscoveryService.cs`, `windows/CopyEverywhere/Services/ConfigStore.cs`, `android/app/src/main/java/com/copyeverywhere/app/data/MdnsDiscoveryService.kt`, `android/app/src/main/java/com/copyeverywhere/app/data/ConfigStore.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed; `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/liyunhan/Library/Android/sdk ./gradlew assembleDebug` passed; `dotnet build` could not run on this machine because `dotnet` is not installed.
+- Learnings for future iterations:
+  - Patterns discovered
+  - Shared LAN discovery behavior is easier to keep aligned when the repo has one contract doc plus typed per-client persistence models before any platform starts wiring startup restore logic.
+  - Gotchas encountered
+  - Android Gradle on this machine still needs both `JAVA_HOME=/opt/homebrew/opt/openjdk@17` and `ANDROID_HOME=/Users/liyunhan/Library/Android/sdk`; without both, the check fails before Kotlin compilation.
+  - Useful context
+  - The discovery models on all three clients now accept `server_id`, but the actual startup auto-select and restore behavior still belongs to the later platform-specific stories.
 ---

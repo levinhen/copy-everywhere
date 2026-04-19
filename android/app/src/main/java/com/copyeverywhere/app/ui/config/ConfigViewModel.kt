@@ -21,6 +21,8 @@ import com.copyeverywhere.app.data.Device
 import com.copyeverywhere.app.data.DiscoveredServer
 import com.copyeverywhere.app.data.MdnsDiscoveryService
 import com.copyeverywhere.app.data.PairedBluetoothDevice
+import com.copyeverywhere.app.data.LanEndpointSource
+import com.copyeverywhere.app.data.StoredLanServerSelection
 import com.copyeverywhere.app.data.TransferMode
 import com.copyeverywhere.app.service.CopyEverywhereService
 import com.copyeverywhere.app.service.LanReceiverHealth
@@ -84,6 +86,10 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
 
     val discoveredServers: StateFlow<List<DiscoveredServer>> = mdnsDiscovery.servers
+    val lanEndpointSource: StateFlow<LanEndpointSource> = configStore.lanEndpointSource
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LanEndpointSource.ManualFallback)
+    val selectedLanServer: StateFlow<StoredLanServerSelection?> = configStore.selectedLanServer
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     // Bluetooth state
     val pairedDevices: StateFlow<List<PairedBluetoothDevice>> = configStore.pairedBluetoothDevices
@@ -223,7 +229,21 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectDiscoveredServer(server: DiscoveredServer) {
         val url = "http://${server.host}:${server.port}"
-        viewModelScope.launch { configStore.setHostUrl(url) }
+        viewModelScope.launch {
+            configStore.setHostUrl(url)
+            configStore.setLanEndpointSource(LanEndpointSource.RestoredSelection)
+            server.serverId?.let {
+                configStore.setSelectedLanServer(
+                    StoredLanServerSelection(
+                        serverId = it,
+                        name = server.name,
+                        host = server.host,
+                        port = server.port,
+                        source = LanEndpointSource.RestoredSelection
+                    )
+                )
+            }
+        }
         _serverAuthRequired.value = server.authRequired
     }
 

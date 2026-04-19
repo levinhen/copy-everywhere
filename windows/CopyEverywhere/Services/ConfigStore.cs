@@ -18,6 +18,33 @@ public enum TransferMode
     Bluetooth
 }
 
+// LAN discovery contract for this iteration lives in `tasks/lan-discovery-selection-contract.md`
+// and is tracked by Ralph in `scripts/ralph/prd.json` / `scripts/ralph/progress.txt`.
+public enum LanEndpointSource
+{
+    AutoDiscovered,
+    RestoredSelection,
+    ManualFallback
+}
+
+public class StoredLanServerSelection
+{
+    [JsonPropertyName("server_id")]
+    public string ServerId { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("host")]
+    public string Host { get; set; } = "";
+
+    [JsonPropertyName("port")]
+    public int Port { get; set; }
+
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = "manual_fallback";
+}
+
 // ── Paired device persistence model ─────────────────────────────────
 
 public class PairedBluetoothDevice
@@ -76,6 +103,8 @@ public class ConfigStore : INotifyPropertyChanged
     private string? _bluetoothConnectedDeviceName;
     private string? _bluetoothErrorMessage;
     private ReceiverStatus _targetDeviceReceiverStatus = ReceiverStatus.Offline;
+    private LanEndpointSource _lanEndpointSource = LanEndpointSource.ManualFallback;
+    private StoredLanServerSelection? _selectedLanServer;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -169,6 +198,18 @@ public class ConfigStore : INotifyPropertyChanged
         set { _targetDeviceReceiverStatus = value; OnPropertyChanged(); }
     }
 
+    public LanEndpointSource LanEndpointSource
+    {
+        get => _lanEndpointSource;
+        set { _lanEndpointSource = value; OnPropertyChanged(); }
+    }
+
+    public StoredLanServerSelection? SelectedLanServer
+    {
+        get => _selectedLanServer;
+        set { _selectedLanServer = value; OnPropertyChanged(); }
+    }
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(HostUrl);
 
     public bool IsSendReady =>
@@ -214,6 +255,8 @@ public class ConfigStore : INotifyPropertyChanged
             FloatingBallY = FloatingBallY,
             TransferMode = TransferMode.ToString(),
             PairedDevices = PairedDevices,
+            LanEndpointSource = LanEndpointSource.ToString(),
+            SelectedLanServer = SelectedLanServer,
         };
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(ConfigFilePath, json);
@@ -239,6 +282,9 @@ public class ConfigStore : INotifyPropertyChanged
                     TransferMode = mode;
                 if (config.PairedDevices != null)
                     PairedDevices = config.PairedDevices;
+                if (Enum.TryParse<LanEndpointSource>(config.LanEndpointSource, out var source))
+                    LanEndpointSource = source;
+                SelectedLanServer = config.SelectedLanServer;
             }
         }
         catch
@@ -319,4 +365,10 @@ internal class DeviceConfig
 
     [JsonPropertyName("paired_devices")]
     public List<PairedBluetoothDevice>? PairedDevices { get; set; }
+
+    [JsonPropertyName("lan_endpoint_source")]
+    public string LanEndpointSource { get; set; } = nameof(CopyEverywhere.Services.LanEndpointSource.ManualFallback);
+
+    [JsonPropertyName("selected_lan_server")]
+    public StoredLanServerSelection? SelectedLanServer { get; set; }
 }

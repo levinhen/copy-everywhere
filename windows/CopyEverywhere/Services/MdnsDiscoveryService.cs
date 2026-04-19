@@ -11,7 +11,8 @@ namespace CopyEverywhere.Services;
 
 public class DiscoveredServer
 {
-    public string Id { get; set; } = ""; // "host:port"
+    public string Id { get; set; } = ""; // Display identity only. Persistent selection must use ServerId.
+    public string? ServerId { get; set; }
     public string Name { get; set; } = "";
     public string Host { get; set; } = "";
     public int Port { get; set; }
@@ -111,6 +112,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
             {
                 var authRequired = false;
                 var version = "";
+                string? serverId = null;
 
                 if (service.Properties != null)
                 {
@@ -120,6 +122,8 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
                             authRequired = string.Equals(authVal, "true", StringComparison.OrdinalIgnoreCase);
                         if (propSet.TryGetValue("version", out var versionVal))
                             version = versionVal ?? "";
+                        if (propSet.TryGetValue("server_id", out var serverIdVal))
+                            serverId = serverIdVal;
                     }
                 }
 
@@ -129,6 +133,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
                 servers.Add(new DiscoveredServer
                 {
                     Id = $"{ip}:{port}",
+                    ServerId = serverId,
                     Name = host.DisplayName,
                     Host = ip,
                     Port = port,

@@ -139,6 +139,8 @@ final class ConfigStore: ObservableObject {
     @Published var availableDevices: [DeviceInfo] = []
     @Published var targetDeviceID: String? = nil  // nil means "Queue — any device"
     @Published var serverAuthRequired: Bool? = nil  // nil = unknown, from mDNS TXT or /health
+    @Published var lanEndpointSource: LanEndpointSource = .manualFallback
+    @Published var selectedLanServer: StoredLanServerSelection? = nil
     @Published var sseConnectionState: SSEConnectionState = .disconnected
     @Published var sseStatusDetail: String = "Configure a LAN server to enable targeted auto-delivery."
     @Published var localServerEnabled: Bool = false
@@ -249,6 +251,8 @@ final class ConfigStore: ObservableObject {
     private let chunkSize: Int64 = 10 * 1024 * 1024 // 10MB chunks
     private let hostKey = "com.copyeverywhere.hostURL"
     private let tokenKey = "com.copyeverywhere.accessToken"
+    private let selectedLanServerKey = "com.copyeverywhere.selectedLanServer"
+    private let lanEndpointSourceKey = "com.copyeverywhere.lanEndpointSource"
     private let localServerEnabledKey = "com.copyeverywhere.localServerEnabled"
     private static let localServerConfigURL: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -376,9 +380,19 @@ final class ConfigStore: ObservableObject {
     func selectDiscoveredServer(_ server: DiscoveredServer) {
         hostURL = "http://\(server.host):\(server.port)"
         serverAuthRequired = server.authRequired
+        if let serverID = server.serverID {
+            selectedLanServer = StoredLanServerSelection(
+                serverID: serverID,
+                name: server.name,
+                host: server.host,
+                port: server.port,
+                source: .restoredSelection
+            )
+        }
         if !server.authRequired {
             accessToken = ""
         }
+        lanEndpointSource = .restoredSelection
     }
 
     // MARK: - Bluetooth Pairing & Connection
@@ -508,6 +522,13 @@ final class ConfigStore: ObservableObject {
     func save() {
         UserDefaults.standard.set(hostURL, forKey: hostKey)
         UserDefaults.standard.set(accessToken, forKey: tokenKey)
+        UserDefaults.standard.set(lanEndpointSource.rawValue, forKey: lanEndpointSourceKey)
+        if let selectedLanServer,
+           let data = try? JSONEncoder().encode(selectedLanServer) {
+            UserDefaults.standard.set(data, forKey: selectedLanServerKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: selectedLanServerKey)
+        }
         isConfigured = !hostURL.isEmpty
         if !isConfigured {
             sseConnectionState = .disconnected
@@ -561,8 +582,12 @@ final class ConfigStore: ObservableObject {
         stopSSE()
         UserDefaults.standard.removeObject(forKey: hostKey)
         UserDefaults.standard.removeObject(forKey: tokenKey)
+        UserDefaults.standard.removeObject(forKey: selectedLanServerKey)
+        UserDefaults.standard.removeObject(forKey: lanEndpointSourceKey)
         hostURL = ""
         accessToken = ""
+        selectedLanServer = nil
+        lanEndpointSource = .manualFallback
         isConfigured = false
         connectionStatus = .idle
         sseConnectionState = .disconnected
@@ -576,6 +601,14 @@ final class ConfigStore: ObservableObject {
     private func loadPersistedConfig() {
         hostURL = UserDefaults.standard.string(forKey: hostKey) ?? ""
         accessToken = UserDefaults.standard.string(forKey: tokenKey) ?? ""
+        if let rawSource = UserDefaults.standard.string(forKey: lanEndpointSourceKey),
+           let source = LanEndpointSource(rawValue: rawSource) {
+            lanEndpointSource = source
+        }
+        if let data = UserDefaults.standard.data(forKey: selectedLanServerKey),
+           let selection = try? JSONDecoder().decode(StoredLanServerSelection.self, from: data) {
+            selectedLanServer = selection
+        }
         isConfigured = !hostURL.isEmpty
         if isConfigured {
             sseStatusDetail = "Waiting to connect targeted auto-delivery."

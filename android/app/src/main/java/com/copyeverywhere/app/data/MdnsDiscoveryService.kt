@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class DiscoveredServer(
+    val serverId: String?,
     val name: String,
     val host: String,
     val port: Int,
@@ -66,8 +67,10 @@ class MdnsDiscoveryService(context: Context) {
             val attributes = serviceInfo.attributes
             val authRequired = attributes["auth"]?.let { String(it) == "true" }
             val version = attributes["version"]?.let { String(it) }
+            val serverId = attributes["server_id"]?.let { String(it) }
 
             val server = DiscoveredServer(
+                serverId = serverId,
                 name = serviceInfo.serviceName,
                 host = host,
                 port = port,
