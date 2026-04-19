@@ -20,20 +20,21 @@ type MDNSServer struct {
 
 // Start registers an mDNS service on the given port with the provided TXT records.
 // Returns a server that can be Shutdown() to deregister the service.
-func Start(port int, version string, authEnabled bool) (*MDNSServer, error) {
+func Start(port int, version string, authEnabled bool, serverID string) (*MDNSServer, error) {
 	info := []string{
 		fmt.Sprintf("version=%s", version),
 		fmt.Sprintf("auth=%s", strconv.FormatBool(authEnabled)),
+		fmt.Sprintf("server_id=%s", serverID),
 	}
 
 	service, err := mdns.NewMDNSService(
-		ServiceName,  // instance name
-		ServiceType,  // service type
-		"",           // domain (empty = .local)
-		"",           // host (empty = hostname)
-		port,         // port
-		nil,          // IPs (nil = all interfaces)
-		info,         // TXT records
+		ServiceName, // instance name
+		ServiceType, // service type
+		"",          // domain (empty = .local)
+		"",          // host (empty = hostname)
+		port,        // port
+		nil,         // IPs (nil = all interfaces)
+		info,        // TXT records
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mdns: create service: %w", err)
@@ -44,7 +45,7 @@ func Start(port int, version string, authEnabled bool) (*MDNSServer, error) {
 		return nil, fmt.Errorf("mdns: start server: %w", err)
 	}
 
-	log.Printf("mDNS: advertising %s on port %d (version=%s, auth=%v)", ServiceType, port, version, authEnabled)
+	log.Printf("mDNS: advertising %s on port %d (version=%s, auth=%v, server_id=%s)", ServiceType, port, version, authEnabled, serverID)
 	return &MDNSServer{server: server}, nil
 }
 

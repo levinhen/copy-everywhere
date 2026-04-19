@@ -3,6 +3,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 ---
 ## Codebase Patterns
 - Persist the LAN server identity in `STORAGE_PATH/server_id` via `config.LoadOrCreateServerID()`; expose the exact same value from `/health` so clients can treat host/IP changes as the same server.
+- Keep mDNS TXT metadata in lockstep with `/health` identity fields: when discovery clients need durable server identity, advertise the same `server_id` value in both places and cover it with a real `mdns.Query` test.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -15,4 +16,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - The active Ralph artifacts in this repo were pared back to a minimal `progress.txt`; add the `## Codebase Patterns` section explicitly when it is absent rather than assuming a prior template is still present.
   - Useful context
   - `US-090B` can reuse the same in-memory `serverID` value already loaded in `main.go` when extending mDNS TXT metadata and logs.
+---
+## 2026-04-19 11:32 CST - US-090B
+- Added `server_id` to Go server mDNS TXT metadata, passed the persisted `serverID` from `main.go` into discovery startup, and expanded mDNS advertising logs to include the broadcast identity.
+- Files changed: `server/discovery/mdns.go`, `server/discovery/mdns_test.go`, `server/main.go`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `go test ./...` passed; `go build ./...` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - Discovery identity should be validated through an actual `mdns.Query` assertion on `entry.InfoFields`, not only through unit tests on helper functions or logs.
+  - Gotchas encountered
+  - `server_id` now lives in three coupled places for LAN discovery work: persisted storage, `/health`, and mDNS TXT metadata; changing one without the others will break DHCP-stable matching.
+  - Useful context
+  - `main.go` already loads `serverID` before route wiring, so later LAN-selection stories can keep threading the same value outward instead of reloading identity in discovery-specific code.
 ---

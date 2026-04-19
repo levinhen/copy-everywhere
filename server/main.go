@@ -117,7 +117,7 @@ func main() {
 
 	// Start mDNS service advertisement
 	port, _ := strconv.Atoi(cfg.Port)
-	mdnsSrv, err := discovery.Start(port, "0.1.0", cfg.AuthEnabled)
+	mdnsSrv, err := discovery.Start(port, "0.1.0", cfg.AuthEnabled, serverID)
 	if err != nil {
 		log.Printf("WARNING: mDNS advertisement failed: %v", err)
 	} else {

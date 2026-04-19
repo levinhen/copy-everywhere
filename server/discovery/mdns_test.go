@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -8,7 +9,7 @@ import (
 )
 
 func TestStartAndShutdown(t *testing.T) {
-	srv, err := Start(19876, "0.1.0", false)
+	srv, err := Start(19876, "0.1.0", false, "server-19876")
 	if err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
@@ -18,7 +19,7 @@ func TestStartAndShutdown(t *testing.T) {
 }
 
 func TestStartAuthEnabled(t *testing.T) {
-	srv, err := Start(19877, "0.2.0", true)
+	srv, err := Start(19877, "0.2.0", true, "server-19877")
 	if err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
@@ -26,7 +27,7 @@ func TestStartAuthEnabled(t *testing.T) {
 }
 
 func TestShutdownIdempotent(t *testing.T) {
-	srv, err := Start(19878, "0.1.0", false)
+	srv, err := Start(19878, "0.1.0", false, "server-19878")
 	if err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
@@ -39,7 +40,9 @@ func TestMDNSDiscovery(t *testing.T) {
 		t.Skip("skipping mDNS discovery test in short mode")
 	}
 
-	srv, err := Start(19879, "0.1.0", false)
+	const serverID = "server-19879"
+
+	srv, err := Start(19879, "0.1.0", false, serverID)
 	if err != nil {
 		t.Fatalf("Start() error: %v", err)
 	}
@@ -63,6 +66,9 @@ func TestMDNSDiscovery(t *testing.T) {
 	for entry := range entriesCh {
 		if entry.Port == 19879 {
 			found = true
+			if !slices.Contains(entry.InfoFields, "server_id="+serverID) {
+				t.Fatalf("expected TXT records to include server_id=%s, got %v", serverID, entry.InfoFields)
+			}
 			break
 		}
 	}
