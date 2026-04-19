@@ -55,3 +55,15 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - Useful context
   - `US-092B` can build on `selectedLanServer.serverID` and `lanEndpointSource` without reworking the manual fallback persistence again.
 ---
+## 2026-04-19 11:43 CST - US-092B
+- Started Bonjour LAN discovery from `ConfigStore` during launch and on LAN-mode entry, then observed discovery results to auto-select a unique server or restore a persisted `server_id` match before the Config popover opens.
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - Startup DHCP recovery is more reliable when discovery result handling lives in `ConfigStore` and persists the updated endpoint immediately, instead of depending on Config UI lifecycle hooks.
+  - Gotchas encountered
+  - Restoring a saved `server_id` needs to preserve the manual fallback URL state when discovery does not find a match yet; clearing the saved selection would break later recovery.
+  - Useful context
+  - The same `applyDiscoveredLanServer` path now covers launch-time auto-select, persisted restore, and SSE restart after host changes, so `US-092C` can focus on surfacing that state in UI rather than reworking the restore logic.
+---

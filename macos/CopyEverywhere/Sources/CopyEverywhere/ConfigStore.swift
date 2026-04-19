@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import IOBluetooth
 import Network
@@ -330,6 +331,7 @@ final class ConfigStore: ObservableObject {
     private var localServerProcess: Process?
     private var localServerStopRequested = false
     private var localServerRestartRequested = false
+    private var bonjourServersObserver: AnyCancellable?
 
     init() {
         loadPersistedConfig()
@@ -337,7 +339,10 @@ final class ConfigStore: ObservableObject {
         deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
         loadPairedDevices()
         loadTransferMode()
-        bonjourBrowser.startBrowsing()
+        observeLanDiscovery()
+        if transferMode == .lanServer {
+            startLanDiscoveryIfNeeded()
+        }
         bluetoothService.delegate = self
         startQueueAutoReceivePollingIfNeeded()
     }
@@ -515,12 +520,14 @@ final class ConfigStore: ObservableObject {
 
         if mode == .bluetooth {
             // Stop LAN services, start Bluetooth
+            bonjourBrowser.stopBrowsing()
             stopSSE()
             stopQueueAutoReceivePolling()
             startBluetoothServerIfNeeded()
         } else {
             // Stop Bluetooth, restart LAN services
             bluetoothService.stopServer()
+            startLanDiscoveryIfNeeded()
             startSSE()
             startQueueAutoReceivePollingIfNeeded()
             // Resume queue polling if panel is open
@@ -639,6 +646,105 @@ final class ConfigStore: ObservableObject {
         isConfigured = !hostURL.isEmpty
         if isConfigured {
             sseStatusDetail = "Waiting to connect targeted auto-delivery."
+        }
+    }
+
+    private func observeLanDiscovery() {
+        bonjourServersObserver = bonjourBrowser.$discoveredServers
+            .sink { [weak self] servers in
+                self?.handleLanDiscoveryResults(servers)
+            }
+    }
+
+    private func startLanDiscoveryIfNeeded() {
+        bonjourBrowser.startBrowsing()
+        handleLanDiscoveryResults(bonjourBrowser.discoveredServers)
+    }
+
+    private func handleLanDiscoveryResults(_ servers: [DiscoveredServer]) {
+        guard transferMode == .lanServer else { return }
+
+        if restorePersistedLanSelection(from: servers) {
+            return
+        }
+
+        if selectedLanServer != nil {
+            if lanEndpointSource != .manualFallback {
+                lanEndpointSource = .manualFallback
+                persistLanSelectionState()
+                appendLocalServerLog("LAN discovery: selected server not found; keeping manual fallback URL")
+            }
+            return
+        }
+
+        let trimmedHostURL = normalizedHostURL(hostURL)
+        guard trimmedHostURL.isEmpty else { return }
+
+        if servers.count == 1, let server = servers.first {
+            applyDiscoveredLanServer(server, source: .autoDiscovered, reason: "unique discovered server auto-selected")
+        } else if servers.count > 1 {
+            appendLocalServerLog("LAN discovery: multiple servers found; waiting for explicit selection")
+        }
+    }
+
+    @discardableResult
+    private func restorePersistedLanSelection(from servers: [DiscoveredServer]) -> Bool {
+        guard let storedSelection = selectedLanServer else { return false }
+        guard let server = servers.first(where: { $0.serverID == storedSelection.serverID }) else { return false }
+
+        applyDiscoveredLanServer(server, source: .restoredSelection, reason: "persisted server restored from discovery")
+        return true
+    }
+
+    private func applyDiscoveredLanServer(
+        _ server: DiscoveredServer,
+        source: LanEndpointSource,
+        reason: String
+    ) {
+        let previousHostURL = normalizedHostURL(hostURL)
+        let nextHostURL = normalizedHostURL(server.endpointURLString)
+        let previousSource = lanEndpointSource
+        let previousSelection = selectedLanServer
+
+        hostURL = server.endpointURLString
+        serverAuthRequired = server.authRequired
+        if let serverID = server.serverID {
+            selectedLanServer = StoredLanServerSelection(
+                serverID: serverID,
+                name: server.name,
+                host: server.host,
+                port: server.port,
+                source: source
+            )
+        }
+        if !server.authRequired {
+            accessToken = ""
+        }
+        lanEndpointSource = source
+        isConfigured = !hostURL.isEmpty
+        persistLanSelectionState()
+
+        let selectionChanged = previousSelection != selectedLanServer
+        let shouldReconnect = previousHostURL != nextHostURL || previousSource != source || selectionChanged
+        guard shouldReconnect else { return }
+
+        appendLocalServerLog("LAN discovery: \(reason) -> \(server.host):\(server.port)")
+        Task {
+            await registerDevice()
+            restartSSEConnection(reason: reason)
+            startQueueAutoReceivePollingIfNeeded()
+            await fetchQueue()
+        }
+    }
+
+    private func persistLanSelectionState() {
+        UserDefaults.standard.set(hostURL, forKey: hostKey)
+        UserDefaults.standard.set(lanEndpointSource.rawValue, forKey: lanEndpointSourceKey)
+        if let selectedLanServer,
+           let data = try? JSONEncoder().encode(selectedLanServer) {
+            UserDefaults.standard.set(data, forKey: selectedLanServerKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: selectedLanServerKey)
         }
     }
 
