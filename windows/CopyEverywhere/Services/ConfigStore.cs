@@ -231,8 +231,10 @@ public class ConfigStore : INotifyPropertyChanged
 
     public void Save()
     {
+        NormalizeLanSelectionBeforeSave();
         WriteCredential(CredentialTargetHost, HostUrl);
         WriteCredential(CredentialTargetToken, AccessToken);
+        PersistConfig();
     }
 
     public void SaveDeviceConfig(string deviceId, string deviceName)
@@ -255,7 +257,7 @@ public class ConfigStore : INotifyPropertyChanged
             FloatingBallY = FloatingBallY,
             TransferMode = TransferMode.ToString(),
             PairedDevices = PairedDevices,
-            LanEndpointSource = LanEndpointSource.ToString(),
+            LanEndpointSource = ToStorageValue(LanEndpointSource),
             SelectedLanServer = SelectedLanServer,
         };
         var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
@@ -282,7 +284,7 @@ public class ConfigStore : INotifyPropertyChanged
                     TransferMode = mode;
                 if (config.PairedDevices != null)
                     PairedDevices = config.PairedDevices;
-                if (Enum.TryParse<LanEndpointSource>(config.LanEndpointSource, out var source))
+                if (TryParseLanEndpointSource(config.LanEndpointSource, out var source))
                     LanEndpointSource = source;
                 SelectedLanServer = config.SelectedLanServer;
             }
@@ -304,6 +306,138 @@ public class ConfigStore : INotifyPropertyChanged
     {
         PairedDevices = PairedDevices.Where(d => d.Address != address).ToList();
         PersistConfig();
+    }
+
+    public void SelectDiscoveredServer(DiscoveredServer server, LanEndpointSource source = LanEndpointSource.RestoredSelection)
+    {
+        HostUrl = BuildServerUrl(server.Host, server.Port);
+        ServerAuthRequired = server.AuthRequired;
+        if (!string.IsNullOrWhiteSpace(server.ServerId))
+        {
+            SelectedLanServer = new StoredLanServerSelection
+            {
+                ServerId = server.ServerId,
+                Name = server.Name,
+                Host = server.Host,
+                Port = server.Port,
+                Source = ToStorageValue(source),
+            };
+        }
+        else
+        {
+            SelectedLanServer = null;
+        }
+
+        if (!server.AuthRequired)
+        {
+            AccessToken = "";
+        }
+
+        LanEndpointSource = source;
+    }
+
+    public void UpdateManualHostUrl(string value)
+    {
+        HostUrl = value;
+
+        if (SelectedLanServer == null)
+        {
+            LanEndpointSource = LanEndpointSource.ManualFallback;
+            return;
+        }
+
+        var trimmedValue = NormalizeHostUrl(value);
+        var selectedUrl = BuildServerUrl(SelectedLanServer.Host, SelectedLanServer.Port);
+        if (!string.Equals(trimmedValue, NormalizeHostUrl(selectedUrl), StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedLanServer = null;
+            LanEndpointSource = LanEndpointSource.ManualFallback;
+        }
+    }
+
+    public bool IsSelectedDiscoveredServer(DiscoveredServer server)
+    {
+        if (!string.IsNullOrWhiteSpace(server.ServerId) &&
+            !string.IsNullOrWhiteSpace(SelectedLanServer?.ServerId))
+        {
+            return string.Equals(server.ServerId, SelectedLanServer.ServerId, StringComparison.Ordinal);
+        }
+
+        return string.Equals(
+            NormalizeHostUrl(HostUrl),
+            NormalizeHostUrl(BuildServerUrl(server.Host, server.Port)),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void NormalizeLanSelectionBeforeSave()
+    {
+        var trimmedHostUrl = NormalizeHostUrl(HostUrl);
+        HostUrl = trimmedHostUrl;
+
+        if (string.IsNullOrWhiteSpace(trimmedHostUrl))
+        {
+            SelectedLanServer = null;
+            LanEndpointSource = LanEndpointSource.ManualFallback;
+            return;
+        }
+
+        if (SelectedLanServer == null)
+        {
+            LanEndpointSource = LanEndpointSource.ManualFallback;
+            return;
+        }
+
+        var selectedUrl = NormalizeHostUrl(BuildServerUrl(SelectedLanServer.Host, SelectedLanServer.Port));
+        if (!string.Equals(trimmedHostUrl, selectedUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedLanServer = null;
+            LanEndpointSource = LanEndpointSource.ManualFallback;
+            return;
+        }
+
+        SelectedLanServer = new StoredLanServerSelection
+        {
+            ServerId = SelectedLanServer.ServerId,
+            Name = SelectedLanServer.Name,
+            Host = SelectedLanServer.Host,
+            Port = SelectedLanServer.Port,
+            Source = ToStorageValue(LanEndpointSource),
+        };
+    }
+
+    private static string NormalizeHostUrl(string value) =>
+        value.Trim().TrimEnd('/');
+
+    private static string BuildServerUrl(string host, int port) =>
+        $"http://{host}:{port}";
+
+    private static string ToStorageValue(LanEndpointSource source) => source switch
+    {
+        LanEndpointSource.AutoDiscovered => "auto_discovered",
+        LanEndpointSource.RestoredSelection => "restored_selection",
+        _ => "manual_fallback",
+    };
+
+    private static bool TryParseLanEndpointSource(string? value, out LanEndpointSource source)
+    {
+        switch (value)
+        {
+            case "auto_discovered":
+            case nameof(LanEndpointSource.AutoDiscovered):
+                source = LanEndpointSource.AutoDiscovered;
+                return true;
+            case "restored_selection":
+            case nameof(LanEndpointSource.RestoredSelection):
+                source = LanEndpointSource.RestoredSelection;
+                return true;
+            case "manual_fallback":
+            case nameof(LanEndpointSource.ManualFallback):
+                source = LanEndpointSource.ManualFallback;
+                return true;
+            default:
+                source = LanEndpointSource.ManualFallback;
+                return false;
+        }
     }
 
     private static string? ReadCredential(string target)

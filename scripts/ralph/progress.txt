@@ -7,6 +7,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - For cross-platform LAN discovery iterations, write the behavior contract once in `tasks/lan-discovery-selection-contract.md` and mirror it in typed client models (`server_id` + `auto_discovered` / `restored_selection` / `manual_fallback`) before implementing per-platform restore logic.
 - On macOS LAN config, discovered-server persistence must key selection/highlighting off `server_id` when available, and manual Host URL edits must clear stale discovered selection metadata back to `manual_fallback`.
 - On macOS LAN config UI, render source badges and discovery guidance from `lanEndpointSource`, `selectedLanServer`, and the Bonjour result count instead of inferring state from `hostURL` alone; that keeps multi-server waiting and manual fallback visible.
+- On Windows LAN config, route discovered selection, manual Host URL edits, and save-time normalization through `ConfigStore` helpers so `SelectedLanServer.ServerId` stays authoritative while `HostUrl` remains only the last-known/manual endpoint.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -79,4 +80,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - `hostURL` can still point at a discovered endpoint after the user explicitly switches to manual mode, so UI state must not infer the active source from the URL text field alone.
   - Useful context
   - `useManualLanFallback()` now gives later stories a small explicit hook for UI-driven fallback toggles without reworking the launch-time discovery restore path in `ConfigStore`.
+---
+## 2026-04-19 11:50 CST - US-093A
+- Persisted Windows LAN discovered selections through `SelectedLanServer.ServerId`, switched source serialization to the shared `auto_discovered` / `restored_selection` / `manual_fallback` contract strings, and normalized manual Host URL edits/save flows so stale discovered selections fall back cleanly.
+- Files changed: `windows/CopyEverywhere/Services/ConfigStore.cs`, `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `git diff --check` passed; `dotnet build` could not run on this machine because `dotnet` is not installed and Windows-host verification is unavailable here.
+- Learnings for future iterations:
+  - Patterns discovered
+  - Windows LAN selection stays consistent when the discovered-server list, manual Host URL text box, and save action all go through the same `ConfigStore` helpers instead of each inferring state from `HostUrl` independently.
+  - Gotchas encountered
+  - Persisting `LanEndpointSource` with enum `.ToString()` drifts from the shared contract values, so the Windows store now needs a compatibility parser that accepts both old enum names and new snake_case strings.
+  - Useful context
+  - `US-093B` can build on `ConfigStore.SelectDiscoveredServer(...)`, `UpdateManualHostUrl(...)`, and `IsSelectedDiscoveredServer(...)` to add startup restore logic without reworking persistence again.
 ---

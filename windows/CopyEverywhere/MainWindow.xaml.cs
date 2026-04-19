@@ -121,6 +121,12 @@ public partial class MainWindow : Window
         _configStore.AccessToken = AccessTokenBox.Password;
     }
 
+    private void HostUrlTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        _configStore.UpdateManualHostUrl(HostUrlTextBox.Text);
+    }
+
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
     {
         if (string.IsNullOrWhiteSpace(_configStore.HostUrl))
@@ -2048,7 +2054,7 @@ public partial class MainWindow : Window
 
         foreach (var server in servers)
         {
-            var isSelected = _configStore.HostUrl.TrimEnd('/') == $"http://{server.Host}:{server.Port}";
+            var isSelected = _configStore.IsSelectedDiscoveredServer(server);
 
             var nameText = new TextBlock
             {
@@ -2115,8 +2121,7 @@ public partial class MainWindow : Window
 
     private void SelectDiscoveredServer(DiscoveredServer server)
     {
-        _configStore.HostUrl = $"http://{server.Host}:{server.Port}";
-        _configStore.ServerAuthRequired = server.AuthRequired;
+        _configStore.SelectDiscoveredServer(server);
         HostUrlTextBox.Text = _configStore.HostUrl;
         UpdateAccessTokenVisibility();
         OnDiscoveredServersChanged(); // Refresh selection highlight

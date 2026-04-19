@@ -110,6 +110,7 @@
             <TextBox x:Name="HostUrlTextBox"
                      Margin="0,0,0,12"
                      Padding="6,4"
+                     TextChanged="HostUrlTextBox_TextChanged"
                      Text="{Binding HostUrl, UpdateSourceTrigger=PropertyChanged}"/>
 
             <StackPanel x:Name="AccessTokenPanel">
