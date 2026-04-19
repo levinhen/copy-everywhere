@@ -355,6 +355,12 @@ public class ConfigStore : INotifyPropertyChanged
         }
     }
 
+    public void UseManualLanFallback()
+    {
+        SelectedLanServer = null;
+        LanEndpointSource = LanEndpointSource.ManualFallback;
+    }
+
     public bool IsSelectedDiscoveredServer(DiscoveredServer server)
     {
         if (!string.IsNullOrWhiteSpace(server.ServerId) &&

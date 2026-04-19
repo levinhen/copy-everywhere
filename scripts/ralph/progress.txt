@@ -9,6 +9,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - On macOS LAN config UI, render source badges and discovery guidance from `lanEndpointSource`, `selectedLanServer`, and the Bonjour result count instead of inferring state from `hostURL` alone; that keeps multi-server waiting and manual fallback visible.
 - On Windows LAN config, route discovered selection, manual Host URL edits, and save-time normalization through `ConfigStore` helpers so `SelectedLanServer.ServerId` stays authoritative while `HostUrl` remains only the last-known/manual endpoint.
 - On Windows startup restore, keep mDNS browsing running from launch but apply discovery-driven HostUrl rewrites only while `TransferMode == LanServer`; restore by `SelectedLanServer.ServerId`, and only auto-pick when discovery finds exactly one server and there is no saved/manual URL fallback.
+- On Windows LAN config screens, derive discovery guidance from `LanEndpointSource`, `SelectedLanServer`, and current Bonjour result count, and expose an explicit manual-fallback action instead of making users edit `HostUrl` just to clear discovered selection state.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -105,4 +106,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - Auto-discovery must not treat a saved manual Host URL as fresh state; otherwise a single discovered server would overwrite the intended fallback path during startup scans.
   - Useful context
   - `ApplyDiscoveredLanServer(...)` now persists discovery-driven HostUrl changes immediately, so later Windows LAN UI stories can read source/state directly without re-implementing restore-side saving.
+---
+## 2026-04-19 11:57 CST - US-093C
+- Surfaced Windows LAN discovery state in the settings UI with a source summary card, passive no-server and multi-server guidance, richer discovered-server metadata, and an explicit manual fallback button that clears discovered selection state without forcing a URL edit.
+- Files changed: `windows/CopyEverywhere/Services/ConfigStore.cs`, `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `git diff --check` passed; `dotnet build` could not run on this machine because `dotnet` is not installed and Windows-host verification is unavailable here.
+- Learnings for future iterations:
+  - Patterns discovered
+  - Windows LAN config UI stays consistent when both the selection list and the status/guidance card read directly from `ConfigStore` instead of inferring state from the Host URL textbox.
+  - Gotchas encountered
+  - Explicit manual fallback needs its own helper because users may want to keep the same URL text while discarding the discovered `server_id` binding.
+  - Useful context
+  - `UseManualLanFallback()` now gives later fallback/reliability stories a single UI-safe hook for clearing discovered selection metadata before save.
 ---

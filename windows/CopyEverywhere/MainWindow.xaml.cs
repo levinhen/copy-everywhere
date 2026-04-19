@@ -104,6 +104,7 @@ public partial class MainWindow : Window
         UpdateViewMode();
         UpdateDeviceInfoDisplay();
         UpdateAccessTokenVisibility();
+        UpdateLanDiscoveryState(_mdnsService.DiscoveredServers);
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         InitializeTransferModeUI();
@@ -125,6 +126,14 @@ public partial class MainWindow : Window
     {
         if (!IsLoaded) return;
         _configStore.UpdateManualHostUrl(HostUrlTextBox.Text);
+        UpdateLanDiscoveryState(_mdnsService.DiscoveredServers);
+    }
+
+    private void UseManualFallbackButton_Click(object sender, RoutedEventArgs e)
+    {
+        _configStore.UseManualLanFallback();
+        UpdateLanDiscoveryState(_mdnsService.DiscoveredServers);
+        OnDiscoveredServersChanged();
     }
 
     private async void SaveButton_Click(object sender, RoutedEventArgs e)
@@ -2041,6 +2050,7 @@ public partial class MainWindow : Window
 
         var servers = _mdnsService.DiscoveredServers;
         TryApplyLanDiscoverySelection(servers);
+        UpdateLanDiscoveryState(servers);
         if (servers.Count == 0)
         {
             DiscoveredServersPanel.Children.Add(new TextBlock
@@ -2070,6 +2080,10 @@ public partial class MainWindow : Window
                 detailParts.Add($"v{server.Version}");
             if (server.AuthRequired)
                 detailParts.Add("auth required");
+            if (!string.IsNullOrWhiteSpace(server.ServerId))
+                detailParts.Add($"server_id {server.ServerId}");
+            if (isSelected)
+                detailParts.Add("selected");
 
             var detailText = new TextBlock
             {
@@ -2197,7 +2211,69 @@ public partial class MainWindow : Window
         _configStore.SelectDiscoveredServer(server);
         HostUrlTextBox.Text = _configStore.HostUrl;
         UpdateAccessTokenVisibility();
+        UpdateLanDiscoveryState(_mdnsService.DiscoveredServers);
         OnDiscoveredServersChanged(); // Refresh selection highlight
+    }
+
+    private void UpdateLanDiscoveryState(IReadOnlyList<DiscoveredServer> servers)
+    {
+        var hasSelection = _configStore.SelectedLanServer != null;
+        var selectedServer = _configStore.SelectedLanServer;
+        var selectedLabel = selectedServer == null
+            ? ""
+            : $"{selectedServer.Name} ({selectedServer.Host}:{selectedServer.Port})";
+
+        switch (_configStore.LanEndpointSource)
+        {
+            case LanEndpointSource.AutoDiscovered:
+                LanSourceValueText.Text = "Auto-discovered LAN server";
+                LanSourceDetailText.Text = hasSelection
+                    ? $"Using the only discovered server automatically: {selectedLabel}."
+                    : "Using the only discovered server automatically.";
+                break;
+            case LanEndpointSource.RestoredSelection:
+                LanSourceValueText.Text = "Restored saved LAN selection";
+                LanSourceDetailText.Text = hasSelection
+                    ? $"Recovered saved server_id {(selectedServer?.ServerId ?? "unknown")} at {selectedLabel}."
+                    : "Recovered a saved server selection from discovery.";
+                break;
+            default:
+                LanSourceValueText.Text = "Manual URL fallback";
+                LanSourceDetailText.Text = string.IsNullOrWhiteSpace(_configStore.HostUrl)
+                    ? "No LAN server is selected yet. Enter a manual URL or choose a discovered server."
+                    : $"Using manual URL {_configStore.HostUrl} until discovery restores a selected server.";
+                break;
+        }
+
+        if (_configStore.TransferMode != TransferMode.LanServer)
+        {
+            LanDiscoveryGuidanceText.Text = "LAN discovery is idle while Bluetooth mode is active.";
+            return;
+        }
+
+        if (servers.Count == 0)
+        {
+            LanDiscoveryGuidanceText.Text = string.IsNullOrWhiteSpace(_configStore.HostUrl)
+                ? "Scanning for servers on LAN. You can also enter a manual URL now."
+                : "No discovered server is available yet. The saved manual URL stays usable as fallback.";
+            return;
+        }
+
+        if (servers.Count == 1 && !hasSelection && string.IsNullOrWhiteSpace(_configStore.HostUrl))
+        {
+            LanDiscoveryGuidanceText.Text = "Exactly one server is visible, so Windows will auto-select it.";
+            return;
+        }
+
+        if (servers.Count > 1 && !hasSelection)
+        {
+            LanDiscoveryGuidanceText.Text = "Multiple servers are visible. Choose one here or keep using a manual URL; Windows will not auto-pick.";
+            return;
+        }
+
+        LanDiscoveryGuidanceText.Text = hasSelection
+            ? "Click a discovered server to switch selection, or use the manual button to keep the typed URL as fallback."
+            : "Discovered servers are available. Choose one here or keep using the manual URL.";
     }
 
     private void UpdateAccessTokenVisibility()

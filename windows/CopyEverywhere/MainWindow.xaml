@@ -93,6 +93,47 @@
 
             <!-- Discovered Servers -->
             <TextBlock Text="Discovered Servers" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
+            <Border x:Name="LanDiscoveryStateBorder"
+                    BorderBrush="#BFDBFE"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Background="#EFF6FF"
+                    Padding="10,8"
+                    Margin="0,0,0,8">
+                <StackPanel>
+                    <TextBlock x:Name="LanSourceLabel"
+                               Text="Current LAN source"
+                               FontSize="11"
+                               Foreground="#1D4ED8"
+                               FontWeight="SemiBold"/>
+                    <TextBlock x:Name="LanSourceValueText"
+                               Text="Waiting for LAN discovery"
+                               FontSize="12"
+                               FontWeight="SemiBold"
+                               Margin="0,2,0,0"/>
+                    <TextBlock x:Name="LanSourceDetailText"
+                               Text="The app will keep any saved manual URL until discovery restores a selected server."
+                               FontSize="11"
+                               Foreground="#475569"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,0"/>
+                </StackPanel>
+            </Border>
+
+            <Border x:Name="LanDiscoveryGuidanceBorder"
+                    BorderBrush="#E5E7EB"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Background="#F8FAFC"
+                    Padding="10,8"
+                    Margin="0,0,0,8">
+                <TextBlock x:Name="LanDiscoveryGuidanceText"
+                           Text="Scanning for servers on LAN..."
+                           FontSize="11"
+                           Foreground="#475569"
+                           TextWrapping="Wrap"/>
+            </Border>
+
             <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
                     MinHeight="40" MaxHeight="160">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -107,11 +148,18 @@
             </Border>
 
             <TextBlock Text="Host URL (manual)" Style="{StaticResource FieldLabel}"/>
-            <TextBox x:Name="HostUrlTextBox"
-                     Margin="0,0,0,12"
-                     Padding="6,4"
-                     TextChanged="HostUrlTextBox_TextChanged"
-                     Text="{Binding HostUrl, UpdateSourceTrigger=PropertyChanged}"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                <TextBox x:Name="HostUrlTextBox"
+                         Width="250"
+                         Padding="6,4"
+                         TextChanged="HostUrlTextBox_TextChanged"
+                         Text="{Binding HostUrl, UpdateSourceTrigger=PropertyChanged}"/>
+                <Button x:Name="UseManualFallbackButton"
+                        Content="Use Manual URL"
+                        Width="120" Height="30"
+                        Margin="8,0,0,0"
+                        Click="UseManualFallbackButton_Click"/>
+            </StackPanel>
 
             <StackPanel x:Name="AccessTokenPanel">
                 <TextBlock x:Name="AccessTokenLabel" Text="Access Token" Style="{StaticResource FieldLabel}"/>
