@@ -8,6 +8,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - On macOS LAN config, discovered-server persistence must key selection/highlighting off `server_id` when available, and manual Host URL edits must clear stale discovered selection metadata back to `manual_fallback`.
 - On macOS LAN config UI, render source badges and discovery guidance from `lanEndpointSource`, `selectedLanServer`, and the Bonjour result count instead of inferring state from `hostURL` alone; that keeps multi-server waiting and manual fallback visible.
 - On Windows LAN config, route discovered selection, manual Host URL edits, and save-time normalization through `ConfigStore` helpers so `SelectedLanServer.ServerId` stays authoritative while `HostUrl` remains only the last-known/manual endpoint.
+- On Windows startup restore, keep mDNS browsing running from launch but apply discovery-driven HostUrl rewrites only while `TransferMode == LanServer`; restore by `SelectedLanServer.ServerId`, and only auto-pick when discovery finds exactly one server and there is no saved/manual URL fallback.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -92,4 +93,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - Persisting `LanEndpointSource` with enum `.ToString()` drifts from the shared contract values, so the Windows store now needs a compatibility parser that accepts both old enum names and new snake_case strings.
   - Useful context
   - `US-093B` can build on `ConfigStore.SelectDiscoveredServer(...)`, `UpdateManualHostUrl(...)`, and `IsSelectedDiscoveredServer(...)` to add startup restore logic without reworking persistence again.
+---
+## 2026-04-19 11:54 CST - US-093B
+- Implemented Windows LAN startup restore so discovery results now reapply a persisted `server_id` selection after DHCP host/port changes, auto-select a unique fresh discovery, and re-run that logic when switching back into LAN mode.
+- Files changed: `windows/CopyEverywhere/MainWindow.xaml.cs`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `git diff --check` passed; `dotnet build` could not run on this machine because `dotnet` is not installed and Windows-host verification is unavailable here.
+- Learnings for future iterations:
+  - Patterns discovered
+  - Windows startup LAN recovery should live in the discovery event path plus LAN-mode entry path, so persisted `server_id` matches and unique-server auto-selection both happen before the settings UI is opened.
+  - Gotchas encountered
+  - Auto-discovery must not treat a saved manual Host URL as fresh state; otherwise a single discovered server would overwrite the intended fallback path during startup scans.
+  - Useful context
+  - `ApplyDiscoveredLanServer(...)` now persists discovery-driven HostUrl changes immediately, so later Windows LAN UI stories can read source/state directly without re-implementing restore-side saving.
 ---

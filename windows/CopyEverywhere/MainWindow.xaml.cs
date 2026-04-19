@@ -1300,6 +1300,7 @@ public partial class MainWindow : Window
         {
             // Stop Bluetooth, restart LAN services
             _bluetoothService.StopServer();
+            TryApplyLanDiscoverySelection(_mdnsService.DiscoveredServers);
             if (_configStore.IsConfigured)
             {
                 StartSSE();
@@ -2039,6 +2040,7 @@ public partial class MainWindow : Window
         DiscoveredServersPanel.Children.Clear();
 
         var servers = _mdnsService.DiscoveredServers;
+        TryApplyLanDiscoverySelection(servers);
         if (servers.Count == 0)
         {
             DiscoveredServersPanel.Children.Add(new TextBlock
@@ -2117,6 +2119,77 @@ public partial class MainWindow : Window
 
             DiscoveredServersPanel.Children.Add(border);
         }
+    }
+
+    private void TryApplyLanDiscoverySelection(IReadOnlyList<DiscoveredServer> servers)
+    {
+        if (_configStore.TransferMode != TransferMode.LanServer || servers.Count == 0)
+        {
+            return;
+        }
+
+        var restoredServer = FindRestoredLanServer(servers);
+        if (restoredServer != null)
+        {
+            ApplyDiscoveredLanServer(restoredServer, LanEndpointSource.RestoredSelection, "Restored LAN server selection");
+            return;
+        }
+
+        if (!HasFreshLanSelectionState() || servers.Count != 1)
+        {
+            return;
+        }
+
+        ApplyDiscoveredLanServer(servers[0], LanEndpointSource.AutoDiscovered, "Auto-selected discovered LAN server");
+    }
+
+    private DiscoveredServer? FindRestoredLanServer(IReadOnlyList<DiscoveredServer> servers)
+    {
+        var selectedServerId = _configStore.SelectedLanServer?.ServerId;
+        if (string.IsNullOrWhiteSpace(selectedServerId))
+        {
+            return null;
+        }
+
+        return servers.FirstOrDefault(server =>
+            !string.IsNullOrWhiteSpace(server.ServerId) &&
+            string.Equals(server.ServerId, selectedServerId, StringComparison.Ordinal));
+    }
+
+    private bool HasFreshLanSelectionState() =>
+        _configStore.SelectedLanServer == null &&
+        string.IsNullOrWhiteSpace(_configStore.HostUrl);
+
+    private void ApplyDiscoveredLanServer(DiscoveredServer server, LanEndpointSource source, string logMessage)
+    {
+        var sourceChanged = _configStore.LanEndpointSource != source;
+        var hostChanged = !string.Equals(
+            _configStore.HostUrl,
+            $"http://{server.Host}:{server.Port}",
+            StringComparison.OrdinalIgnoreCase);
+        var authChanged = _configStore.ServerAuthRequired != server.AuthRequired;
+        var selectedServerChanged = !string.Equals(
+            _configStore.SelectedLanServer?.ServerId,
+            server.ServerId,
+            StringComparison.Ordinal) ||
+            !string.Equals(_configStore.SelectedLanServer?.Host, server.Host, StringComparison.OrdinalIgnoreCase) ||
+            _configStore.SelectedLanServer?.Port != server.Port;
+
+        if (!sourceChanged && !hostChanged && !authChanged && !selectedServerChanged)
+        {
+            return;
+        }
+
+        _configStore.SelectDiscoveredServer(server, source);
+        _configStore.Save();
+
+        if (!string.Equals(HostUrlTextBox.Text, _configStore.HostUrl, StringComparison.Ordinal))
+        {
+            HostUrlTextBox.Text = _configStore.HostUrl;
+        }
+
+        UpdateAccessTokenVisibility();
+        Debug.WriteLine($"[LAN Discovery] {logMessage}: {server.Name} ({server.ServerId ?? "no-server-id"}) -> {_configStore.HostUrl}");
     }
 
     private void SelectDiscoveredServer(DiscoveredServer server)
