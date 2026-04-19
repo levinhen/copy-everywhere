@@ -6,6 +6,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - Keep mDNS TXT metadata in lockstep with `/health` identity fields: when discovery clients need durable server identity, advertise the same `server_id` value in both places and cover it with a real `mdns.Query` test.
 - For cross-platform LAN discovery iterations, write the behavior contract once in `tasks/lan-discovery-selection-contract.md` and mirror it in typed client models (`server_id` + `auto_discovered` / `restored_selection` / `manual_fallback`) before implementing per-platform restore logic.
 - On macOS LAN config, discovered-server persistence must key selection/highlighting off `server_id` when available, and manual Host URL edits must clear stale discovered selection metadata back to `manual_fallback`.
+- On macOS LAN config UI, render source badges and discovery guidance from `lanEndpointSource`, `selectedLanServer`, and the Bonjour result count instead of inferring state from `hostURL` alone; that keeps multi-server waiting and manual fallback visible.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -66,4 +67,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - Restoring a saved `server_id` needs to preserve the manual fallback URL state when discovery does not find a match yet; clearing the saved selection would break later recovery.
   - Useful context
   - The same `applyDiscoveredLanServer` path now covers launch-time auto-select, persisted restore, and SSE restart after host changes, so `US-092C` can focus on surfacing that state in UI rather than reworking the restore logic.
+---
+## 2026-04-19 11:46 CST - US-092C
+- Surfaced macOS LAN discovery state in Config UI with a dedicated source card, passive multi-server/no-server guidance, richer discovered-server metadata, and an explicit switch back to manual Host URL fallback.
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - LAN discovery UI stays coherent when source-of-truth copy and badges derive from `lanEndpointSource` and `selectedLanServer`, while the discovered-server list separately explains `server_id`, auth, and passive waiting states.
+  - Gotchas encountered
+  - `hostURL` can still point at a discovered endpoint after the user explicitly switches to manual mode, so UI state must not infer the active source from the URL text field alone.
+  - Useful context
+  - `useManualLanFallback()` now gives later stories a small explicit hook for UI-driven fallback toggles without reworking the launch-time discovery restore path in `ConfigStore`.
 ---

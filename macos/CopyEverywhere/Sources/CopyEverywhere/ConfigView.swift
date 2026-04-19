@@ -38,12 +38,29 @@ struct ConfigView: View {
 
     @ViewBuilder
     private var lanServerSection: some View {
+        lanEndpointSourceSection
+
         // Discovered Servers section
         discoveredServersSection
 
         VStack(alignment: .leading, spacing: 8) {
-            Text("Host URL")
-                .font(.subheadline)
+            HStack {
+                Text("Host URL")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                if configStore.lanEndpointSource != .manualFallback {
+                    Button("Use Manual URL") {
+                        configStore.useManualLanFallback()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            Text(configStore.lanEndpointSource == .manualFallback
+                 ? "Enter or keep a manual URL here when discovery is unavailable."
+                 : "Editing this field also switches the active LAN endpoint to manual fallback.")
+                .font(.caption)
                 .foregroundColor(.secondary)
             TextField(
                 "https://your-server.com:8080",
@@ -169,6 +186,58 @@ struct ConfigView: View {
     }
 
     @ViewBuilder
+    private var lanEndpointSourceSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("LAN Endpoint Source")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: lanEndpointSourceIcon)
+                    .foregroundColor(lanEndpointSourceColor)
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(configStore.lanEndpointSourceTitle)
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                        Text(configStore.lanEndpointSource.rawValue)
+                            .font(.caption2)
+                            .foregroundColor(lanEndpointSourceColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(lanEndpointSourceColor.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+
+                    Text(configStore.lanEndpointSourceDetail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let selectedServer = configStore.selectedLanServer {
+                        Text("Selected server: \(selectedServer.name) • \(selectedServer.host):\(selectedServer.port) • ID \(selectedServer.serverID)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if !configStore.hostURL.isEmpty {
+                        Text("Manual endpoint: \(configStore.hostURL)")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer()
+            }
+        }
+        .padding(10)
+        .background(lanEndpointSourceColor.opacity(0.1))
+        .cornerRadius(8)
+    }
+
+    @ViewBuilder
     private var receiverStatusSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("This Device Receiver")
@@ -272,6 +341,28 @@ struct ConfigView: View {
             return .orange
         case .offline:
             return .gray
+        }
+    }
+
+    private var lanEndpointSourceColor: Color {
+        switch configStore.lanEndpointSource {
+        case .autoDiscovered:
+            return .green
+        case .restoredSelection:
+            return .accentColor
+        case .manualFallback:
+            return .orange
+        }
+    }
+
+    private var lanEndpointSourceIcon: String {
+        switch configStore.lanEndpointSource {
+        case .autoDiscovered:
+            return "sparkles"
+        case .restoredSelection:
+            return "arrow.clockwise.circle.fill"
+        case .manualFallback:
+            return "pencil.circle.fill"
         }
     }
 
@@ -474,6 +565,20 @@ struct ConfigView: View {
                 }
             }
 
+            if let guidance = configStore.lanDiscoveryGuidance {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: servers.count > 1 ? "info.circle.fill" : "antenna.radiowaves.left.and.right")
+                        .foregroundColor(.secondary)
+                    Text(guidance)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .background(Color.secondary.opacity(0.08))
+                .cornerRadius(8)
+            }
+
             if servers.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
@@ -498,6 +603,16 @@ struct ConfigView: View {
                                     Text("\(server.host):\(server.port)")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                    HStack(spacing: 6) {
+                                        if let serverID = server.serverID {
+                                            Text("ID \(serverID)")
+                                        } else {
+                                            Text("ID unavailable")
+                                        }
+                                        Text(server.authRequired ? "Auth required" : "No auth")
+                                    }
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
                                 }
                                 Spacer()
                                 if !server.version.isEmpty {

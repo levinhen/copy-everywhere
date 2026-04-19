@@ -400,6 +400,11 @@ final class ConfigStore: ObservableObject {
         lanEndpointSource = .restoredSelection
     }
 
+    func useManualLanFallback() {
+        selectedLanServer = nil
+        lanEndpointSource = .manualFallback
+    }
+
     func updateManualHostURL(_ value: String) {
         hostURL = value
 
@@ -422,6 +427,53 @@ final class ConfigStore: ObservableObject {
             return serverID == selectedServerID
         }
         return normalizedHostURL(hostURL) == normalizedHostURL(server.endpointURLString)
+    }
+
+    var lanEndpointSourceTitle: String {
+        switch lanEndpointSource {
+        case .autoDiscovered:
+            return "Auto-discovered server"
+        case .restoredSelection:
+            return selectedLanServer == nil ? "Discovered server selected" : "Restored server selection"
+        case .manualFallback:
+            return "Manual URL fallback"
+        }
+    }
+
+    var lanEndpointSourceDetail: String {
+        switch lanEndpointSource {
+        case .autoDiscovered:
+            if let selectedLanServer {
+                return "Exactly one LAN server was found, so CopyEverywhere auto-selected \(selectedLanServer.name)."
+            }
+            return "Exactly one LAN server was found, so CopyEverywhere auto-selected it."
+        case .restoredSelection:
+            if let selectedLanServer {
+                return "CopyEverywhere is using the discovered server \(selectedLanServer.name) by stable server ID instead of a stale IP."
+            }
+            return "CopyEverywhere is using a discovered LAN server selected by stable server ID."
+        case .manualFallback:
+            let trimmedHost = normalizedHostURL(hostURL)
+            if trimmedHost.isEmpty {
+                return "No server is selected yet. Enter a Host URL below or choose a discovered server."
+            }
+            return "The current LAN endpoint comes from the manual Host URL field, so discovery failures stay non-fatal."
+        }
+    }
+
+    var lanDiscoveryGuidance: String? {
+        let discoveredServers = bonjourBrowser.discoveredServers
+        if discoveredServers.count > 1,
+           selectedLanServer == nil,
+           normalizedHostURL(hostURL).isEmpty {
+            return "Multiple LAN servers were found. Choose one below or keep using a manual URL fallback."
+        }
+
+        if discoveredServers.isEmpty, !bonjourBrowser.isSearching {
+            return "No LAN servers are currently visible. A saved manual URL can still be used below."
+        }
+
+        return nil
     }
 
     // MARK: - Bluetooth Pairing & Connection
