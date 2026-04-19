@@ -22,6 +22,14 @@ struct StoredLanServerSelection: Codable, Equatable {
     let host: String
     let port: UInt16
     let source: LanEndpointSource
+
+    init(serverID: String, name: String, host: String, port: UInt16, source: LanEndpointSource) {
+        self.serverID = serverID
+        self.name = name
+        self.host = host
+        self.port = port
+        self.source = source
+    }
 }
 
 struct DiscoveredServer: Identifiable, Equatable, Hashable {
@@ -32,6 +40,16 @@ struct DiscoveredServer: Identifiable, Equatable, Hashable {
     let port: UInt16
     let authRequired: Bool
     let version: String
+
+    init(id: String, serverID: String?, name: String, host: String, port: UInt16, authRequired: Bool, version: String) {
+        self.id = id
+        self.serverID = serverID
+        self.name = name
+        self.host = host
+        self.port = port
+        self.authRequired = authRequired
+        self.version = version
+    }
 
     static func == (lhs: DiscoveredServer, rhs: DiscoveredServer) -> Bool {
         lhs.id == rhs.id
@@ -51,6 +69,8 @@ final class BonjourBrowser: ObservableObject {
     @Published var discoveredServers: [DiscoveredServer] = []
     @Published var isSearching: Bool = false
     @Published var discoveryState: LanDiscoveryState = .idle
+
+    var onServerResolved: ((DiscoveredServer) -> Void)?
 
     private var browser: NWBrowser?
     private var connections: [NWConnection] = []
@@ -174,6 +194,7 @@ final class BonjourBrowser: ObservableObject {
                         } else {
                             self.discoveredServers.append(server)
                         }
+                        self.onServerResolved?(server)
                     }
                     connection.cancel()
                     self.connections.removeAll { $0 === connection }

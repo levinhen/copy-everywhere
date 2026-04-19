@@ -341,6 +341,11 @@ final class ConfigStore: ObservableObject {
         deviceName = UserDefaults.standard.string(forKey: "com.copyeverywhere.deviceName") ?? ""
         loadPairedDevices()
         loadTransferMode()
+        bonjourBrowser.onServerResolved = { [weak self] server in
+            self?.appendLocalServerLog(
+                "LAN discovery: resolved server_id=\(server.serverID ?? "unknown") name=\(server.name) -> \(server.host):\(server.port)"
+            )
+        }
         observeLanDiscovery()
         if transferMode == .lanServer {
             startLanDiscoveryIfNeeded()
@@ -742,6 +747,7 @@ final class ConfigStore: ObservableObject {
     }
 
     private func startLanDiscoveryIfNeeded() {
+        appendLocalServerLog("LAN discovery: starting browse for _copyeverywhere._tcp")
         bonjourBrowser.startBrowsing()
         handleLanDiscoveryResults(bonjourBrowser.discoveredServers)
     }
@@ -749,39 +755,36 @@ final class ConfigStore: ObservableObject {
     private func handleLanDiscoveryResults(_ servers: [DiscoveredServer]) {
         guard transferMode == .lanServer else { return }
 
-        if restorePersistedLanSelection(from: servers) {
-            return
-        }
-
-        if selectedLanServer != nil {
-            if lanEndpointSource != .manualFallback {
-                if !manualFallbackHostURL.isEmpty {
-                    hostURL = manualFallbackHostURL
-                }
-                lanEndpointSource = .manualFallback
-                persistLanSelectionState()
-                appendLocalServerLog("LAN discovery: selected server not found; keeping manual fallback URL")
+        switch LanDiscoveryDecision.decide(
+            servers: servers,
+            selectedServer: selectedLanServer,
+            source: lanEndpointSource,
+            currentHostURL: hostURL
+        ) {
+        case .restore(let server):
+            applyDiscoveredLanServer(
+                server,
+                source: .restoredSelection,
+                reason: "restored selection for server_id=\(server.serverID ?? "unknown")"
+            )
+        case .preserveManualFallback:
+            if !manualFallbackHostURL.isEmpty {
+                hostURL = manualFallbackHostURL
             }
-            return
-        }
-
-        let trimmedHostURL = normalizedHostURL(hostURL)
-        guard trimmedHostURL.isEmpty else { return }
-
-        if servers.count == 1, let server = servers.first {
-            applyDiscoveredLanServer(server, source: .autoDiscovered, reason: "unique discovered server auto-selected")
-        } else if servers.count > 1 {
+            lanEndpointSource = .manualFallback
+            persistLanSelectionState()
+            appendLocalServerLog("LAN discovery: selected server not found; keeping manual fallback URL")
+        case .autoSelect(let server):
+            applyDiscoveredLanServer(
+                server,
+                source: .autoDiscovered,
+                reason: "unique discovered server auto-selected for server_id=\(server.serverID ?? "unknown")"
+            )
+        case .waitForSelection:
             appendLocalServerLog("LAN discovery: multiple servers found; waiting for explicit selection")
+        case .none:
+            break
         }
-    }
-
-    @discardableResult
-    private func restorePersistedLanSelection(from servers: [DiscoveredServer]) -> Bool {
-        guard let storedSelection = selectedLanServer else { return false }
-        guard let server = servers.first(where: { $0.serverID == storedSelection.serverID }) else { return false }
-
-        applyDiscoveredLanServer(server, source: .restoredSelection, reason: "persisted server restored from discovery")
-        return true
     }
 
     private func applyDiscoveredLanServer(
@@ -816,7 +819,9 @@ final class ConfigStore: ObservableObject {
         let shouldReconnect = previousHostURL != nextHostURL || previousSource != source || selectionChanged
         guard shouldReconnect else { return }
 
-        appendLocalServerLog("LAN discovery: \(reason) -> \(server.host):\(server.port)")
+        appendLocalServerLog(
+            "LAN discovery: \(reason) -> server_id=\(server.serverID ?? "unknown") \(server.host):\(server.port)"
+        )
         Task {
             await registerDevice()
             restartSSEConnection(reason: reason)

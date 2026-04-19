@@ -2153,6 +2153,7 @@ public partial class MainWindow : Window
         var restoredServer = FindRestoredLanServer(servers);
         if (restoredServer != null)
         {
+            Debug.WriteLine($"[LAN Discovery] Restored selection for server_id={restoredServer.ServerId ?? "unknown"}");
             ApplyDiscoveredLanServer(restoredServer, LanEndpointSource.RestoredSelection, "Restored LAN server selection");
             return;
         }
@@ -2172,9 +2173,14 @@ public partial class MainWindow : Window
 
         if (!HasFreshLanSelectionState() || servers.Count != 1)
         {
+            if (servers.Count > 1)
+            {
+                Debug.WriteLine("[LAN Discovery] Multiple servers found; waiting for explicit selection");
+            }
             return;
         }
 
+        Debug.WriteLine($"[LAN Discovery] Auto-selected unique server_id={servers[0].ServerId ?? "unknown"}");
         ApplyDiscoveredLanServer(servers[0], LanEndpointSource.AutoDiscovered, "Auto-selected discovered LAN server");
     }
 

@@ -30,7 +30,9 @@ import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.DiscoveredServer
+import com.copyeverywhere.app.data.LanDiscoveryDecision
 import com.copyeverywhere.app.data.LanEndpointSource
+import com.copyeverywhere.app.data.LanDiscoverySelector
 import com.copyeverywhere.app.data.MdnsDiscoveryService
 import com.copyeverywhere.app.data.SseClient
 import com.copyeverywhere.app.data.TransferMode
@@ -291,6 +293,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     }
 
     private fun startLanDiscovery() {
+        Log.d(TAG, "LAN discovery start requested")
         if (lanDiscoveryJob == null) {
             lanDiscoveryJob = scope.launch {
                 launch {
@@ -326,27 +329,39 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     private suspend fun handleDiscoveredServers(servers: List<DiscoveredServer>) {
         if (configStore.transferMode.first() != TransferMode.LanServer) return
 
-        val selectedServer = configStore.selectedLanServer.first()
-        if (selectedServer != null) {
-            val restoredServer = servers.firstOrNull { discovered ->
-                !discovered.serverId.isNullOrBlank() && discovered.serverId == selectedServer.serverId
+        when (val decision = LanDiscoverySelector.decide(
+            servers = servers,
+            selectedServer = configStore.selectedLanServer.first(),
+            source = configStore.lanEndpointSource.first(),
+            currentHostUrl = configStore.hostUrl.first()
+        )) {
+            is LanDiscoveryDecision.Restore -> {
+                Log.d(
+                    TAG,
+                    "LAN discovery restored selection for serverId=${decision.server.serverId ?: "unknown"}"
+                )
+                applyDiscoveredLanServer(decision.server, LanEndpointSource.RestoredSelection)
             }
-            if (restoredServer == null) {
+            is LanDiscoveryDecision.PreserveManualFallback -> {
+                val selectedServer = configStore.selectedLanServer.first()
                 val restoredManualFallback = configStore.restoreManualFallbackAfterDiscoveryMiss()
                 Log.d(
                     TAG,
-                    "LAN discovery miss for selected serverId=${selectedServer.serverId}; " +
+                    "LAN discovery miss for selected serverId=${selectedServer?.serverId ?: "unknown"}; " +
                         "manualFallbackRestored=$restoredManualFallback"
                 )
-                return
             }
-            applyDiscoveredLanServer(restoredServer, LanEndpointSource.RestoredSelection)
-            return
-        }
-
-        val currentHostUrl = configStore.hostUrl.first()
-        if (servers.size == 1 && currentHostUrl.isBlank()) {
-            applyDiscoveredLanServer(servers.first(), LanEndpointSource.AutoDiscovered)
+            is LanDiscoveryDecision.AutoSelect -> {
+                Log.d(
+                    TAG,
+                    "LAN discovery auto-selected unique serverId=${decision.server.serverId ?: "unknown"}"
+                )
+                applyDiscoveredLanServer(decision.server, LanEndpointSource.AutoDiscovered)
+            }
+            LanDiscoveryDecision.WaitForSelection -> {
+                Log.d(TAG, "LAN discovery found multiple servers; waiting for explicit selection")
+            }
+            LanDiscoveryDecision.None -> Unit
         }
     }
 

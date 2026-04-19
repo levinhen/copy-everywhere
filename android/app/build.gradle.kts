@@ -55,4 +55,5 @@ dependencies {
     implementation(libs.gson)
 
     debugImplementation(libs.androidx.ui.tooling)
+    testImplementation(libs.junit)
 }

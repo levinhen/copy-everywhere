@@ -60,6 +60,7 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
     public void StartBrowsing()
     {
         StopBrowsing();
+        System.Diagnostics.Debug.WriteLine("[LAN Discovery] Starting mDNS browse for _copyeverywhere._tcp.local.");
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
         _scanTask = Task.Run(async () => await ScanLoop(ct), ct);
@@ -153,6 +154,8 @@ public class MdnsDiscoveryService : INotifyPropertyChanged, IDisposable
                     AuthRequired = authRequired,
                     Version = version,
                 });
+                System.Diagnostics.Debug.WriteLine(
+                    $"[LAN Discovery] Resolved server_id={serverId ?? "unknown"} name={host.DisplayName} -> http://{ip}:{port}");
             }
         }
 

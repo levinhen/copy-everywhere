@@ -14,6 +14,21 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - On Android LAN startup restore, keep `MdnsDiscoveryService` under `CopyEverywhereService` instead of the Config screen, expose discovered servers through a shared `StateFlow`, restore by `StoredLanServerSelection.serverId`, and only auto-select a lone discovered server when there is no saved selection and no manual Host URL fallback.
 - On Android LAN config UI, drive source cards, manual-fallback actions, passive multi-server guidance, and discovered-server selection badges from `lanEndpointSource`, `selectedLanServer`, and the shared discovery list instead of inferring meaning from the Host URL text field.
 - For DHCP-tolerant LAN fallback, persist the last manual Host URL separately from the active discovered endpoint on every client; when discovery misses a saved `server_id`, restore that manual URL and downgrade the source to `manual_fallback` instead of leaving the stale discovered address active.
+- For LAN discovery diagnostics, log discovery start and resolved `server_id` events in the mDNS/Bonjour layer, but keep auto-select / restore / multi-server-wait / fallback-preserved logs at the selection-decision layer so one log stream explains both discovery inputs and restore outcomes.
+
+## 2026-04-19 12:26 CST - US-096
+- Added DHCP-diagnostics logging across macOS, Windows, and Android LAN discovery flows so clients now emit discovery start, resolved `server_id`, unique auto-select, restored selection, multi-server wait, and manual-fallback preservation events.
+- Added automated regression coverage for the shared restore decisions with Android JVM unit tests plus a macOS smoke script over the production decision helper, and documented a cross-platform manual DHCP verification checklist.
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/BonjourBrowser.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/LanDiscoveryDecision.swift`, `macos/CopyEverywhere/SmokeTests/lan_discovery_decision_smoke.swift`, `windows/CopyEverywhere/Services/MdnsDiscoveryService.cs`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `android/app/src/main/java/com/copyeverywhere/app/data/MdnsDiscoveryService.kt`, `android/app/src/main/java/com/copyeverywhere/app/data/LanDiscoveryDecision.kt`, `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`, `android/app/src/test/java/com/copyeverywhere/app/data/LanDiscoverySelectorTest.kt`, `android/app/build.gradle.kts`, `android/gradle/libs.versions.toml`, `tasks/lan-discovery-dhcp-regression-checklist.md`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed; `swiftc -o /tmp/... Sources/CopyEverywhere/BonjourBrowser.swift Sources/CopyEverywhere/LanDiscoveryDecision.swift SmokeTests/lan_discovery_decision_smoke.swift && /tmp/...` passed; `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/liyunhan/Library/Android/sdk ./gradlew testDebugUnitTest assembleDebug` passed; `git diff --check` passed; `dotnet build` could not run on this machine because the .NET SDK / Windows host is unavailable here.
+- Learnings for future iterations:
+  - Patterns discovered
+  - Keep DHCP-restore branching in a small pure helper per client so the same auto-select / restore / multi-server / manual-fallback cases can be exercised without bringing up the full UI lifecycle.
+  - Gotchas encountered
+  - This macOS Command Line Tools toolchain does not expose `XCTest` or Swift `Testing` modules for this SPM app, so regression coverage here needs a source-level smoke script instead of a normal `swift test` target.
+  - Useful context
+  - Windows discovery diagnostics now live in `Debug.WriteLine`, Android in `Log.d`, and macOS in `appendLocalServerLog`, which makes the new checklist actionable with each platform's existing log viewer.
+---
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.

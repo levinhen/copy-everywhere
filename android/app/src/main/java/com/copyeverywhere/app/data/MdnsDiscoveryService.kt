@@ -3,6 +3,7 @@ package com.copyeverywhere.app.data
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +18,10 @@ data class DiscoveredServer(
 )
 
 class MdnsDiscoveryService(context: Context) {
+    companion object {
+        private const val TAG = "MdnsDiscoveryService"
+        private const val SERVICE_TYPE = "_copyeverywhere._tcp."
+    }
 
     private val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
     private val _servers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
@@ -90,6 +95,11 @@ class MdnsDiscoveryService(context: Context) {
                 version = version
             )
 
+            Log.d(
+                TAG,
+                "Resolved LAN server serverId=${server.serverId ?: "unknown"} " +
+                    "name=${server.name} url=http://${server.host}:${server.port}"
+            )
             _servers.value = _servers.value
                 .filter { it.name != server.name } + server
             _lastError.value = null
@@ -98,6 +108,7 @@ class MdnsDiscoveryService(context: Context) {
 
     fun startDiscovery() {
         if (discoveryActive) return
+        Log.d(TAG, "Starting LAN discovery for $SERVICE_TYPE")
         _servers.value = emptyList()
         pendingResolves.clear()
         _lastError.value = null
@@ -113,9 +124,5 @@ class MdnsDiscoveryService(context: Context) {
         }
         discoveryActive = false
         _isDiscovering.value = false
-    }
-
-    companion object {
-        private const val SERVICE_TYPE = "_copyeverywhere._tcp."
     }
 }
