@@ -502,6 +502,18 @@ public class DeviceInfo
     public string ReceiverStatus { get; set; } = "offline";
 }
 
+public class ServerDevice
+{
+    [JsonPropertyName("device_id")]
+    public string DeviceId { get; set; } = "";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = "";
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "";
+}
+
 public class SSEClipEvent
 {
     [JsonPropertyName("clip_id")]

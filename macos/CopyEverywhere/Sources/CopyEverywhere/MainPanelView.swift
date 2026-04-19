@@ -2,13 +2,30 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct ConnectedDevice: Identifiable, Decodable {
+    let id: String
+    let name: String
+    let platform: String
+
+    enum CodingKeys: String, CodingKey {
+        case id = "device_id"
+        case name
+        case platform
+    }
+}
+
 struct MainPanelView: View {
     @EnvironmentObject var configStore: ConfigStore
+    @EnvironmentObject var serverConfig: ServerConfig
+    @EnvironmentObject var serverProcess: ServerProcess
     @State private var showingConfig = false
     @State private var clipboardText: String? = nil
     @State private var isDragTargeted = false
     @State private var isFullPanelDragTargeted = false
     @State private var queueRefreshTimer: Timer?
+    @State private var showServerLogs = false
+    @State private var connectedDevices: [ConnectedDevice] = []
+    @State private var devicesError: String? = nil
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
@@ -36,6 +53,11 @@ struct MainPanelView: View {
             HStack {
                 Text("CopyEverywhere")
                     .font(.headline)
+                if serverConfig.serverEnabled {
+                    Circle()
+                        .fill(serverStatusColor)
+                        .frame(width: 8, height: 8)
+                }
                 Spacer()
                 Button(action: { showingConfig.toggle() }) {
                     Image(systemName: "gear")
@@ -503,6 +525,12 @@ struct MainPanelView: View {
                 }
             }
 
+            // Embedded server management panel
+            if serverConfig.serverEnabled {
+                Divider()
+                serverManagementSection
+            }
+
             Divider()
 
             Button("Quit") {
@@ -551,6 +579,190 @@ struct MainPanelView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshClipboard()
+        }
+    }
+
+    // MARK: - Server Status
+
+    private var serverStatusColor: Color {
+        if !serverConfig.serverEnabled { return .gray }
+        return serverProcess.isRunning ? .green : .red
+    }
+
+    // MARK: - Server Management Section
+
+    @ViewBuilder
+    private var serverManagementSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Server")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Circle()
+                    .fill(serverStatusColor)
+                    .frame(width: 8, height: 8)
+                Text(serverProcess.isRunning ? "Running" : "Stopped")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            // Start / Stop / Restart buttons
+            HStack(spacing: 8) {
+                if serverProcess.isRunning {
+                    Button("Stop") {
+                        serverProcess.stop()
+                    }
+                    Button("Restart") {
+                        serverProcess.restart()
+                    }
+                } else {
+                    Button("Start") {
+                        serverProcess.start()
+                    }
+                }
+            }
+            .font(.caption)
+
+            // Storage stats
+            HStack(spacing: 4) {
+                Image(systemName: "internaldrive")
+                    .foregroundColor(.secondary)
+                Text(configStore.formatBytes(serverConfig.usedSpaceBytes))
+                    .font(.caption)
+                Text("used")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .onAppear {
+                serverConfig.refreshUsedSpace()
+            }
+
+            Text(serverConfig.storagePath)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            // Connected devices
+            if serverProcess.isRunning {
+                Divider()
+                HStack {
+                    Text("Connected Devices")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button(action: { fetchConnectedDevices() }) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if let error = devicesError {
+                    Text(error)
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                } else if connectedDevices.isEmpty {
+                    Text("No devices connected")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .italic()
+                } else {
+                    ForEach(connectedDevices) { device in
+                        HStack(spacing: 6) {
+                            Image(systemName: devicePlatformIcon(device.platform))
+                                .foregroundColor(.accentColor)
+                                .frame(width: 14)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(device.name)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                Text(device.platform)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            // Log viewer
+            DisclosureGroup(isExpanded: $showServerLogs) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 1) {
+                            ForEach(Array(serverProcess.logLines.enumerated()), id: \.offset) { index, line in
+                                Text(line)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .id(index)
+                            }
+                        }
+                        .padding(4)
+                    }
+                    .frame(maxHeight: 150)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .cornerRadius(4)
+                    .onChange(of: serverProcess.logLines.count) { _ in
+                        if let lastIndex = serverProcess.logLines.indices.last {
+                            proxy.scrollTo(lastIndex, anchor: .bottom)
+                        }
+                    }
+                }
+            } label: {
+                Text("Logs (\(serverProcess.logLines.count))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .onAppear {
+            if serverProcess.isRunning {
+                fetchConnectedDevices()
+            }
+        }
+    }
+
+    private func devicePlatformIcon(_ platform: String) -> String {
+        switch platform {
+        case "macos": return "laptopcomputer"
+        case "windows": return "pc"
+        case "android": return "apps.iphone"
+        case "linux": return "server.rack"
+        default: return "desktopcomputer"
+        }
+    }
+
+    private func fetchConnectedDevices() {
+        guard serverProcess.isRunning else { return }
+        let port = serverConfig.port.isEmpty ? "8080" : serverConfig.port
+        let urlString = "http://localhost:\(port)/api/v1/devices"
+        guard let url = URL(string: urlString) else { return }
+
+        var request = URLRequest(url: url)
+        if serverConfig.authEnabled && !serverConfig.accessToken.isEmpty {
+            request.setValue("Bearer \(serverConfig.accessToken)", forHTTPHeaderField: "Authorization")
+        }
+
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      httpResponse.statusCode == 200 else {
+                    devicesError = "Failed to fetch devices"
+                    return
+                }
+                let decoder = JSONDecoder()
+                decoder.dateDecodingStrategy = .iso8601
+                let devices = try decoder.decode([ConnectedDevice].self, from: data)
+                connectedDevices = devices
+                devicesError = nil
+            } catch {
+                devicesError = "Could not reach server"
+            }
         }
     }
 

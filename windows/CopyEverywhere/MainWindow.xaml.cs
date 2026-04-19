@@ -27,10 +27,14 @@ public partial class MainWindow : Window
     private readonly ApiClient _apiClient;
     private readonly MdnsDiscoveryService _mdnsService;
     private readonly BluetoothService _bluetoothService;
+    private readonly ServerConfig _serverConfig;
+    private readonly ServerProcess _serverProcess;
 
     public ConfigStore ConfigStore => _configStore;
     public ApiClient ApiClient => _apiClient;
     public BluetoothService BluetoothService => _bluetoothService;
+    public ServerConfig ServerConfig => _serverConfig;
+    public ServerProcess ServerProcess => _serverProcess;
     private SendService? _sendService;
     public SendService? SendService
     {
@@ -111,6 +115,8 @@ public partial class MainWindow : Window
         _apiClient = new ApiClient(_configStore);
         _mdnsService = new MdnsDiscoveryService();
         _bluetoothService = new BluetoothService();
+        _serverConfig = new ServerConfig();
+        _serverProcess = new ServerProcess { Config = _serverConfig };
 
         // Wire up Bluetooth events
         _bluetoothService.SessionReady += OnBluetoothSessionReady;
@@ -135,10 +141,17 @@ public partial class MainWindow : Window
         FloatingBallCheckBox.IsChecked = _configStore.ShowFloatingBall;
         RefreshClipboardPreview();
         InitializeTransferModeUI();
+        InitializeServerConfigUI();
 
         // Start mDNS discovery
         _mdnsService.ServersChanged += OnDiscoveredServersChanged;
         _mdnsService.StartBrowsing();
+
+        // Auto-start embedded server if configured
+        if (_serverConfig.ServerEnabled && _serverConfig.AutoStartServer)
+        {
+            SetServerEnabled(true);
+        }
     }
 
     private void AccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
@@ -2413,6 +2426,232 @@ public partial class MainWindow : Window
             AccessTokenLabel.Text = _configStore.ServerAuthRequired == true
                 ? "Access Token (required)"
                 : "Access Token (optional)";
+        }
+    }
+
+    // ── Embedded server toggle ─��──────────────────────────────────────
+
+    public void SetServerEnabled(bool enabled)
+    {
+        _serverConfig.ServerEnabled = enabled;
+        _serverConfig.Save();
+
+        if (enabled)
+        {
+            _serverProcess.Start();
+            AutoConnectToLocalServer();
+        }
+        else
+        {
+            _serverProcess.Stop();
+        }
+
+        UpdateServerManagementPanel();
+    }
+
+    private void AutoConnectToLocalServer()
+    {
+        _configStore.HostUrl = $"http://localhost:{_serverConfig.Port}";
+        if (_serverConfig.AuthEnabled && !string.IsNullOrEmpty(_serverConfig.AccessToken))
+        {
+            _configStore.AccessToken = _serverConfig.AccessToken;
+            AccessTokenBox.Password = _serverConfig.AccessToken;
+        }
+        _configStore.Save();
+        UpdateMainPanelState();
+    }
+
+    // ── Embedded server config UI handlers ──────────────────────────────
+
+    private void InitializeServerConfigUI()
+    {
+        ServerEnabledCheckBox.IsChecked = _serverConfig.ServerEnabled;
+        ServerPortBox.Text = _serverConfig.Port.ToString();
+        ServerBindAddressBox.Text = _serverConfig.BindAddress;
+        ServerStoragePathBox.Text = _serverConfig.StoragePath;
+        ServerTtlBox.Text = _serverConfig.TtlHours.ToString();
+        ServerMaxClipSizeBox.Text = _serverConfig.MaxClipSizeMB.ToString();
+        ServerAuthCheckBox.IsChecked = _serverConfig.AuthEnabled;
+        ServerAccessTokenBox.Password = _serverConfig.AccessToken;
+        ServerAutoStartCheckBox.IsChecked = _serverConfig.AutoStartServer;
+
+        ServerConfigSection.Visibility = _serverConfig.ServerEnabled ? Visibility.Visible : Visibility.Collapsed;
+        ServerTokenPanel.Visibility = _serverConfig.AuthEnabled ? Visibility.Visible : Visibility.Collapsed;
+        UpdateServerManagementPanel();
+    }
+
+    private void ServerEnabledCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        var enabled = ServerEnabledCheckBox.IsChecked == true;
+        ServerConfigSection.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
+        SetServerEnabled(enabled);
+    }
+
+    private void ServerAuthCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        ServerTokenPanel.Visibility = ServerAuthCheckBox.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ServerAccessTokenBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        // No-op — value read on Apply
+    }
+
+    private void ServerStorageBrowseButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Select server storage directory",
+            UseDescriptionForTitle = true,
+        };
+        if (!string.IsNullOrEmpty(ServerStoragePathBox.Text))
+        {
+            dialog.InitialDirectory = ServerStoragePathBox.Text;
+        }
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            ServerStoragePathBox.Text = dialog.SelectedPath;
+        }
+    }
+
+    private async void ServerApplyButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Read values from UI into ServerConfig
+        if (int.TryParse(ServerPortBox.Text, out var port)) _serverConfig.Port = port;
+        _serverConfig.BindAddress = ServerBindAddressBox.Text;
+        _serverConfig.StoragePath = ServerStoragePathBox.Text;
+        if (int.TryParse(ServerTtlBox.Text, out var ttl)) _serverConfig.TtlHours = ttl;
+        if (int.TryParse(ServerMaxClipSizeBox.Text, out var maxSize)) _serverConfig.MaxClipSizeMB = maxSize;
+        _serverConfig.AuthEnabled = ServerAuthCheckBox.IsChecked == true;
+        _serverConfig.AccessToken = ServerAccessTokenBox.Password;
+        _serverConfig.AutoStartServer = ServerAutoStartCheckBox.IsChecked == true;
+        _serverConfig.Save();
+
+        // Restart if running
+        if (_serverProcess.IsRunning)
+        {
+            await _serverProcess.RestartAsync();
+            // Give the server a moment to start before auto-connecting
+            await System.Threading.Tasks.Task.Delay(1000);
+            AutoConnectToLocalServer();
+        }
+
+        ShowStatus("Server configuration saved", isError: false);
+    }
+
+    // ── Server management panel ─────────────────────────────────────────
+
+    private void ServerStartButton_Click(object sender, RoutedEventArgs e)
+    {
+        SetServerEnabled(true);
+        ServerEnabledCheckBox.IsChecked = true;
+        UpdateServerManagementPanel();
+    }
+
+    private void ServerStopButton_Click(object sender, RoutedEventArgs e)
+    {
+        _serverProcess.Stop();
+        UpdateServerManagementPanel();
+    }
+
+    private async void ServerRestartButton_Click(object sender, RoutedEventArgs e)
+    {
+        await _serverProcess.RestartAsync();
+        await System.Threading.Tasks.Task.Delay(1000);
+        AutoConnectToLocalServer();
+        UpdateServerManagementPanel();
+    }
+
+    private void UpdateServerManagementPanel()
+    {
+        if (!_serverConfig.ServerEnabled)
+        {
+            ServerManagementSection.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        ServerManagementSection.Visibility = Visibility.Visible;
+
+        if (_serverProcess.IsRunning)
+        {
+            ServerStatusDot.Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)); // green
+            ServerStatusText.Text = "Running";
+            ServerStartButton.Visibility = Visibility.Collapsed;
+            ServerStopButton.Visibility = Visibility.Visible;
+            ServerRestartButton.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ServerStatusDot.Foreground = new SolidColorBrush(Color.FromRgb(239, 68, 68)); // red
+            ServerStatusText.Text = "Stopped";
+            ServerStartButton.Visibility = Visibility.Visible;
+            ServerStopButton.Visibility = Visibility.Collapsed;
+            ServerRestartButton.Visibility = Visibility.Collapsed;
+        }
+
+        // Storage stats
+        _serverConfig.RefreshUsedSpace();
+        var usedMB = _serverConfig.UsedSpaceBytes / (1024.0 * 1024.0);
+        ServerStorageUsedText.Text = $"Used: {usedMB:F1} MB";
+        ServerStoragePathText.Text = _serverConfig.StoragePath;
+
+        // Log viewer
+        ServerLogText.Text = string.Join("\n", _serverProcess.LogLines);
+        ServerLogScrollViewer.ScrollToEnd();
+
+        // Fetch connected devices
+        _ = LoadServerDevicesAsync();
+    }
+
+    private async System.Threading.Tasks.Task LoadServerDevicesAsync()
+    {
+        if (!_serverProcess.IsRunning) return;
+
+        try
+        {
+            var baseUrl = $"http://localhost:{_serverConfig.Port}";
+            using var client = new System.Net.Http.HttpClient();
+            if (_serverConfig.AuthEnabled && !string.IsNullOrEmpty(_serverConfig.AccessToken))
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _serverConfig.AccessToken);
+            }
+
+            var response = await client.GetAsync($"{baseUrl}/api/v1/devices");
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                var devices = System.Text.Json.JsonSerializer.Deserialize<List<ServerDevice>>(json);
+                ServerDevicesPanel.Children.Clear();
+                if (devices != null && devices.Count > 0)
+                {
+                    foreach (var device in devices)
+                    {
+                        var tb = new TextBlock
+                        {
+                            Text = $"{device.Name} ({device.Platform}) — {device.DeviceId}",
+                            FontSize = 11,
+                            Margin = new Thickness(6, 3, 6, 3),
+                        };
+                        ServerDevicesPanel.Children.Add(tb);
+                    }
+                }
+                else
+                {
+                    ServerDevicesPanel.Children.Add(new TextBlock
+                    {
+                        Text = "No devices connected",
+                        Foreground = Brushes.Gray,
+                        FontSize = 11,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 6, 0, 6),
+                    });
+                }
+            }
+        }
+        catch
+        {
+            // Server might not be ready yet
         }
     }
 

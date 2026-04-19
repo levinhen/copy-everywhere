@@ -277,6 +277,116 @@
                 </StackPanel>
             </StackPanel>
 
+            <!-- Embedded Server Section -->
+            <Separator Margin="0,4,0,16"/>
+            <TextBlock Text="Embedded Server" Style="{StaticResource SectionHeader}"/>
+
+            <CheckBox x:Name="ServerEnabledCheckBox"
+                      Content="Enable embedded server"
+                      Margin="0,0,0,8"
+                      Checked="ServerEnabledCheckBox_Changed"
+                      Unchecked="ServerEnabledCheckBox_Changed"/>
+
+            <StackPanel x:Name="ServerConfigSection" Visibility="Collapsed">
+                <TextBlock Text="Port" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerPortBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <TextBlock Text="Bind Address" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerBindAddressBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <TextBlock Text="Storage Path" Style="{StaticResource FieldLabel}"/>
+                <Grid Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="ServerStoragePathBox" Grid.Column="0" Padding="6,4"/>
+                    <Button x:Name="ServerStorageBrowseButton" Grid.Column="1" Content="Browse"
+                            Width="60" Margin="4,0,0,0" Click="ServerStorageBrowseButton_Click"/>
+                </Grid>
+
+                <TextBlock Text="TTL (hours)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerTtlBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <TextBlock Text="Max Clip Size (MB)" Style="{StaticResource FieldLabel}"/>
+                <TextBox x:Name="ServerMaxClipSizeBox" Margin="0,0,0,8" Padding="6,4"/>
+
+                <CheckBox x:Name="ServerAuthCheckBox"
+                          Content="Require authentication"
+                          Margin="0,0,0,8"
+                          Checked="ServerAuthCheckBox_Changed"
+                          Unchecked="ServerAuthCheckBox_Changed"/>
+
+                <StackPanel x:Name="ServerTokenPanel" Visibility="Collapsed" Margin="0,0,0,8">
+                    <TextBlock Text="Server Access Token" Style="{StaticResource FieldLabel}"/>
+                    <PasswordBox x:Name="ServerAccessTokenBox" Padding="6,4"
+                                 PasswordChanged="ServerAccessTokenBox_PasswordChanged"/>
+                </StackPanel>
+
+                <CheckBox x:Name="ServerAutoStartCheckBox"
+                          Content="Auto-start server on launch"
+                          Margin="0,0,0,12"/>
+
+                <Button x:Name="ServerApplyButton"
+                        Content="Apply &amp; Restart Server"
+                        Padding="8,4" Margin="0,0,0,8"
+                        Click="ServerApplyButton_Click"/>
+            </StackPanel>
+
+            <!-- Server Management Panel (visible when server is enabled) -->
+            <StackPanel x:Name="ServerManagementSection" Visibility="Collapsed">
+                <Separator Margin="0,4,0,16"/>
+                <TextBlock Text="Server Management" Style="{StaticResource SectionHeader}"/>
+
+                <!-- Status indicator -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <TextBlock x:Name="ServerStatusDot" Text="&#x25CF;" FontSize="14" VerticalAlignment="Center"
+                               Foreground="Gray" Margin="0,0,6,0"/>
+                    <TextBlock x:Name="ServerStatusText" Text="Disabled" FontSize="12" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Control buttons -->
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="ServerStartButton" Content="Start" Width="70" Height="26" FontSize="11"
+                            Margin="0,0,6,0" Click="ServerStartButton_Click"/>
+                    <Button x:Name="ServerStopButton" Content="Stop" Width="70" Height="26" FontSize="11"
+                            Margin="0,0,6,0" Click="ServerStopButton_Click" Visibility="Collapsed"/>
+                    <Button x:Name="ServerRestartButton" Content="Restart" Width="70" Height="26" FontSize="11"
+                            Click="ServerRestartButton_Click" Visibility="Collapsed"/>
+                </StackPanel>
+
+                <!-- Storage stats -->
+                <StackPanel Margin="0,0,0,8">
+                    <TextBlock Text="Storage" Style="{StaticResource FieldLabel}" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="ServerStorageUsedText" FontSize="11" Foreground="Gray" Margin="0,2,0,0"/>
+                    <TextBlock x:Name="ServerStoragePathText" FontSize="11" Foreground="Gray" Margin="0,2,0,0"/>
+                </StackPanel>
+
+                <!-- Connected devices -->
+                <TextBlock Text="Connected Devices" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
+                        MinHeight="30" MaxHeight="120">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="ServerDevicesPanel">
+                            <TextBlock x:Name="NoServerDevicesText"
+                                       Text="No devices connected"
+                                       Foreground="Gray" FontSize="11"
+                                       HorizontalAlignment="Center" Margin="0,6,0,6"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Border>
+
+                <!-- Log viewer -->
+                <TextBlock Text="Server Logs" Style="{StaticResource FieldLabel}" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                <Border BorderBrush="LightGray" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8"
+                        MaxHeight="150">
+                    <ScrollViewer x:Name="ServerLogScrollViewer" VerticalScrollBarVisibility="Auto">
+                        <TextBlock x:Name="ServerLogText" FontSize="10" FontFamily="Consolas"
+                                   Padding="6,4" TextWrapping="Wrap"/>
+                    </ScrollViewer>
+                </Border>
+            </StackPanel>
+
             <!-- Separator before main content -->
             <Separator Margin="0,4,0,16"/>
 

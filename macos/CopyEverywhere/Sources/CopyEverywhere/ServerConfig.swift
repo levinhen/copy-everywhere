@@ -1,64 +1,37 @@
 import Foundation
-import ServiceManagement
 
-/// Persists server configuration to a JSON file in Application Support.
+/// Persists embedded server configuration to a JSON file in Application Support.
 @MainActor
 final class ServerConfig: ObservableObject {
     @Published var port: String = "8080"
     @Published var bindAddress: String = "0.0.0.0"
     @Published var storagePath: String = ""
-    @Published var ttlHours: Int = 1
+    @Published var ttlHours: Int = 24
     @Published var authEnabled: Bool = false
     @Published var accessToken: String = ""
-    @Published var launchAtLogin: Bool = false {
-        didSet {
-            guard oldValue != launchAtLogin else { return }
-            updateLaunchAtLogin()
-        }
-    }
+    @Published var maxClipSizeMB: Int = 50
+    @Published var serverEnabled: Bool = false
+    @Published var autoStartServer: Bool = false
 
-    /// Computed status fields (updated by polling /health or filesystem)
+    /// Computed status fields (updated by refreshUsedSpace())
     @Published var usedSpaceBytes: Int64 = 0
 
     private let configURL: URL
 
     static let defaultStoragePath: String = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("CopyEverywhereServer/data").path
+        return appSupport.appendingPathComponent("CopyEverywhere/server-data").path
     }()
 
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let configDir = appSupport.appendingPathComponent("CopyEverywhereServer")
+        let configDir = appSupport.appendingPathComponent("CopyEverywhere")
         try? FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
-        configURL = configDir.appendingPathComponent("config.json")
+        configURL = configDir.appendingPathComponent("server-config.json")
         load()
         if storagePath.isEmpty {
             storagePath = Self.defaultStoragePath
         }
-        syncLaunchAtLoginStatus()
-    }
-
-    // MARK: - Launch at Login
-
-    private func updateLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            if launchAtLogin {
-                try service.register()
-            } else {
-                try service.unregister()
-            }
-        } catch {
-            print("[ServerConfig] Failed to \(launchAtLogin ? "register" : "unregister") launch at login: \(error)")
-        }
-        save()
-    }
-
-    /// Sync the published property with the actual SMAppService status on launch.
-    private func syncLaunchAtLoginStatus() {
-        let status = SMAppService.mainApp.status
-        launchAtLogin = (status == .enabled)
     }
 
     /// Environment variables to forward to the Go server subprocess.
@@ -68,6 +41,7 @@ final class ServerConfig: ObservableObject {
             "BIND_ADDRESS": bindAddress,
             "STORAGE_PATH": storagePath,
             "TTL_HOURS": String(ttlHours),
+            "MAX_CLIP_SIZE_MB": String(maxClipSizeMB),
             "AUTH_ENABLED": authEnabled ? "true" : "false",
         ]
         if authEnabled && !accessToken.isEmpty {
@@ -86,7 +60,9 @@ final class ServerConfig: ObservableObject {
             ttlHours: ttlHours,
             authEnabled: authEnabled,
             accessToken: accessToken,
-            launchAtLogin: launchAtLogin
+            maxClipSizeMB: maxClipSizeMB,
+            serverEnabled: serverEnabled,
+            autoStartServer: autoStartServer
         )
         do {
             let json = try JSONEncoder().encode(data)
@@ -105,7 +81,9 @@ final class ServerConfig: ObservableObject {
         ttlHours = data.ttlHours
         authEnabled = data.authEnabled
         accessToken = data.accessToken
-        launchAtLogin = data.launchAtLogin ?? false
+        maxClipSizeMB = data.maxClipSizeMB ?? 50
+        serverEnabled = data.serverEnabled ?? false
+        autoStartServer = data.autoStartServer ?? false
     }
 
     // MARK: - Storage usage
@@ -142,5 +120,7 @@ private struct ConfigData: Codable {
     var ttlHours: Int
     var authEnabled: Bool
     var accessToken: String
-    var launchAtLogin: Bool?
+    var maxClipSizeMB: Int?
+    var serverEnabled: Bool?
+    var autoStartServer: Bool?
 }

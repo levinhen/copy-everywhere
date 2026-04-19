@@ -17,13 +17,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Four independent codebases share a single REST contract:
 
 - **[server/](server/)** — Go 1.22+ / Gin relay. SQLite metadata (`modernc.org/sqlite`, pure-Go, no CGO) plus a content store on disk. The server is stateless beyond `STORAGE_PATH`; clients address content by 6-char alphanumeric Clip IDs. Layout: `config/` env loader, `db/` schema + helpers, `middleware/` Bearer auth, `handlers/` (`clips.go` for single-shot, `uploads.go` for chunked), `cleanup/` background TTL goroutine, `main.go` wiring.
-- **[macos/CopyEverywhere/](macos/CopyEverywhere/)** — Swift Package Manager executable target (no .xcodeproj), macOS 13+ MenuBarExtra app. State lives in `ConfigStore` (`@MainActor` ObservableObject) and `HistoryStore`; views in `MenuBarView` / `MainPanelView` / `ConfigView`.
-- **[macos/CopyEverywhereServer/](macos/CopyEverywhereServer/)** — Swift Package Manager executable target, macOS 13+ MenuBarExtra host app. Manages the Go server binary (`copyeverywhere-server`) as a child `Process`. `ServerProcess` (`@MainActor` ObservableObject) owns the subprocess lifecycle (start/stop/restart) and captures stdout/stderr via `Pipe`. `AppDelegate` drives the NSStatusItem + NSPopover (same pattern as the client app).
+- **[macos/CopyEverywhere/](macos/CopyEverywhere/)** — Swift Package Manager executable target (no .xcodeproj), macOS 13+ MenuBarExtra app. State lives in `ConfigStore` (`@MainActor` ObservableObject) and `HistoryStore`; views in `MenuBarView` / `MainPanelView` / `ConfigView`. Optionally manages an embedded Go server subprocess via `ServerProcess` / `ServerConfig` (see Embedded Server section below).
 - **[windows/CopyEverywhere/](windows/CopyEverywhere/)** — .NET 8 WPF tray app using `Hardcodet.NotifyIcon.Wpf`. `Services/ApiClient.cs` mirrors the macOS networking layer; `Services/ConfigStore.cs` and `Services/HistoryStore.cs` are the persistence equivalents.
-<<<<<<< HEAD
-=======
 - **[android/](android/)** — Kotlin + Jetpack Compose, minSdk 29, targetSdk 35. Single-module Gradle (Kotlin DSL) with version catalog (`gradle/libs.versions.toml`). Material 3 + dynamic color theming. Package: `com.copyeverywhere.app`.
->>>>>>> ralph/android-client
 
 The REST contract (all under `/api/v1`, Bearer auth required, except `/health`):
 
@@ -64,15 +60,13 @@ dotnet build
 dotnet run
 ```
 
-<<<<<<< HEAD
-=======
 Android (run from [android/](android/)):
 ```bash
 ./gradlew assembleDebug                 # debug build
 ./gradlew assembleRelease               # release build
 ```
 
->>>>>>> ralph/android-client
+
 Note: Docker, the .NET SDK, and a Windows host are **not** present on this dev machine — those builds can only be verified on the appropriate platform. Don't claim "build verified" if you couldn't actually run it.
 
 ## Conventions and gotchas
@@ -122,14 +116,18 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Bluetooth receive.** `BluetoothService` forwards `session(_:didReceive:)` and `session(_:receiveProgress:header:)` to `BluetoothServiceDelegate`. `ConfigStore` handles received text (clipboard + notification) and files (saved to ~/Downloads + notification). `bluetoothReceiveProgress`/`bluetoothReceiveFilename` drive the receive progress UI in `MainPanelView`. Size is verified against the header-declared size on completion.
 - **RFCOMM server auto-start.** In Bluetooth mode, `ConfigStore` starts the RFCOMM server via `startBluetoothServerIfNeeded()` both in `autoReconnectBluetooth()` (on launch) and `setTransferMode(_:)` (on mode switch). This allows the device to accept inbound Bluetooth connections.
 
-**macOS Server Host App (`macos/CopyEverywhereServer/`):**
+**Embedded Server (macOS — `macos/CopyEverywhere/`):**
 
+- **Embedded server architecture.** The standalone `CopyEverywhereServer` host app has been removed. Its `ServerProcess` and `ServerConfig` classes are now embedded directly in the CopyEverywhere client app. The server is an optional feature toggled via `serverEnabled` in `ServerConfig`.
 - **Go subprocess management.** `ServerProcess` (`@MainActor` ObservableObject) wraps `Foundation.Process` to launch/stop/restart the Go binary. Stdout and stderr are captured via `Pipe` with `readabilityHandler` and surfaced as `@Published logLines: [String]`.
 - **Binary path convention.** `ServerProcess.binaryPath` defaults to a sibling `copyeverywhere-server` next to the Swift executable. The Go binary is compiled independently (`go build -o copyeverywhere-server .` in `server/`).
 - **Environment forwarding.** `ServerProcess.config` (`ServerConfig`) provides the environment dict, which is merged with the current process env before launching the Go binary. This is how `PORT`, `STORAGE_PATH`, `BIND_ADDRESS`, `AUTH_ENABLED`, etc. are passed to the server.
-- **ServerConfig persistence.** `ServerConfig` (`@MainActor` ObservableObject) persists port, storage path, TTL, auth settings to `~/Library/Application Support/CopyEverywhereServer/config.json`. Default storage path is `~/Library/Application Support/CopyEverywhereServer/data`. Config changes require a server restart to take effect.
+- **ServerConfig persistence.** `ServerConfig` (`@MainActor` ObservableObject) persists port, storage path, TTL, auth settings to `~/Library/Application Support/CopyEverywhere/server-config.json`. Default storage path is `~/Library/Application Support/CopyEverywhere/server-data`. Config changes require a server restart to take effect.
+- **Server toggle and auto-connect.** `serverEnabled` toggles the subprocess on/off and auto-sets `hostURL` to `http://localhost:<port>`. `autoStartServer` starts the server on app launch. Both are persisted in `ServerConfig`.
+- **Server UI.** `ConfigView` has an embedded server section (port, bind address, storage path, TTL, max clip size, auth toggle, auto-start). `MainPanelView` shows server status (green/red/gray dot), Start/Stop/Restart buttons, log viewer, storage stats, and connected devices list.
 - **Graceful shutdown.** `process.terminate()` sends SIGTERM (Go server already handles SIGTERM for mDNS deregistration). `applicationWillTerminate` calls `stop()` to clean up on app quit.
-- **Same popover pattern as the client app.** `AppDelegate` owns `NSStatusItem` + `NSPopover` with `.applicationDefined` behavior + global event monitor for dismiss-on-click-outside.
+- **`restart()` polls for process exit** (up to 5s) instead of a fixed delay — prevents duplicate mDNS registrations when the old process is slow to exit.
+- **Android does not embed the server** — it connects to a server hosted by macOS or Windows.
 
 **Windows:**
 
@@ -157,11 +155,17 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **Bluetooth pairing flow (Windows).** `BluetoothService.ConnectAsync(DeviceInformation)` triggers the Windows system pairing dialog if needed. On `SessionReady`, the device is added to `PairedDevices`. Reconnection uses `ConnectByAddressAsync(ulong)`.
 - **Bluetooth UI in MainWindow.** Transfer mode ComboBox controls `BluetoothSection` visibility. Scan uses `BluetoothService.FindDevicesAsync()` (static). Paired device list rendered programmatically with Connect/Disconnect/Forget buttons. Status badge shows connection state via colored dot.
 
-<<<<<<< HEAD
-**Cross-platform:**
+**Embedded Server (Windows — `windows/CopyEverywhere/`):**
 
-- **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet.
-=======
+- **`ServerProcess`** (`Services/ServerProcess.cs`, `INotifyPropertyChanged`) wraps `System.Diagnostics.Process`. `IsRunning` property, `LogLines` (`ObservableCollection<string>`, max 500). `Start()`, `Stop()`, `Restart()` / `RestartAsync()`. Stdout/stderr via `OutputDataReceived`/`ErrorDataReceived` events dispatched to UI thread. `BinaryPath` defaults to `copyeverywhere-server.exe` next to the client exe.
+- **`ServerConfig`** (`Services/ServerConfig.cs`, `INotifyPropertyChanged`) persists to `%APPDATA%/CopyEverywhere/server-config.json`. Properties: Port (8080), StoragePath, BindAddress, TtlHours, AuthEnabled, AccessToken, MaxClipSizeMB (50), ServerEnabled, AutoStartServer. `GetEnvironment()` returns env var dict for subprocess. `RefreshUsedSpace()` computes storage directory size on a background thread.
+- **Server toggle and auto-connect.** `MainWindow.SetServerEnabled(bool)` starts/stops subprocess and auto-sets `HostUrl` to `http://localhost:<port>`. `AutoConnectToLocalServer()` copies server auth to client config. Auto-start checks `ServerEnabled && AutoStartServer` in `MainWindow` constructor.
+- **Server UI.** Embedded Server section in MainWindow XAML: enable toggle, config fields (port, bind address, storage path with Browse button, TTL, max clip size, auth toggle, auto-start). Server Management section: status dot + text, contextual Start/Stop/Restart buttons, storage stats, connected devices list (via `GET /api/v1/devices`), log viewer (ScrollViewer + TextBlock, auto-scroll).
+- **Process shutdown.** `Process.Kill()` (hard kill, no SIGTERM on Windows). `Application.Current.Exit` handler registered in `ServerProcess` constructor. mDNS records expire via TTL.
+- **`RestartAsync()` polls `IsRunning`** for up to 5s before starting new instance — prevents duplicate mDNS registrations.
+
+**Binary bundling strategy:** The Go server binary (`copyeverywhere-server` on macOS, `copyeverywhere-server.exe` on Windows) must be compiled independently from `server/` and placed next to the respective client executable. macOS: `go build -o copyeverywhere-server .` in `server/`. Windows: `GOOS=windows go build -o copyeverywhere-server.exe .` in `server/`. The client apps discover the binary via a sibling-path convention (same directory as the running executable). Android does not embed the server.
+
 **Android:**
 
 - **Gradle version catalog** at `android/gradle/libs.versions.toml` is the single source of truth for dependency versions. Use `libs.` references in `build.gradle.kts`, never hardcode version strings.
@@ -204,7 +208,6 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 **Cross-platform:**
 
 - **Secrets storage:** macOS → Keychain via the Security framework (delete-before-add for updates). Windows → Credential Manager via the `CredentialManagement` NuGet. Android → EncryptedSharedPreferences (Keystore-backed).
->>>>>>> ralph/android-client
 - **History storage (MVP):** Both macOS and Windows HistoryStore removed — replaced by live server queue view (`GET /clips?device_id=<self>`). macOS removed in US-027, Windows in US-033.
 - **Send routing via `TransferMode` (Windows).** `SendService` checks `ConfigStore.TransferMode` at the top of `SendTextAsync`/`SendFileAsync` and dispatches to `BluetoothSession` or `ApiClient`. `IsSendReady` property on `ConfigStore` returns true when the active mode's transport is ready (LAN configured or Bluetooth connected+handshake complete). All send entry points (Ctrl+V, drag-drop, FloatingBall drop) go through `SendService`.
 - **Bluetooth send progress (Windows).** `SendService.BluetoothSendProgress` event (0.0–1.0) drives the same `UploadProgressPanel` used for chunked uploads. `MainWindow` subscribes via the `SendService` property setter.
@@ -212,9 +215,6 @@ These are load-bearing — most were learned the hard way during the MVP. Read b
 - **RFCOMM server auto-start (Windows).** `StartBluetoothServerIfNeeded()` starts the RFCOMM server in Bluetooth mode. Called from `InitializeTransferModeUI()` (on launch) and `TransferModeComboBox_SelectionChanged` (on mode switch). Mirrors macOS `startBluetoothServerIfNeeded()`.
 - **Mode switch service lifecycle.** On both macOS and Windows, switching transfer mode must stop/start background services: LAN→BT stops SSE + queue polling, starts RFCOMM server; BT→LAN stops RFCOMM server, restarts SSE + queue polling. `UpdateMainPanelState()` (Windows) / `MainPanelView` (macOS) conditionally shows queue (LAN) or BT status section.
 - **`UpdateBtStatusPanel()` (Windows)** mirrors macOS `bluetoothStatusColor`/`bluetoothStatusText` helpers. Called from `UpdateBluetoothStatus()` when in BT mode and from `UpdateMainPanelState()`. Updates `BtStatusDot`, `BtStatusLabel`, `BtConnectedDeviceText`, `BtPairHintText`.
-<<<<<<< HEAD
-=======
 - **Boot receiver (Android).** `BootReceiver` listens for `BOOT_COMPLETED` and starts the foreground service. Registered in manifest with `exported="true"`. Requires `RECEIVE_BOOT_COMPLETED` permission.
 - **Battery optimization (Android).** `MainActivity.requestBatteryOptimizationExemption()` uses `Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` to prompt the user. Checks `PowerManager.isIgnoringBatteryOptimizations()` first to avoid re-prompting. Requires `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission.
 - **WakeLock (Android).** `CopyEverywhereService.acquireWakeLock()`/`releaseWakeLock()` with nested holder counting. Acquired around SSE clip downloads and Bluetooth receive transfers. 10-minute safety timeout on `acquire()`. `releaseWakeLockFully()` in `onDestroy()` as cleanup.
->>>>>>> ralph/android-client
