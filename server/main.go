@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -65,7 +66,21 @@ func main() {
 		Broker: broker,
 	}
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
+		if param.Method == http.MethodGet && param.Path == "/api/v1/clips" && param.StatusCode == http.StatusOK {
+			return ""
+		}
+		return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %q\n",
+			param.TimeStamp.Format("2006/01/02 - 15:04:05"),
+			param.StatusCode,
+			param.Latency,
+			param.ClientIP,
+			param.Method,
+			param.Path,
+		)
+	}))
+	r.Use(gin.Recovery())
 
 	// Health endpoint (no auth required)
 	r.GET("/health", func(c *gin.Context) {

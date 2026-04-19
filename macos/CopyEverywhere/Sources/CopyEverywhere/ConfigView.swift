@@ -530,15 +530,10 @@ struct ConfigView: View {
     @ViewBuilder
     private var embeddedServerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Toggle("Enable embedded server", isOn: Binding(
-                get: { serverConfig.serverEnabled },
-                set: { newValue in
-                    // Use AppDelegate's toggle logic for start/stop + auto-connect
-                    if let appDelegate = NSApp.delegate as? AppDelegate {
-                        appDelegate.setServerEnabled(newValue)
-                    }
+            Toggle("Enable embedded server", isOn: $serverConfig.serverEnabled)
+                .onChange(of: serverConfig.serverEnabled) { newValue in
+                    syncEmbeddedServerEnabled(newValue)
                 }
-            ))
 
             if serverConfig.serverEnabled {
                 VStack(alignment: .leading, spacing: 8) {
@@ -599,21 +594,56 @@ struct ConfigView: View {
 
                 Toggle("Auto-start server on launch", isOn: $serverConfig.autoStartServer)
 
-                Button("Apply & Restart Server") {
+                Button(serverProcess.isRunning ? "Apply & Restart Server" : "Apply & Start Server") {
                     serverConfig.save()
+                    guard serverConfig.serverEnabled else { return }
+
                     if serverProcess.isRunning {
                         serverProcess.restart()
-                        // Re-connect after restart
-                        Task {
-                            try? await Task.sleep(nanoseconds: 1_000_000_000)
-                            if let appDelegate = NSApp.delegate as? AppDelegate {
-                                appDelegate.autoConnectToLocalServer()
+                    } else {
+                        serverProcess.start()
+                    }
+
+                    // Re-connect after the local server has had a moment to bind.
+                    Task {
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                        if let appDelegate = NSApp.delegate as? AppDelegate {
+                            appDelegate.autoConnectToLocalServer()
+                        } else {
+                            let port = serverConfig.port.isEmpty ? "8080" : serverConfig.port
+                            configStore.hostURL = "http://localhost:\(port)"
+                            if serverConfig.authEnabled && !serverConfig.accessToken.isEmpty {
+                                configStore.accessToken = serverConfig.accessToken
                             }
+                            configStore.save()
                         }
                     }
                 }
                 .buttonStyle(.borderedProminent)
             }
+        }
+    }
+
+    private func syncEmbeddedServerEnabled(_ enabled: Bool) {
+        // Prefer the shared AppDelegate flow so host auto-connect and persistence
+        // stay consistent with launch-time server management.
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            appDelegate.setServerEnabled(enabled)
+            return
+        }
+
+        // Fallback for cases where the SwiftUI view cannot see the app delegate.
+        serverConfig.save()
+        if enabled {
+            serverProcess.start()
+            let port = serverConfig.port.isEmpty ? "8080" : serverConfig.port
+            configStore.hostURL = "http://localhost:\(port)"
+            if serverConfig.authEnabled && !serverConfig.accessToken.isEmpty {
+                configStore.accessToken = serverConfig.accessToken
+            }
+            configStore.save()
+        } else {
+            serverProcess.stop()
         }
     }
 

@@ -16,8 +16,7 @@ final class ServerProcess: ObservableObject {
     /// Path to the Go server binary. Defaults to a sibling `copyeverywhere-server`
     /// next to the running Swift executable, but can be overridden.
     var binaryPath: String = {
-        let execURL = Bundle.main.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
-        return execURL.deletingLastPathComponent().appendingPathComponent("copyeverywhere-server").path
+        defaultSiblingBinaryPath()
     }()
 
     /// Server configuration — environment variables are derived from this.
@@ -33,8 +32,16 @@ final class ServerProcess: ObservableObject {
     func start() {
         guard !isRunning else { return }
 
+        stageBundledBinaryIfNeeded()
+
+        let binaryURL = URL(fileURLWithPath: binaryPath)
+        guard FileManager.default.isExecutableFile(atPath: binaryPath) else {
+            appendLog("[host] Failed to start server: binary not found or not executable at \(binaryURL.path)")
+            return
+        }
+
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.executableURL = binaryURL
 
         // Merge current environment with user overrides
         var env = ProcessInfo.processInfo.environment
@@ -64,11 +71,11 @@ final class ServerProcess: ObservableObject {
             try proc.run()
             process = proc
             isRunning = true
-            appendLog("[host] Server started (PID \(proc.processIdentifier))")
+            appendLog("[host] Server started (PID \(proc.processIdentifier)) from \(binaryURL.path)")
             readPipe(outPipe, prefix: "")
             readPipe(errPipe, prefix: "")
         } catch {
-            appendLog("[host] Failed to start server: \(error.localizedDescription)")
+            appendLog("[host] Failed to start server from \(binaryURL.path): \(error.localizedDescription)")
         }
     }
 
@@ -133,5 +140,65 @@ final class ServerProcess: ObservableObject {
         if let proc = process, proc.isRunning {
             proc.terminate()
         }
+    }
+
+    private func stageBundledBinaryIfNeeded() {
+        let fileManager = FileManager.default
+        let targetURL = URL(fileURLWithPath: binaryPath)
+
+        guard let sourceURL = Self.findRepoBinaryURL(),
+              fileManager.isExecutableFile(atPath: sourceURL.path) else {
+            return
+        }
+
+        let shouldCopy: Bool
+        if !fileManager.fileExists(atPath: targetURL.path) {
+            shouldCopy = true
+        } else {
+            let sourceDate = (try? sourceURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let targetDate = (try? targetURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            shouldCopy = sourceDate > targetDate
+        }
+
+        guard shouldCopy else { return }
+
+        do {
+            if fileManager.fileExists(atPath: targetURL.path) {
+                try fileManager.removeItem(at: targetURL)
+            }
+            try fileManager.copyItem(at: sourceURL, to: targetURL)
+            try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: targetURL.path)
+            appendLog("[host] Staged server binary to \(targetURL.path)")
+        } catch {
+            appendLog("[host] Failed to stage server binary from \(sourceURL.path) to \(targetURL.path): \(error.localizedDescription)")
+        }
+    }
+
+    private static func defaultSiblingBinaryPath() -> String {
+        let execURL = Bundle.main.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+        return execURL.deletingLastPathComponent().appendingPathComponent("copyeverywhere-server").path
+    }
+
+    private static func findRepoBinaryURL() -> URL? {
+        let execURL = Bundle.main.executableURL ?? URL(fileURLWithPath: ProcessInfo.processInfo.arguments[0])
+        let fileManager = FileManager.default
+        let siblingBinary = execURL.deletingLastPathComponent().appendingPathComponent("copyeverywhere-server")
+        if fileManager.isExecutableFile(atPath: siblingBinary.path) {
+            return siblingBinary
+        }
+
+        // SwiftPM debug runs launch from `macos/CopyEverywhere/.build/.../CopyEverywhere`.
+        // In that setup the Go server binary usually lives in the repo root under `server/`.
+        let devRepoBinary = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // Sources/CopyEverywhere
+            .deletingLastPathComponent() // Sources
+            .deletingLastPathComponent() // CopyEverywhere package root
+            .deletingLastPathComponent() // macos
+            .appendingPathComponent("server/copyeverywhere-server")
+        if fileManager.isExecutableFile(atPath: devRepoBinary.path) {
+            return devRepoBinary
+        }
+
+        return nil
     }
 }
