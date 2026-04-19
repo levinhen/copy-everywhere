@@ -1,132 +1,220 @@
 {
   "project": "CopyEverywhere",
-  "branchName": "ralph/windows-embedded-server",
-  "description": "Windows Embedded Server — Integrate the Go relay server as an optional embedded subprocess in the Windows WPF client app. Adds ServerProcess (subprocess lifecycle management), ServerConfig (server settings persistence), a server configuration UI section, a server management panel with live logs, and Windows startup integration.",
+  "branchName": "ralph/lan-server-auto-discovery",
+  "description": "Make LAN server discovery reliable under DHCP by introducing a stable server_id, auto-selecting a unique discovered server, restoring the previously selected server across app restarts, and keeping manual host URLs as a non-blocking fallback across macOS, Windows, and Android.",
   "userStories": [
     {
-      "id": "US-083",
-      "title": "Windows — ServerProcess service",
-      "description": "As a Windows user, I want the WPF app to manage the Go server subprocess so I can host the relay server from my Windows machine.",
+      "id": "US-090A",
+      "title": "Server: persist a stable server_id and expose it on health",
+      "description": "As a client developer, I need each LAN server to expose a durable server_id so clients can recognize the same server after its DHCP address changes.",
       "acceptanceCriteria": [
-        "New Services/ServerProcess.cs class (INotifyPropertyChanged)",
-        "IsRunning: bool property, updated when process starts/exits",
-        "LogLines: ObservableCollection<string> (max 500 lines; oldest removed when limit reached)",
-        "BinaryPath: string property defaulting to Path.Combine(AppContext.BaseDirectory, \"copyeverywhere-server.exe\")",
-        "ServerConfig reference passed to constructor; used in GetEnvironment()",
-        "Start() creates a new Process with RedirectStandardOutput=true, RedirectStandardError=true, UseShellExecute=false, CreateNoWindow=true, sets environment from GetEnvironment(), attaches OutputDataReceived and ErrorDataReceived handlers, sets IsRunning=true",
-        "OutputDataReceived/ErrorDataReceived handlers append lines to LogLines via Application.Current.Dispatcher.Invoke (UI-thread safe)",
-        "Process Exited event sets IsRunning=false and appends exit code to LogLines",
-        "Stop() calls process.Kill(entireProcessTree: true) if process is running, sets IsRunning=false",
-        "Restart() calls Stop() then waits 500 ms then calls Start()",
-        "Application.Current.Exit event handler calls Stop() for cleanup on app quit",
-        "GetEnvironment() returns Dictionary<string,string> from the injected ServerConfig",
-        "dotnet build succeeds"
+        "Generate and persist a stable server_id on the server host so it survives process restarts unless server storage or config is explicitly reset",
+        "GET /health returns the same server_id value used by discovery clients for identity verification",
+        "Server startup logs include server_id for diagnostics",
+        "go test ./... passes",
+        "Typecheck passes"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-084",
-      "title": "Windows — ServerConfig persistence",
-      "description": "As a Windows user, I want server settings persisted alongside the client config so everything is in one place.",
+      "id": "US-090B",
+      "title": "Server: advertise server_id in mDNS metadata",
+      "description": "As a discovery client, I need the Go server's mDNS advertisement to include server_id so I can match discovered endpoints to a stable server identity before or immediately after connecting.",
       "acceptanceCriteria": [
-        "New Services/ServerConfig.cs class (INotifyPropertyChanged)",
-        "Properties with defaults: Port (\"8080\"), BindAddress (\"0.0.0.0\"), StoragePath (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), \"CopyEverywhere\", \"server-data\")), TtlHours (24), AuthEnabled (false), AccessToken (\"\"), MaxClipSizeMB (50), ServerEnabled (false), AutoStartServer (false)",
-        "UsedSpaceBytes: long property (default 0, populated by RefreshUsedSpaceAsync)",
-        "Persisted to Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), \"CopyEverywhere\", \"server-config.json\")",
-        "GetEnvironment() returns Dictionary<string,string> with keys: PORT, BIND_ADDRESS, STORAGE_PATH, TTL_HOURS, AUTH_ENABLED, ACCESS_TOKEN (omitted when AuthEnabled=false or token empty), MAX_CLIP_SIZE_MB",
-        "Save() serialises all properties to JSON and writes atomically (write temp file, then File.Replace)",
-        "Load() deserialises from JSON; missing file returns defaults without error",
-        "RefreshUsedSpaceAsync() calculates total bytes under StoragePath in a background Task, updates UsedSpaceBytes on the UI thread",
-        "dotnet build succeeds"
+        "mDNS TXT records include server_id alongside existing version and auth metadata",
+        "mDNS advertisement logs show enough detail to confirm server_id is being broadcast",
+        "Existing clients that only read version and auth continue to behave safely until upgraded",
+        "go test ./... passes",
+        "Typecheck passes"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-085",
-      "title": "Windows — Server toggle and auto-connect",
-      "description": "As a Windows user, I want the embedded server to start automatically when I enable it, and for the client to connect to it without manual URL entry.",
+      "id": "US-091",
+      "title": "Shared contract: define discovery selection sources and restore rules",
+      "description": "As a developer, I need one shared selection contract for LAN discovery so all three clients make the same auto-select, restore, and fallback decisions.",
       "acceptanceCriteria": [
-        "App.xaml.cs creates ServerConfig and ServerProcess instances and makes them available to MainWindow",
-        "On app launch: ServerConfig.Load() called; if AutoStartServer is true, ServerProcess.Start() called; if ServerEnabled is true (or server just started), ConfigStore.HostUrl set to http://localhost:<ServerConfig.Port>",
-        "In MainWindow: toggling ServerEnabled CheckBox ON calls ServerProcess.Start() and sets ConfigStore.HostUrl to http://localhost:<ServerConfig.Port> then saves ConfigStore",
-        "Toggling ServerEnabled CheckBox OFF calls ServerProcess.Stop(); HostUrl is left unchanged so user can still point at a remote server",
-        "If binary is missing (BinaryPath does not exist), toggling ON shows an error message in the server status area and leaves ServerEnabled=false",
-        "User can manually edit the Host URL TextBox at any time, overriding the auto-set value",
-        "dotnet build succeeds"
+        "Document and encode one shared contract covering unique-server auto-select, persisted server_id restore on app restart, multi-server no-auto-pick, and manual fallback preservation",
+        "Selection logic distinguishes at least these active connection sources: auto_discovered, restored_selection, and manual_fallback",
+        "No client silently replaces an explicit manual choice with a different discovered server when multiple servers are present",
+        "Repo docs and comments reference scripts/ralph source-of-truth files for this iteration",
+        "Typecheck passes"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-086",
-      "title": "Windows — Server configuration UI",
-      "description": "As a Windows user, I want to configure the embedded server from the same settings panel I use for client config.",
+      "id": "US-092A",
+      "title": "macOS: persist selected server by server_id",
+      "description": "As a macOS user, I want the app to remember which LAN server I selected by identity instead of by a stale IP address.",
       "acceptanceCriteria": [
-        "New 'Embedded Server' GroupBox added to MainWindow XAML below the existing transfer mode section",
-        "CheckBox 'Enable embedded server' bound to ServerConfig.ServerEnabled; toggling calls the enable/disable logic from US-085",
-        "When ServerEnabled=false, all child controls inside the group are IsEnabled=false (greyed out)",
-        "Port TextBox, Bind Address TextBox, TTL (hours) TextBox, Max Clip Size (MB) TextBox — all bound to ServerConfig properties",
-        "Storage Path TextBox bound to ServerConfig.StoragePath plus a 'Browse...' Button that opens a FolderBrowserDialog and writes the chosen path back to StoragePath",
-        "CheckBox 'Require authentication' bound to ServerConfig.AuthEnabled; when checked, a PasswordBox for Access Token appears (sync via PasswordChanged event)",
-        "CheckBox 'Auto-start server on app launch' bound to ServerConfig.AutoStartServer",
-        "'Apply & Restart Server' Button: saves ServerConfig, calls ServerProcess.Restart() if running or ServerProcess.Start() if stopped (and ServerEnabled=true)",
-        "dotnet build succeeds"
+        "macOS persists selected server_id plus enough last-known metadata to render the current selection cleanly",
+        "Stored selection no longer depends only on host and port equality",
+        "The app persists whether the active endpoint came from auto discovery, restored selection, or manual fallback",
+        "swift build succeeds",
+        "Typecheck passes"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-087",
-      "title": "Windows — Server management panel",
-      "description": "As a Windows user, I want a management panel showing server status, live logs, storage usage, and controls to start/stop/restart.",
+      "id": "US-092B",
+      "title": "macOS: start LAN discovery on launch and restore selection",
+      "description": "As a macOS user, I want LAN discovery to run on startup so the app can reconnect after DHCP changes without waiting for me to open Config.",
       "acceptanceCriteria": [
-        "Server management section visible only when ServerConfig.ServerEnabled=true; hidden otherwise",
-        "Status row: Ellipse (green Fill when IsRunning, red Fill when stopped) + TextBlock ('Running' / 'Stopped')",
-        "Listen address TextBlock shows BindAddress:Port from ServerConfig (e.g. '0.0.0.0:8080'), visible when running",
-        "Storage used TextBlock shows formatted UsedSpaceBytes (via FormatBytes helper); refreshed by calling RefreshUsedSpaceAsync() when server starts and on a 30-second timer while running",
-        "Buttons: 'Start Server' visible when !IsRunning; 'Stop Server' and 'Restart' visible when IsRunning",
-        "Log viewer: ScrollViewer containing a TextBlock (FontFamily Consolas or Courier New) bound to LogLines joined by newline; auto-scrolls to bottom on each new log line via ScrollViewer.ScrollToEnd() in a LogLines.CollectionChanged handler",
-        "'Clear Logs' Button calls LogLines.Clear()",
-        "dotnet build succeeds"
+        "LAN discovery starts automatically on app launch or LAN mode entry, not only while Config is open",
+        "If exactly one server is discovered and there is no prior selection, macOS auto-selects it and updates hostURL",
+        "If a persisted server_id is rediscovered at a new host or port after restart, macOS restores that selection and updates hostURL automatically",
+        "If multiple servers are discovered and there is no prior selection, macOS does not auto-pick one",
+        "swift build succeeds",
+        "Typecheck passes"
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-088",
-      "title": "Windows — Run at Windows startup",
-      "description": "As a Windows user, I want the option to launch CopyEverywhere automatically when Windows starts.",
+      "id": "US-092C",
+      "title": "macOS: show discovery state and manual fallback in Config UI",
+      "description": "As a macOS user, I want the Config view to explain whether the current LAN endpoint was auto-discovered, restored, or entered manually.",
       "acceptanceCriteria": [
-        "CheckBox 'Run at Windows startup' added to the server configuration UI section (US-086)",
-        "Checking the box writes registry value HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run, key name 'CopyEverywhere', value = '\"<full path to CopyEverywhere.exe>\" --minimized'",
-        "Unchecking the box deletes the registry value if it exists",
-        "On app launch, App.xaml.cs checks if args contain '--minimized'; if so, MainWindow is not shown (app starts minimized to tray only)",
-        "ServerConfig persists the RunAtWindowsStartup bool so the CheckBox state survives restart",
-        "SetRunAtStartup(bool) helper on ServerConfig encapsulates the Registry read/write/delete logic",
-        "dotnet build succeeds"
+        "Config UI lists discovered servers with enough detail to distinguish them, including selection state and auth requirement",
+        "Config UI shows whether the active connection source is auto_discovered, restored_selection, or manual_fallback",
+        "When multiple servers are present with no prior selection, the UI shows a passive instruction to open Config and choose one instead of presenting a popup",
+        "User can explicitly switch between a discovered server selection and manual URL entry",
+        "swift build succeeds",
+        "Typecheck passes"
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": ""
     },
     {
-      "id": "US-089",
-      "title": "Windows — CLAUDE.md conventions update",
-      "description": "As a developer, I want CLAUDE.md updated to document the new embedded server patterns for Windows.",
+      "id": "US-093A",
+      "title": "Windows: persist selected server by server_id",
+      "description": "As a Windows user, I want the app to remember my LAN server by stable identity so an IP change does not break the saved selection.",
       "acceptanceCriteria": [
-        "Windows section in Conventions and gotchas gets new entries for: ServerProcess (subprocess lifecycle, Dispatcher.Invoke for log lines, Kill(entireProcessTree:true), BinaryPath convention), ServerConfig (properties, GetEnvironment() mapping, JSON persistence path), registry startup key pattern, --minimized arg handling in App.xaml.cs",
-        "Architecture section updated: Windows client entry notes that ServerProcess and ServerConfig provide optional embedded server support",
-        "Source of truth section updated: active iteration points at prd.json and tasks/prd-windows-embedded-server.md"
+        "Windows persists selected server_id plus last-known display metadata",
+        "Stored selection no longer depends only on host and port equality",
+        "The app persists whether the active endpoint came from auto discovery, restored selection, or manual fallback",
+        "dotnet build succeeds on a Windows host",
+        "Typecheck passes"
       ],
       "priority": 7,
-      "passes": true,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-093B",
+      "title": "Windows: start LAN discovery on launch and restore selection",
+      "description": "As a Windows user, I want startup discovery to recover from DHCP host changes without making me re-enter the host URL after restart.",
+      "acceptanceCriteria": [
+        "LAN discovery starts automatically on app launch or LAN mode entry",
+        "If exactly one server is discovered and there is no prior selection, Windows auto-selects it and updates HostUrl",
+        "If a persisted server_id is rediscovered at a new host or port after restart, Windows restores that selection and updates HostUrl automatically",
+        "If multiple servers are discovered and there is no prior selection, Windows does not auto-pick one or show a blocking chooser",
+        "dotnet build succeeds on a Windows host",
+        "Typecheck passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-093C",
+      "title": "Windows: show discovery state and manual fallback in UI",
+      "description": "As a Windows user, I want the UI to make it obvious whether I am connected through automatic discovery, a restored selection, or a manual fallback URL.",
+      "acceptanceCriteria": [
+        "Main or config UI lists discovered servers with enough information to distinguish them, including selection state and auth requirement",
+        "UI shows whether the active connection source is auto_discovered, restored_selection, or manual_fallback",
+        "When multiple servers are present with no prior selection, the UI shows passive guidance instead of a popup",
+        "User can explicitly switch between a discovered server selection and manual HostUrl entry",
+        "dotnet build succeeds on a Windows host",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-094A",
+      "title": "Android: persist selected server by server_id",
+      "description": "As an Android user, I want the app to remember my chosen LAN server by identity so DHCP changes do not invalidate the saved target.",
+      "acceptanceCriteria": [
+        "Android persists selected server_id plus enough last-known metadata to render the current selection",
+        "Stored selection no longer depends only on host or port string equality",
+        "The app persists whether the active endpoint came from auto discovery, restored selection, or manual fallback",
+        "./gradlew assembleDebug succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-094B",
+      "title": "Android: start LAN discovery automatically and restore selection",
+      "description": "As an Android user, I want LAN discovery to start automatically when the app enters LAN mode so restarts recover from DHCP changes without manual rescanning.",
+      "acceptanceCriteria": [
+        "Discovery starts automatically when the relevant app or service lifecycle enters LAN mode, without requiring the user to tap a scan button",
+        "If exactly one server is discovered and there is no prior selection, Android auto-selects it and updates hostUrl",
+        "If a persisted server_id is rediscovered at a new host or port after restart, Android restores that selection and updates hostUrl automatically",
+        "If multiple servers are discovered and there is no prior selection, Android does not auto-pick one or show a blocking chooser",
+        "./gradlew assembleDebug succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-094C",
+      "title": "Android: show discovery state and manual fallback in Config screen",
+      "description": "As an Android user, I want the Config screen to explain whether my current LAN endpoint came from discovery, a restored selection, or a manual URL fallback.",
+      "acceptanceCriteria": [
+        "Config screen lists discovered servers with enough detail to distinguish them, including selection state and auth requirement",
+        "Config screen shows whether the active connection source is auto_discovered, restored_selection, or manual_fallback",
+        "When multiple servers are present with no prior selection, the screen shows passive guidance instead of a blocking chooser",
+        "User can explicitly switch between a discovered server selection and manual URL entry",
+        "./gradlew assembleDebug succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-095",
+      "title": "Shared fallback: preserve manual URLs when discovery fails",
+      "description": "As a user, I want discovery failures to stay non-fatal so a valid manual URL keeps working when mDNS is unavailable or the selected server is not rediscovered.",
+      "acceptanceCriteria": [
+        "If startup discovery finds no matching selected server, the client keeps any previously saved manual URL instead of erasing it",
+        "Discovery absence or failure does not block send or receive when the manual URL is valid",
+        "Clients expose a no servers found or discovery unavailable state distinct from multi-server waiting-for-selection state",
+        "Typecheck passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-096",
+      "title": "Diagnostics and regression coverage for DHCP discovery restore",
+      "description": "As a developer, I need logs and tests around LAN discovery restore so DHCP-related regressions can be diagnosed quickly and kept from returning.",
+      "acceptanceCriteria": [
+        "Clients log discovery start, resolved server_id, unique-server auto-select, restored selection, multi-server deferred-to-config, and no-match fallback events",
+        "Automated coverage exists where practical for unique-server auto-select, persisted server_id restore after host change, multi-server no-auto-pick, and manual fallback preservation",
+        "Manual verification checklist covers a DHCP-style host change scenario on macOS, Windows, and Android",
+        "Typecheck passes"
+      ],
+      "priority": 14,
+      "passes": false,
       "notes": ""
     }
   ]

@@ -1,180 +1,29 @@
 # Ralph Progress Log
-Started: 2026-04-17
+Started: 2026-04-19
 
 ## Current Iteration
-Targeted Auto-Delivery Reliability
+LAN Server Auto-Discovery Reliability
 
-US-069A: Server: track targeted delivery lifecycle state                 [x]
-US-069B: Server: expose receiver connectivity on devices list            [x]
-US-070:  Server: confirm targeted delivery on successful raw consume     [x]
-US-071:  Server: fallback targeted clips back into recoverable queue     [x]
-US-072:  Server: add targeted delivery diagnostics and regression cover  [x]
-US-073A: macOS: surface self receiver status and SSE health              [x]
-US-073B: macOS: show target device receiver readiness in picker          [x]
-US-073C: macOS: targeted auto-receive failure visible and recoverable    [x]
-US-074A: Windows: surface self receiver status and SSE health            [x]
-US-074B: Windows: target device readiness and fallback messaging         [x]
-US-074C: Windows: targeted auto-receive failure visible and recoverable  [x]
-US-075A: Android: expose foreground receiver status                      [x]
-US-075B: Android: preserve queue fallback on targeted failure            [x]
-US-076:  Shared UX: label queue mode vs targeted auto-delivery           [x]
+US-090A: Server: persist a stable server_id and expose it on health      [ ]
+US-090B: Server: advertise server_id in mDNS metadata                    [ ]
+US-091:  Shared contract: define discovery selection rules               [ ]
+US-092A: macOS: persist selected server by server_id                     [ ]
+US-092B: macOS: start discovery on launch and restore selection          [ ]
+US-092C: macOS: show discovery state and manual fallback in Config UI    [ ]
+US-093A: Windows: persist selected server by server_id                   [ ]
+US-093B: Windows: start discovery on launch and restore selection        [ ]
+US-093C: Windows: show discovery state and manual fallback in UI         [ ]
+US-094A: Android: persist selected server by server_id                   [ ]
+US-094B: Android: auto-start discovery and restore selection             [ ]
+US-094C: Android: show discovery state and manual fallback in Config     [ ]
+US-095:  Shared fallback: preserve manual URLs when discovery fails      [ ]
+US-096:  Diagnostics and regression coverage for discovery restore       [ ]
 
 ## Codebase Patterns
 - Active Ralph run files live under `scripts/ralph/`; `ralph.sh` reads `scripts/ralph/prd.json` and `scripts/ralph/progress.txt`
 - The repo root `prd.json` can mirror the active iteration for humans, but the autonomous loop follows `scripts/ralph/prd.json`
-- Targeted LAN delivery already uses `server`-stored clips plus SSE notify plus client `GET /clips/:id/raw`; do not introduce client-side inbound APIs unless a later PRD explicitly changes the architecture
-- Server delivery-state lifecycle starts targeted clips in `targeted_pending`; only untargeted clips use `ready` immediately, so new server/client work should not assume every sendable clip is `ready`
-- Timeout-driven targeted fallback is keyed off persisted `targeted_pending_at`; set it only when a clip actually enters `targeted_pending` (single upload or chunked complete), not when a chunked upload is first initialized
-- Server targeted SSE events are emitted from `server/handlers/clips.go` and `server/handlers/uploads.go`, and replayed on connect from `server/handlers/devices.go`
-- SSE reconnect replay should query `targeted_pending` clips from SQLite in oldest-first order so reconnects preserve delivery attempts without turning replay into a new delivery state
-- `/api/v1/devices` receiver presence is computed from the live `server/sse.Broker`, not persisted in SQLite; fresh active SSE subscriptions are `online`, stale active subscriptions are `degraded`, and no subscriber is `offline`
-- Targeted `GET /api/v1/clips/:id/raw` now requires `?device_id=<target>` and is the authoritative delivery acknowledgement path; only that addressed-device consume should transition a clip to `targeted_delivered`
-- Consumed clip rows should remain in SQLite until cleanup runs so duplicate raw consumes keep returning `410 Gone` and targeted delivery state stays inspectable after the first successful read
-- macOS targeted auto-receive lives in `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`
-- macOS LAN receiver readiness UI should bind to `ConfigStore.sseConnectionState` plus `sseStatusDetail`, because those are driven by the live SSE loop and retry backoff rather than by saved config alone
-- macOS targeted queue and SSE auto-receive should build raw clip URLs through a shared helper that appends `?device_id=<self>` so targeted fallback recovery and targeted delivery acknowledgement use the same server path
-- Windows targeted auto-receive lives in `windows/CopyEverywhere/MainWindow.xaml.cs`
-- Windows LAN receiver readiness UI should be driven from `MainWindow`'s live SSE loop state and retry detail, not from saved host/device config alone
-- When repopulating the Windows target-device `ComboBox`, suppress `SelectionChanged` side effects during the refresh and recompute the selected device's cached receiver status from the freshly loaded `/devices` payload before updating the warning UI
-- Windows targeted SSE auto-receive should consume raw clips with `device_id=<self>` and show a queue-fallback toast only on real auto-receive failures, so targeted delivery acknowledgement and manual recovery use the same server path
-- Android targeted auto-receive lives in `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`
-- Android LAN receiver readiness should bind to the shared `CopyEverywhereService.receiverHealth` state so the foreground notification, main screen, and config screen all reflect the same live SSE connection and retry status
-- Android targeted raw consumes must pass `device_id=<self>` from both SSE auto-receive and manual queue recovery, otherwise targeted delivery acknowledgement fails and fallback clips cannot be recovered through the authoritative server path
-- Cross-platform delivery UX should use the same three user-facing states: `Queue mode`, `Targeted auto-delivery` (waiting on the target), and `Queue fallback` for `targeted_fallback` recovery items
-
----
-
-## 2026-04-17 - Iteration setup
-- Created the active iteration PRD for "Targeted Auto-Delivery Reliability" in both repo root and `scripts/ralph/`
-- Created the active iteration progress tracker at `scripts/ralph/progress.txt`
-- Next implementation story is `US-069A` with server delivery-state persistence
-- **Learnings for future iterations:**
-  - `ralph.sh` does not read the repo root `prd.json`; it reads `scripts/ralph/prd.json`
-  - Keep `AGENTS.md` and `scripts/ralph/CLAUDE.md` aligned with the actual active file locations to avoid the loop reading stale inputs
----
-## 2026-04-17 00:42:44 CST - US-069A
-- Implemented persisted targeted delivery lifecycle states on the server by introducing shared clip-status constants and saving targeted single uploads and completed chunked uploads as `targeted_pending` instead of `ready`
-- Files changed: `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/clips_test.go`, `server/handlers/uploads.go`, `server/handlers/uploads_test.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
-- Learnings for future iterations:
-  - Use the shared `db.ClipStatus*` constants instead of hardcoded strings when adding new targeted-delivery transitions
-  - Targeted uploads are persisted as `targeted_pending` before and after SSE notification, which preserves the distinction between notification and confirmed delivery
-  - Queue queries still only include `ready` clips at this stage, so future fallback work must update queue visibility deliberately
----
-## 2026-04-17 09:16:05 CST - US-069B
-- Implemented live receiver connectivity reporting on `GET /api/v1/devices` by deriving `receiver_status` from active SSE subscription freshness, with `online`, `degraded`, and `offline` states
-- Files changed: `server/handlers/devices.go`, `server/handlers/devices_test.go`, `server/sse/broker.go`, `server/sse/broker_test.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `go test ./sse ./handlers` passed in `server/`; `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
-- Learnings for future iterations:
-  - Keep device presence in the shared SSE broker so `/devices` can reflect live auto-receive readiness without adding more database state
-  - Refresh broker presence only after successful stream writes; subscribe/unsubscribe alone should not imply long-lived freshness forever
-  - Use a custom broker clock/TTL in tests to cover stale-heartbeat behavior without slow sleeps
----
-## 2026-04-17 09:29:58 CST - US-070
-- Implemented targeted raw-consume acknowledgement by requiring `device_id` on targeted `GET /clips/:id/raw`, atomically marking addressed-device consumes as `targeted_delivered`, and rejecting missing or wrong-device targeted consume attempts before they can claim the clip
-- Files changed: `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/clips_test.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
-- Learnings for future iterations:
-  - Use `ConsumeTargetedClip()` when a code path must verify the addressed device and transition the clip to `targeted_delivered` atomically
-  - Do not inline-delete consumed clip rows in `GetRaw`; cleanup should own deletion so duplicate-consume `410 Gone` behavior and targeted delivery state remain observable
-  - Targeted raw-consume tests should cover missing `device_id`, wrong-device attempts, success, and duplicate consume behavior together because they share the same handler branch
----
-## 2026-04-17 09:36:03 CST - US-071
-- Implemented timeout-driven targeted fallback on the server by persisting `targeted_pending_at`, transitioning stale `targeted_pending` clips to `targeted_fallback` during cleanup, and keeping fallback clips recoverable through the queue for the addressed device
-- Files changed: `CLAUDE.md`, `server/cleanup/cleanup.go`, `server/cleanup/cleanup_test.go`, `server/config/config.go`, `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/clips_test.go`, `server/handlers/uploads.go`, `server/handlers/uploads_test.go`, `server/main.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `go test ./db ./cleanup ./handlers` passed in `server/`; `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
-- Learnings for future iterations:
-  - Queue listing now intentionally exposes only untargeted `ready` clips plus targeted `targeted_fallback` clips, and `delivery_state` distinguishes normal queue items from fallback ones
-  - Use `TARGETED_FALLBACK_SECONDS` to tune when targeted auto-delivery falls back to manual recovery without changing clip TTL cleanup behavior
-  - Manual targeted recovery still uses `GET /clips/:id/raw?device_id=<target>` and reuses the same targeted consume path after fallback
----
-## 2026-04-17 09:40:25 CST - US-072
-- Added targeted-delivery diagnostics on the server for targeted clip creation, SSE notify, replay-on-reconnect, raw consume confirmation, fallback transition, and expiry cleanup; also restored SSE reconnect replay for pending targeted clips
-- Files changed: `server/cleanup/cleanup.go`, `server/db/db.go`, `server/db/db_test.go`, `server/handlers/clips.go`, `server/handlers/devices.go`, `server/handlers/devices_test.go`, `server/handlers/uploads.go`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `go test ./db ./handlers ./cleanup` passed in `server/`; `go test ./...` passed in `server/`; `go build ./...` passed in `server/`
-- Learnings for future iterations:
-  - Reconnect replay should only include still-unconsumed `targeted_pending` clips; fallback and delivered clips must stay out of SSE replay
-  - Targeted lifecycle logs are most useful when they include clip ID, target device, and the transition point so server-side delivery traces can be reconstructed from logs alone
-  - Reconnect regression tests should use `httptest.NewServer` and real stream disconnect/reconnect cycles, because recorder-based tests do not exercise SSE replay paths
----
-## 2026-04-17 09:43:35 CST - US-073A
-- Implemented live macOS LAN receiver health state in `ConfigStore` and surfaced it in the configuration UI as connected, reconnecting, or disconnected with retry/backoff detail from the real SSE loop
-- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`
-- Learnings for future iterations:
-  - Drive macOS targeted auto-delivery readiness from the SSE task lifecycle itself, not from whether host/token/device config exists
-  - Keep reconnect detail user-visible during backoff so “reconnecting” explains when the next retry will happen instead of looking stuck
-  - `connectSSE()` should treat an ended byte stream as a dropped connection so the retry state updates immediately
----
-## 2026-04-17 10:04:28 CST - US-073B
-- Implemented macOS target-device readiness indicators by parsing `receiver_status` from `GET /api/v1/devices`, showing online/degraded/offline state in the picker, and surfacing the selected target's receiver health inline
-- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`
-- Learnings for future iterations:
-  - The macOS target picker should bind directly to server `receiver_status` so sender readiness reflects live `/api/v1/devices` data instead of stale local heuristics
-  - Selected offline or degraded targets need a send-surface warning, not just a picker badge, because most sends happen from `MainPanelView`
-  - Keep queue-mode selection (`targetDeviceID == nil`) free of readiness warnings so queue send remains the neutral fallback path
----
-## 2026-04-17 09:49:10 CST - US-073C
-- Implemented macOS targeted auto-receive recovery messaging by surfacing a non-intrusive inline warning when SSE auto-receive fails and reloading the queue so the clip remains manually recoverable
-- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`
-- Learnings for future iterations:
-  - Parse server `delivery_state` into the macOS queue model so targeted fallback clips can be labeled distinctly from ordinary queue items
-  - Route macOS manual receive and SSE auto-receive through the same raw clip URL helper so targeted fallback uses the required `device_id` acknowledgement path
-  - Auto-receive failures should trigger a queue refresh instead of failing silently, otherwise fallback clips remain recoverable on the server but invisible in the client
----
-## 2026-04-17 09:52:21 CST - US-074A
-- Implemented live Windows receiver-status UI for LAN mode by tracking SSE health in `MainWindow`, distinguishing connected, reconnecting, and disconnected states, and surfacing retry/backoff detail in both the config area and LAN queue panel
-- Files changed: `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `dotnet --version` failed (`dotnet: command not found`); `dotnet build` could not run on this machine because the .NET SDK is unavailable
-- Learnings for future iterations:
-  - Keep Windows SSE receiver readiness tied to the actual stream loop lifecycle so reconnecting state can show retry timing instead of inferring readiness from saved config
-  - Treat an ended SSE stream as a dropped connection and transition back to reconnecting immediately so the UI does not look falsely connected
-  - Mirror the same LAN receiver status in both config and queue surfaces because targeted auto-delivery trust depends on visibility before and after registration
----
-## 2026-04-17 09:58:55 CST - US-074B
-- Implemented Windows target-device readiness UI by parsing `receiver_status` from `/api/v1/devices`, rendering online/degraded/offline state directly inside the target picker, and showing an inline targeted-delivery readiness banner for the selected device
-- Files changed: `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `windows/CopyEverywhere/Services/ApiClient.cs`, `windows/CopyEverywhere/Services/ConfigStore.cs`, `windows/CopyEverywhere/Services/SendService.cs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `which dotnet` / `dotnet --version` confirmed the .NET SDK is unavailable on this machine (`dotnet: command not found`); `dotnet build` could not run locally for this Windows story
-- Learnings for future iterations:
-  - Windows send feedback should use the selected target's cached `receiver_status` so drag-drop, Ctrl+V, floating-ball sends, and form sends all describe the same auto-delivery versus queue-fallback expectation
-  - Queue rows can distinguish targeted fallback without new endpoints by parsing server `delivery_state` and surfacing a dedicated badge in the existing queue list
-  - Windows queue receives should pass `device_id` on raw clip consumes so targeted fallback items remain manually recoverable through the authoritative delivery-acknowledgement path
----
-## 2026-04-17 10:18:40 CST - US-074C
-- Implemented Windows targeted auto-receive recovery feedback by routing SSE raw consumes through `device_id=<self>`, showing a toast when automatic receive fails and the clip remains recoverable in queue, and preserving successful text/image clipboard updates plus file saves to Downloads
-- Files changed: `windows/CopyEverywhere/MainWindow.xaml.cs`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `which dotnet` returned `dotnet not found`; `dotnet --version` failed with `command not found`; `dotnet build` could not run on this machine because the .NET SDK is unavailable
-- Learnings for future iterations:
-  - Windows targeted SSE auto-receive must use the same `device_id`-qualified raw consume path as manual queue receive, otherwise targeted delivery acknowledgement fails silently
-  - SSE diagnostics should log connect, disconnect, and retry timing from the live stream loop so receiver-health bugs can be traced without reproducing under a debugger
-  - For targeted auto-receive failures, refresh the queue immediately after surfacing the toast so the fallback clip is visible for manual recovery
----
-## 2026-04-17 10:05:17 CST - US-075A
-- Implemented Android LAN receiver health tracking from the live SSE loop, including connected, reconnecting, and unavailable states with retry/backoff detail, and surfaced that same state in the foreground-service notification plus the main and config screens
-- Files changed: `android/app/src/main/java/com/copyeverywhere/app/data/SseClient.kt`, `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `./gradlew assembleDebug` could not run in `android/` because no Java runtime is installed on this machine (`Unable to locate a Java Runtime`); manual Android build verification is still required on a machine with Java/Android tooling
-- Learnings for future iterations:
-  - Keep Android LAN receiver readiness in a shared `StateFlow` owned by `CopyEverywhereService` so notification text and Compose screens stay in sync with the actual SSE loop
-  - Have `SseClient.connect()` report retry delay and disconnect reason to callers, otherwise reconnecting UI can only show a vague disconnected state with no backoff context
-  - Reset the shared receiver-health state in `CopyEverywhereService.onDestroy()` so Compose does not keep showing stale “connected” state after the foreground service stops
----
-## 2026-04-17 10:33:54 CST - US-075B
-- Implemented Android targeted fallback recovery by parsing server `delivery_state`, badging fallback queue rows, surfacing an inline recovery notice when targeted auto-receive fails, and routing both SSE auto-receive and manual queue receives through the `device_id=<self>` raw-consume path
-- Files changed: `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`, `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `./gradlew assembleDebug` could not run in `android/` because no Java runtime is installed on this machine (`Unable to locate a Java Runtime`); manual Android build verification is still required on a machine with Java/Android tooling
-- Learnings for future iterations:
-  - Keep Android fallback messaging in `CopyEverywhereService` so background SSE failures can update both the transfer notification and the foreground Compose UI through one shared `StateFlow`
-  - Parse server `delivery_state` into the queue model and label `targeted_fallback` rows directly in the list instead of trying to infer fallback from target-device fields
-  - Clear the shared fallback notice once the user manually recovers or dismisses the queued item so old targeted-failure warnings do not linger after recovery
----
-## 2026-04-17 10:15:12 CST - US-076
-- Implemented shared cross-platform delivery wording so macOS, Windows, and Android now label queue mode versus targeted auto-delivery explicitly, surface clearer post-send status, and badge `targeted_fallback` queue items as queue recovery
-- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/MainPanelView.swift`, `windows/CopyEverywhere/MainWindow.xaml`, `windows/CopyEverywhere/MainWindow.xaml.cs`, `android/app/src/main/java/com/copyeverywhere/app/data/ApiClient.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainScreen.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/main/MainViewModel.kt`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
-- Quality checks run and result: `swift build` passed in `macos/CopyEverywhere/`; `git diff --check` passed; `dotnet build` could not run because `dotnet` is unavailable on this machine; `./gradlew assembleDebug` could not run because no Java runtime is installed; browser verification requested by the story could not be performed because no `dev-browser` skill/tool is configured in this session
-- Learnings for future iterations:
-  - Keep delivery copy aligned across macOS, Windows, and Android so queue-mode sends, targeted waiting state, and queue fallback recovery read as the same feature on every client
-  - When exposing Android target selection UX, parse server `receiver_status` into the shared `Device` model instead of inventing platform-local readiness heuristics
-  - Treat `targeted_fallback` rows as recovery affordances in queue UIs by pairing an explicit badge with a short “click/tap to recover” message
----
+- Existing LAN discovery already exists on all three clients: macOS `BonjourBrowser`, Windows `MdnsDiscoveryService`, Android `MdnsDiscoveryService`
+- Current discovered-server models use host and port for display identity, but DHCP-safe persistence should use a stable server-side `server_id`
+- Manual Host URL entry remains the fallback path; new discovery work should not delete or block a valid manual configuration
+- Multi-server discovery should remain passive: do not add modal choosers or startup popups; guide the user to Config for explicit selection
+- This iteration only guarantees discovery restore on app restart or LAN mode re-entry, not live hot switching while already connected
