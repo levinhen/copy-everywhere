@@ -45,7 +45,13 @@ struct ConfigView: View {
             Text("Host URL")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
-            TextField("https://your-server.com:8080", text: $configStore.hostURL)
+            TextField(
+                "https://your-server.com:8080",
+                text: Binding(
+                    get: { configStore.hostURL },
+                    set: { configStore.updateManualHostURL($0) }
+                )
+            )
                 .textFieldStyle(.roundedBorder)
         }
 
@@ -504,7 +510,7 @@ struct ConfigView: View {
                                         .font(.caption2)
                                         .foregroundColor(.orange)
                                 }
-                                if configStore.hostURL == "http://\(server.host):\(server.port)" {
+                                if configStore.isSelectedDiscoveredServer(server) {
                                     Image(systemName: "checkmark.circle.fill")
                                         .foregroundColor(.green)
                                 }
@@ -513,7 +519,7 @@ struct ConfigView: View {
                             .padding(.horizontal, 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(configStore.hostURL == "http://\(server.host):\(server.port)"
+                                    .fill(configStore.isSelectedDiscoveredServer(server)
                                           ? Color.accentColor.opacity(0.1)
                                           : Color.clear)
                             )

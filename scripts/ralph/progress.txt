@@ -5,6 +5,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - Persist the LAN server identity in `STORAGE_PATH/server_id` via `config.LoadOrCreateServerID()`; expose the exact same value from `/health` so clients can treat host/IP changes as the same server.
 - Keep mDNS TXT metadata in lockstep with `/health` identity fields: when discovery clients need durable server identity, advertise the same `server_id` value in both places and cover it with a real `mdns.Query` test.
 - For cross-platform LAN discovery iterations, write the behavior contract once in `tasks/lan-discovery-selection-contract.md` and mirror it in typed client models (`server_id` + `auto_discovered` / `restored_selection` / `manual_fallback`) before implementing per-platform restore logic.
+- On macOS LAN config, discovered-server persistence must key selection/highlighting off `server_id` when available, and manual Host URL edits must clear stale discovered selection metadata back to `manual_fallback`.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -41,4 +42,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - Android Gradle on this machine still needs both `JAVA_HOME=/opt/homebrew/opt/openjdk@17` and `ANDROID_HOME=/Users/liyunhan/Library/Android/sdk`; without both, the check fails before Kotlin compilation.
   - Useful context
   - The discovery models on all three clients now accept `server_id`, but the actual startup auto-select and restore behavior still belongs to the later platform-specific stories.
+---
+## 2026-04-19 11:39 CST - US-092A
+- Tightened macOS LAN persistence so discovered selections stay keyed by `server_id`, manual Host URL edits clear stale discovered-server metadata, and the Config UI highlights the active discovered server by stable identity instead of host/port alone.
+- Files changed: `macos/CopyEverywhere/Sources/CopyEverywhere/BonjourBrowser.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigStore.swift`, `macos/CopyEverywhere/Sources/CopyEverywhere/ConfigView.swift`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `swift build` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - Keep the Host URL text field on the manual-edit path so it can explicitly downgrade LAN state to `manual_fallback` when the user types over a discovered endpoint.
+  - Gotchas encountered
+  - Reusing `hostURL` equality for discovered selection state leaves stale checkmarks after DHCP changes; the UI and persistence layer both need the same `server_id`-first match helper.
+  - Useful context
+  - `US-092B` can build on `selectedLanServer.serverID` and `lanEndpointSource` without reworking the manual fallback persistence again.
 ---

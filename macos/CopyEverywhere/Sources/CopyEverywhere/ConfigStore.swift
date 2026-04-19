@@ -378,7 +378,7 @@ final class ConfigStore: ObservableObject {
     }
 
     func selectDiscoveredServer(_ server: DiscoveredServer) {
-        hostURL = "http://\(server.host):\(server.port)"
+        hostURL = server.endpointURLString
         serverAuthRequired = server.authRequired
         if let serverID = server.serverID {
             selectedLanServer = StoredLanServerSelection(
@@ -393,6 +393,30 @@ final class ConfigStore: ObservableObject {
             accessToken = ""
         }
         lanEndpointSource = .restoredSelection
+    }
+
+    func updateManualHostURL(_ value: String) {
+        hostURL = value
+
+        guard let selectedLanServer else {
+            lanEndpointSource = .manualFallback
+            return
+        }
+
+        let trimmedValue = normalizedHostURL(value)
+        let selectedURL = normalizedHostURL("http://\(selectedLanServer.host):\(selectedLanServer.port)")
+        if trimmedValue != selectedURL {
+            self.selectedLanServer = nil
+            lanEndpointSource = .manualFallback
+        }
+    }
+
+    func isSelectedDiscoveredServer(_ server: DiscoveredServer) -> Bool {
+        if let serverID = server.serverID,
+           let selectedServerID = selectedLanServer?.serverID {
+            return serverID == selectedServerID
+        }
+        return normalizedHostURL(hostURL) == normalizedHostURL(server.endpointURLString)
     }
 
     // MARK: - Bluetooth Pairing & Connection
@@ -520,6 +544,7 @@ final class ConfigStore: ObservableObject {
     // MARK: - Keychain Operations
 
     func save() {
+        normalizeLanSelectionBeforeSave()
         UserDefaults.standard.set(hostURL, forKey: hostKey)
         UserDefaults.standard.set(accessToken, forKey: tokenKey)
         UserDefaults.standard.set(lanEndpointSource.rawValue, forKey: lanEndpointSourceKey)
@@ -601,18 +626,55 @@ final class ConfigStore: ObservableObject {
     private func loadPersistedConfig() {
         hostURL = UserDefaults.standard.string(forKey: hostKey) ?? ""
         accessToken = UserDefaults.standard.string(forKey: tokenKey) ?? ""
-        if let rawSource = UserDefaults.standard.string(forKey: lanEndpointSourceKey),
-           let source = LanEndpointSource(rawValue: rawSource) {
-            lanEndpointSource = source
-        }
         if let data = UserDefaults.standard.data(forKey: selectedLanServerKey),
            let selection = try? JSONDecoder().decode(StoredLanServerSelection.self, from: data) {
             selectedLanServer = selection
+        }
+        if let rawSource = UserDefaults.standard.string(forKey: lanEndpointSourceKey),
+           let source = LanEndpointSource(rawValue: rawSource) {
+            lanEndpointSource = source
+        } else if let selection = selectedLanServer {
+            lanEndpointSource = selection.source
         }
         isConfigured = !hostURL.isEmpty
         if isConfigured {
             sseStatusDetail = "Waiting to connect targeted auto-delivery."
         }
+    }
+
+    private func normalizeLanSelectionBeforeSave() {
+        let trimmedHostURL = normalizedHostURL(hostURL)
+        if trimmedHostURL.isEmpty {
+            selectedLanServer = nil
+            lanEndpointSource = .manualFallback
+            return
+        }
+
+        guard let selectedLanServer else {
+            lanEndpointSource = .manualFallback
+            return
+        }
+
+        let selectedURL = normalizedHostURL("http://\(selectedLanServer.host):\(selectedLanServer.port)")
+        guard trimmedHostURL == selectedURL else {
+            self.selectedLanServer = nil
+            lanEndpointSource = .manualFallback
+            return
+        }
+
+        self.selectedLanServer = StoredLanServerSelection(
+            serverID: selectedLanServer.serverID,
+            name: selectedLanServer.name,
+            host: selectedLanServer.host,
+            port: selectedLanServer.port,
+            source: lanEndpointSource
+        )
+    }
+
+    private func normalizedHostURL(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     private func applyLocalServerConfigIfNeeded() {

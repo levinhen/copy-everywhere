@@ -33,6 +33,10 @@ struct DiscoveredServer: Identifiable, Equatable, Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
     }
+
+    var endpointURLString: String {
+        "http://\(host):\(port)"
+    }
 }
 
 @MainActor
