@@ -11,6 +11,7 @@ Started: Sun Apr 19 11:27:57 CST 2026
 - On Windows startup restore, keep mDNS browsing running from launch but apply discovery-driven HostUrl rewrites only while `TransferMode == LanServer`; restore by `SelectedLanServer.ServerId`, and only auto-pick when discovery finds exactly one server and there is no saved/manual URL fallback.
 - On Windows LAN config screens, derive discovery guidance from `LanEndpointSource`, `SelectedLanServer`, and current Bonjour result count, and expose an explicit manual-fallback action instead of making users edit `HostUrl` just to clear discovered selection state.
 - On Android LAN config, persist discovered selection and manual Host URL edits through `ConfigStore` helpers so `StoredLanServerSelection.serverId` remains the durable match key, snake_case source values stay compatible on disk, and manual text edits clear stale discovered selection state before later restore/UI stories build on it.
+- On Android LAN startup restore, keep `MdnsDiscoveryService` under `CopyEverywhereService` instead of the Config screen, expose discovered servers through a shared `StateFlow`, restore by `StoredLanServerSelection.serverId`, and only auto-select a lone discovered server when there is no saved selection and no manual Host URL fallback.
 
 ## 2026-04-19 11:45 CST - US-090A
 - Implemented durable server identity generation/loading in `server/config` and exposed `server_id` from the Go server `/health` response.
@@ -131,4 +132,16 @@ Started: Sun Apr 19 11:27:57 CST 2026
   - `LanEndpointSource` now needs compatibility parsing for both the shared snake_case contract values and any older enum-name strings already on disk, otherwise persisted discovery state silently falls back to manual mode after upgrades.
   - Useful context
   - `ConfigStore.selectDiscoveredServer(...)`, `updateManualHostUrl(...)`, and `isSelectedDiscoveredServer(...)` are now in place for `US-094B` and `US-094C` to build startup restore logic and selection highlighting without reworking persistence again.
+---
+## 2026-04-19 12:05 CST - US-094B
+- Moved Android LAN discovery into `CopyEverywhereService` so entering LAN mode now starts mDNS automatically, publishes shared discovered-server state, auto-selects a lone fresh server, and restores a persisted `server_id` selection before the Config screen is opened.
+- Files changed: `android/app/src/main/java/com/copyeverywhere/app/service/CopyEverywhereService.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigViewModel.kt`, `android/app/src/main/java/com/copyeverywhere/app/ui/config/ConfigScreen.kt`, `CLAUDE.md`, `scripts/ralph/prd.json`, `scripts/ralph/progress.txt`
+- Quality checks run and result: `JAVA_HOME=/opt/homebrew/opt/openjdk@17 ANDROID_HOME=/Users/liyunhan/Library/Android/sdk ./gradlew assembleDebug` passed; `git diff --check` passed
+- Learnings for future iterations:
+  - Patterns discovered
+  - Android DHCP recovery is more reliable when the foreground service owns mDNS discovery and SSE restarts, while the Config screen only renders the shared discovery state.
+  - Gotchas encountered
+  - Page-scoped discovery clears LAN restore behavior as soon as the settings screen closes, so startup restore must not depend on `DisposableEffect` or a config-only `MdnsDiscoveryService`.
+  - Useful context
+  - The Android Config screen now reads `CopyEverywhereService.discoveredLanServers`, which gives `US-094C` a stable source for source badges and selection UI without reintroducing a second discovery lifecycle.
 ---

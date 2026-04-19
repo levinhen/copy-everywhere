@@ -83,14 +83,6 @@ fun ConfigScreen(
     val transferMode by viewModel.transferMode.collectAsState()
     val lanReceiverHealth by viewModel.lanReceiverHealth.collectAsState()
 
-    // Start/stop mDNS discovery with screen lifecycle (only in LAN mode)
-    DisposableEffect(transferMode) {
-        if (transferMode == TransferMode.LanServer) {
-            viewModel.startDiscovery()
-        }
-        onDispose { viewModel.stopDiscovery() }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(

@@ -29,6 +29,9 @@ import com.copyeverywhere.app.data.BluetoothTransferHeader
 import com.copyeverywhere.app.data.ClipAlreadyConsumedException
 import com.copyeverywhere.app.data.ClipResponse
 import com.copyeverywhere.app.data.ConfigStore
+import com.copyeverywhere.app.data.DiscoveredServer
+import com.copyeverywhere.app.data.LanEndpointSource
+import com.copyeverywhere.app.data.MdnsDiscoveryService
 import com.copyeverywhere.app.data.SseClient
 import com.copyeverywhere.app.data.TransferMode
 import kotlinx.coroutines.CoroutineScope
@@ -57,7 +60,9 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var sseJob: Job? = null
+    private var lanDiscoveryJob: Job? = null
     private lateinit var configStore: ConfigStore
+    private lateinit var mdnsDiscovery: MdnsDiscoveryService
     private val apiClient = ApiClient()
     private val sseClient = SseClient()
 
@@ -81,6 +86,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         super.onCreate()
         instance = this
         configStore = ConfigStore(applicationContext)
+        mdnsDiscovery = MdnsDiscoveryService(applicationContext)
         bluetoothService = BluetoothService(applicationContext).also {
             it.listener = this
         }
@@ -93,10 +99,12 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
             when (mode) {
                 TransferMode.LanServer -> {
                     startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("LAN — Listening for clips..."))
+                    startLanDiscovery()
                     startSse()
                 }
                 TransferMode.Bluetooth -> {
                     startForeground(NOTIFICATION_ID_SERVICE, buildServiceNotification("Bluetooth — Waiting for connection..."))
+                    stopLanDiscovery()
                     startBluetoothServer()
                     autoReconnectBluetooth()
                 }
@@ -112,9 +120,11 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
     override fun onDestroy() {
         instance = null
         sseJob?.cancel()
+        stopLanDiscovery()
         bluetoothService?.listener = null
         bluetoothService?.destroy()
         targetedFallbackNotice.value = null
+        discoveredLanServers.value = emptyList()
         receiverHealth.value = LanReceiverHealth(
             status = LanReceiverStatus.Unavailable,
             detail = "Foreground service is not running"
@@ -265,14 +275,81 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
                     LanReceiverStatus.Reconnecting,
                     "Starting LAN receiver..."
                 )
+                startLanDiscovery()
                 startSse()
             }
             TransferMode.Bluetooth -> {
+                stopLanDiscovery()
                 stopSse()
                 startBluetoothServer()
                 updateServiceNotification("Bluetooth — Waiting for connection...")
                 scope.launch { autoReconnectBluetooth() }
             }
+        }
+    }
+
+    private fun startLanDiscovery() {
+        if (lanDiscoveryJob == null) {
+            lanDiscoveryJob = scope.launch {
+                mdnsDiscovery.servers.collect { servers ->
+                    discoveredLanServers.value = servers
+                    handleDiscoveredServers(servers)
+                }
+            }
+        }
+        mdnsDiscovery.startDiscovery()
+    }
+
+    private fun stopLanDiscovery() {
+        mdnsDiscovery.stopDiscovery()
+        lanDiscoveryJob?.cancel()
+        lanDiscoveryJob = null
+        discoveredLanServers.value = emptyList()
+    }
+
+    private suspend fun handleDiscoveredServers(servers: List<DiscoveredServer>) {
+        if (configStore.transferMode.first() != TransferMode.LanServer) return
+
+        val selectedServer = configStore.selectedLanServer.first()
+        if (selectedServer != null) {
+            val restoredServer = servers.firstOrNull { discovered ->
+                !discovered.serverId.isNullOrBlank() && discovered.serverId == selectedServer.serverId
+            } ?: return
+            applyDiscoveredLanServer(restoredServer, LanEndpointSource.RestoredSelection)
+            return
+        }
+
+        val currentHostUrl = configStore.hostUrl.first()
+        if (servers.size == 1 && currentHostUrl.isBlank()) {
+            applyDiscoveredLanServer(servers.first(), LanEndpointSource.AutoDiscovered)
+        }
+    }
+
+    private suspend fun applyDiscoveredLanServer(
+        server: DiscoveredServer,
+        source: LanEndpointSource
+    ) {
+        val previousHostUrl = configStore.hostUrl.first()
+        val previousSelectedServer = configStore.selectedLanServer.first()
+        val previousSource = configStore.lanEndpointSource.first()
+        val discoveredUrl = buildLanServerUrl(server)
+
+        val sameSelection =
+            previousSelectedServer?.serverId == server.serverId &&
+                normalizeHostUrl(previousHostUrl).equals(normalizeHostUrl(discoveredUrl), ignoreCase = true) &&
+                previousSource == source
+        if (sameSelection) return
+
+        Log.d(
+            TAG,
+            "Applying LAN discovery source=${source.wireValue} serverId=${server.serverId ?: "unknown"} url=$discoveredUrl"
+        )
+        configStore.selectDiscoveredServer(server, source)
+
+        val hostChanged = !normalizeHostUrl(previousHostUrl)
+            .equals(normalizeHostUrl(discoveredUrl), ignoreCase = true)
+        if (hostChanged || sseJob == null) {
+            startSse()
         }
     }
 
@@ -484,6 +561,12 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
         updateServiceNotification("$headline — $detail")
     }
 
+    private fun normalizeHostUrl(value: String): String =
+        value.trim().trimEnd('/')
+
+    private fun buildLanServerUrl(server: DiscoveredServer): String =
+        "http://${server.host}:${server.port}"
+
     companion object {
         private const val TAG = "CopyEverywhereService"
         const val CHANNEL_SERVICE = "copyeverywhere_service"
@@ -500,6 +583,7 @@ class CopyEverywhereService : Service(), BluetoothService.Listener {
                 detail = "Foreground service is not running"
             )
         )
+        val discoveredLanServers = MutableStateFlow<List<DiscoveredServer>>(emptyList())
         val targetedFallbackNotice = MutableStateFlow<String?>(null)
 
         fun start(context: Context) {

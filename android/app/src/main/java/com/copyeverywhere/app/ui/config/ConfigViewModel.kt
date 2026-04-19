@@ -19,7 +19,6 @@ import com.copyeverywhere.app.data.BluetoothSession
 import com.copyeverywhere.app.data.ConfigStore
 import com.copyeverywhere.app.data.Device
 import com.copyeverywhere.app.data.DiscoveredServer
-import com.copyeverywhere.app.data.MdnsDiscoveryService
 import com.copyeverywhere.app.data.PairedBluetoothDevice
 import com.copyeverywhere.app.data.LanEndpointSource
 import com.copyeverywhere.app.data.StoredLanServerSelection
@@ -51,7 +50,6 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     val configStore = ConfigStore(application)
     private val apiClient = ApiClient()
-    private val mdnsDiscovery = MdnsDiscoveryService(application)
 
     val hostUrl: StateFlow<String> = configStore.hostUrl
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), "")
@@ -85,7 +83,8 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     private val _devices = MutableStateFlow<List<Device>>(emptyList())
     val devices: StateFlow<List<Device>> = _devices.asStateFlow()
 
-    val discoveredServers: StateFlow<List<DiscoveredServer>> = mdnsDiscovery.servers
+    val discoveredServers: StateFlow<List<DiscoveredServer>> = CopyEverywhereService.discoveredLanServers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val lanEndpointSource: StateFlow<LanEndpointSource> = configStore.lanEndpointSource
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LanEndpointSource.ManualFallback)
     val selectedLanServer: StateFlow<StoredLanServerSelection?> = configStore.selectedLanServer
@@ -219,14 +218,6 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun startDiscovery() {
-        mdnsDiscovery.startDiscovery()
-    }
-
-    fun stopDiscovery() {
-        mdnsDiscovery.stopDiscovery()
-    }
-
     fun selectDiscoveredServer(server: DiscoveredServer) {
         viewModelScope.launch {
             configStore.selectDiscoveredServer(
@@ -340,7 +331,6 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
-        mdnsDiscovery.stopDiscovery()
         stopBluetoothScan()
         // Restore service as the Bluetooth listener when ViewModel goes away
         val service = CopyEverywhereService.instance
